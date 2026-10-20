@@ -12,6 +12,7 @@ import type { AssetLibrary } from "./asset-library.js";
 import { isProjectPackageManager } from "./package-manager.js";
 import { validateNodeGraph } from "../shared/playable-graph-validation.js";
 import type { NodeGraph } from "../shared/playable-nodes.js";
+import { removePlayableAssetReferences } from "../shared/playable-editor.js";
 import { changeNodeCodebase } from "./playable-codebase.js";
 import { canvasLibraryAssetUsage, canvasReferencesAsset, removeCanvasAssetReferences, renameCanvasAssetPaths } from "./canvas-workspace.js";
 import { readCanvasAssets } from "./canvas-assets.js";
@@ -656,18 +657,29 @@ export class ProjectManager {
       }
       if (project.type === "interactive-story" && await exists(path.join(project.workspacePath, PLAYABLE_GRAPH_FILE))) {
         let changed = false;
-        await changeNodeCodebase(project.workspacePath, (codebase) => {
+        await changeNodeCodebase(project.workspacePath, async (codebase) => {
           const removedIds = new Set(Object.entries(codebase.graph.assets).flatMap(([id, asset]) => (
             asset.source.kind === "library" && asset.source.assetId === assetId ? [id] : []
           )));
           if (!removedIds.size) return;
+          const sources = Object.fromEntries(await Promise.all(
+            codebase.graph.nodes
+              .filter((node) => node.assets.some((id) => removedIds.has(id)))
+              .map(async (node) => [
+                node.source.html,
+                removePlayableAssetReferences(
+                  await readFile(path.join(project.workspacePath, ...node.source.html.split("/")), "utf8"),
+                  removedIds,
+                ),
+              ]),
+          ));
           for (const id of removedIds) delete codebase.graph.assets[id];
           codebase.graph.nodes = codebase.graph.nodes.map((node) => ({
             ...node,
             assets: node.assets.filter((id) => !removedIds.has(id)),
           }));
           changed = true;
-          return codebase;
+          return { ...codebase, sources };
         });
         if (changed) await this.touch(project.id);
       }

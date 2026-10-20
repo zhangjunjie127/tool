@@ -7,6 +7,7 @@ import type { NodePlayerDefinition } from "../shared/playable-player-protocol.js
 import type { NodeRuntimeSnapshot } from "../shared/playable-runtime.js";
 import { isPublishedNodeManifest, PLAYTEST_SCOPE_PREFIX, type PublishedNodeManifest } from "../shared/playable-publish.js";
 import { NodePlayer } from "./playable-player.js";
+import { t } from "./i18n.js";
 import "./playable-player.css";
 
 function PublishedPlayer() {
@@ -17,7 +18,7 @@ function PublishedPlayer() {
     let disposed = false;
     void fetch("./manifest.json").then(requireJson).then((value) => {
       if (!isPublishedNodeManifest(value)) {
-        throw new Error("The Published Player manifest is invalid.");
+        throw new Error(t("publishedPlayer.invalidManifest"));
       }
       if (!disposed) setManifest(value);
     }).catch((cause) => {
@@ -41,17 +42,26 @@ function PublishedNodePlayer({ manifest }: { manifest: PublishedNodeManifest }) 
   useEffect(() => {
     let disposed = false;
     void Promise.all([
-      fetchVerified(manifest.definition.path, manifest.definition.integrity, "Published Node definition")
+      fetchVerified(
+        manifest.definition.path,
+        manifest.definition.integrity,
+        t("publishedPlayer.definition"),
+      )
         .then((bytes) => JSON.parse(new TextDecoder().decode(bytes)) as unknown),
       mapConcurrent(Object.entries(manifest.assets), 4, async ([id, asset]) => {
-        const bytes = await fetchVerified(asset.path, asset.integrity, `Asset "${id}"`);
-        if (bytes.byteLength !== asset.size) throw new Error(`Asset "${id}" has an invalid size.`);
+        const bytes = await fetchVerified(
+          asset.path,
+          asset.integrity,
+          t("publishedPlayer.asset", { id }),
+        );
+        if (bytes.byteLength !== asset.size)
+          throw new Error(t("publishedPlayer.invalidAssetSize", { id }));
         return [id, new Blob([bytes], { type: asset.contentType })] as const;
       }),
     ]).then(([definition, assets]) => {
       if (disposed) return;
       if (!isPublishedNodeDefinition(definition, manifest)) {
-        throw new Error("The Published Node definition does not match its manifest.");
+        throw new Error(t("publishedPlayer.definitionMismatch"));
       }
       document.title = definition.graph.title;
       setState({ loading: false, definition, assets: Object.fromEntries(assets) });
@@ -139,11 +149,18 @@ function isPublishedNodeDefinition(
 
 async function fetchVerified(url: string, integrity: string, label: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`${label} could not be loaded (${response.status}).`);
+  if (!response.ok)
+    throw new Error(
+      t("publishedPlayer.resourceLoadFailed", {
+        resource: label,
+        status: response.status,
+      }),
+    );
   const bytes = await response.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const actual = `sha256-${bytesToBase64(new Uint8Array(digest))}`;
-  if (actual !== integrity) throw new Error(`${label} failed integrity validation.`);
+  if (actual !== integrity)
+    throw new Error(t("publishedPlayer.integrityFailed", { resource: label }));
   return bytes;
 }
 
@@ -175,12 +192,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function PublishedState({ error }: { error?: string }) {
   return <main className="playable-player-page">
-    <div className="playable-player-page-state" role={error ? "alert" : undefined}>{error ?? "Loading game..."}</div>
+    <div className="playable-player-page-state" role={error ? "alert" : undefined}>{error ?? t("publishedPlayer.loading")}</div>
   </main>;
 }
 
 async function requireJson(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error("The published game could not be loaded.");
+  if (!response.ok) throw new Error(t("publishedPlayer.loadFailed"));
   return response.json();
 }
 

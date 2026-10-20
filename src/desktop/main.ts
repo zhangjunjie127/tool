@@ -230,6 +230,17 @@ handle("ohmygame:select-project-directory", async (event) => {
   });
   return result.canceled ? undefined : result.filePaths[0];
 });
+handle("ohmygame:select-library-directory", async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error("Invalid directory selection source");
+  }
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Select local asset folder",
+    buttonLabel: "Use this folder",
+    properties: ["openDirectory"],
+  });
+  return result.canceled ? undefined : result.filePaths[0];
+});
 handle("ohmygame:capture-page", async (event, rectangle: unknown) => {
   const window = mainWindow && event.sender === mainWindow.webContents
     ? mainWindow

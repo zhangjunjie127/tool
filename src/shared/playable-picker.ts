@@ -1,13 +1,31 @@
 import { PLAYABLE_SOURCE_ATTRIBUTE } from "./playable-source-locations.js";
+import {
+  parsePlayableMotionConfig,
+  PLAYABLE_MOTION_ATTRIBUTES,
+  playableButtonAssetScales,
+  type PlayableMotionConfig,
+} from "./playable-motion.js";
 
 export interface PlayablePickResult {
   nodeId: string;
+  /** A temporary, independently selectable part of a source-backed element. */
+  part?: "button-label";
+  /** Identifies one of several temporary text parts within the same button. */
+  partId?: string;
+  /** Original source wording when the preview displays a translated label. */
+  sourceText?: string;
   /** `<file>:<line>:<column>` from a preview build, when the element came from surface HTML. */
   source?: string;
   /** CSS path from the surface's shadow root to the element. */
   cssPath: string;
   /** The Signal named by the nearest `data-signal` attribute, such as an Exit button's. */
   signal?: string;
+  motion?: PlayableMotionConfig;
+  buttonAssetId?: string;
+  buttonPressedAssetId?: string;
+  buttonAssetScaleX?: number;
+  buttonAssetScaleY?: number;
+  fontFamily?: string;
   tag: string;
   /** The element shows media: an image, a video, or a `data-media` slot for one. */
   media?: true;
@@ -16,6 +34,17 @@ export interface PlayablePickResult {
   text: string;
   /** Bounding box in the sandbox frame's CSS pixels. */
   box: { x: number; y: number; width: number; height: number };
+}
+
+export function playableTextPickWithSource(
+  pick: PlayablePickResult,
+  created: { id: string; nodeId: string; source: string },
+): PlayablePickResult {
+  return pick.nodeId === created.nodeId &&
+    pick.cssPath === `p#${created.id}` &&
+    !pick.source
+    ? { ...pick, source: created.source }
+    : pick;
 }
 
 const TEXT_EXCERPT_LIMIT = 120;
@@ -31,7 +60,105 @@ export interface PickableElement {
   readonly parentElement: PickableElement | null;
   readonly textContent: string | null;
   getAttribute(name: string): string | null;
-  getBoundingClientRect(): { x: number; y: number; width: number; height: number };
+  getBoundingClientRect(): {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface PlayableInteractionTarget {
+  pick: PlayablePickResult;
+  element: PickableElement;
+}
+
+/** Finds the nearest source-backed element for transform and delete actions. */
+export function describePlayableSourceTarget(
+  composedPath: readonly unknown[],
+): PlayableInteractionTarget | undefined {
+  const elements = composedPath.filter(isPickableElement);
+  const surfaceIndex = elements.findIndex(
+    (element) => element.getAttribute(SURFACE_ATTRIBUTE) !== null,
+  );
+  if (surfaceIndex < 1) return undefined;
+  const element = elements
+    .slice(0, surfaceIndex)
+    .find(
+      (candidate) => candidate.getAttribute(PLAYABLE_SOURCE_ATTRIBUTE) !== null,
+    );
+  if (!element) return undefined;
+  const pick = describePlayablePick(
+    composedPath.slice(composedPath.indexOf(element)),
+  );
+  return pick?.source ? { pick, element } : undefined;
+}
+
+/** Finds an operation target such as an option, QTE, hotspot, or action button. */
+export function describePlayableInteraction(
+  composedPath: readonly unknown[],
+): PlayableInteractionTarget | undefined {
+  const elements = composedPath.filter(isPickableElement);
+  const surfaceIndex = elements.findIndex(
+    (element) => element.getAttribute(SURFACE_ATTRIBUTE) !== null,
+  );
+  if (surfaceIndex < 1) return undefined;
+  const inside = elements.slice(0, surfaceIndex);
+  const interaction =
+    inside.find((element) => element.getAttribute("data-qte") !== null) ??
+    inside.find(isInteractiveElement);
+  if (!interaction) return undefined;
+  const pick = describePlayablePick(
+    composedPath.slice(composedPath.indexOf(interaction)),
+  );
+  if (!pick || !pick.source) return undefined;
+  const entrance =
+    inside.find(
+      (element) =>
+        hasClass(element, "rise") &&
+        element.getAttribute(PLAYABLE_SOURCE_ATTRIBUTE) !== null,
+    ) ?? interaction;
+  if (entrance === interaction) return { pick, element: interaction };
+  const entrancePick = describePlayablePick(
+    composedPath.slice(composedPath.indexOf(entrance)),
+  );
+  if (!entrancePick) return { pick, element: interaction };
+  return {
+    element: entrance,
+    pick: { ...entrancePick, signal: pick.signal },
+  };
+}
+
+/** Finds the source-backed element whose entrance delay can be edited. */
+export function describePlayableAppearanceTarget(
+  composedPath: readonly unknown[],
+): PlayableInteractionTarget | undefined {
+  const elements = composedPath.filter(isPickableElement);
+  const surfaceIndex = elements.findIndex(
+    (element) => element.getAttribute(SURFACE_ATTRIBUTE) !== null,
+  );
+  if (surfaceIndex < 1) return undefined;
+  const inside = elements.slice(0, surfaceIndex);
+  if (inside.some((element) => element.tagName.toLowerCase() === "video"))
+    return undefined;
+
+  const interaction = describePlayableInteraction(composedPath);
+  if (interaction && interaction.pick.tag !== "video") return interaction;
+
+  const sourceTarget = describePlayableSourceTarget(composedPath);
+  if (!sourceTarget || sourceTarget.pick.tag === "video") return undefined;
+  const entrance =
+    inside.find(
+      (element) =>
+        hasClass(element, "rise") &&
+        element.getAttribute(PLAYABLE_SOURCE_ATTRIBUTE) !== null,
+    ) ?? sourceTarget.element;
+  const entrancePick = describePlayablePick(
+    composedPath.slice(composedPath.indexOf(entrance)),
+  );
+  if (!entrancePick || !entrancePick.source || entrancePick.tag === "video")
+    return undefined;
+  return { element: entrance, pick: entrancePick };
 }
 
 /**
@@ -61,12 +188,29 @@ export function describePlayablePick(
   const rect = target.getBoundingClientRect();
   const tag = target.tagName.toLowerCase();
   const mediaSlot = target.getAttribute(MEDIA_ATTRIBUTE);
+  const motion = parsePlayableMotionConfig(target);
+  const buttonAssetId =
+    target.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset) || undefined;
+  const buttonPressedAssetId =
+    target.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.pressedAsset) || undefined;
+  const buttonAssetScales = buttonAssetId
+    ? playableButtonAssetScales(target)
+    : undefined;
   const media = MEDIA_TAGS.has(tag) || mediaSlot !== null;
   return {
     nodeId: surface.getAttribute(SURFACE_ATTRIBUTE)!,
     ...(source ? { source } : {}),
     cssPath: playableCssPath(target),
     ...(signal ? { signal } : {}),
+    ...(motion ? { motion } : {}),
+    ...(buttonAssetId ? { buttonAssetId } : {}),
+    ...(buttonPressedAssetId ? { buttonPressedAssetId } : {}),
+    ...(buttonAssetScales
+      ? {
+          buttonAssetScaleX: buttonAssetScales.x,
+          buttonAssetScaleY: buttonAssetScales.y,
+        }
+      : {}),
     tag,
     ...(media ? { media: true as const } : {}),
     ...(mediaSlot ? { mediaSlot } : {}),
@@ -112,8 +256,7 @@ export function playableCssPath(element: PickableElement): string {
 
 function childElements(parent: PickableElement): PickableElement[] {
   const children = Reflect.get(parent, "children") as
-    | ArrayLike<PickableElement>
-    | undefined;
+    ArrayLike<PickableElement> | undefined;
   return children ? Array.from(children) : [];
 }
 
@@ -125,6 +268,24 @@ function isPickableElement(value: unknown): value is PickableElement {
     typeof Reflect.get(value, "getAttribute") === "function" &&
     typeof Reflect.get(value, "getBoundingClientRect") === "function"
   );
+}
+
+function isInteractiveElement(element: PickableElement): boolean {
+  const tag = element.tagName.toLowerCase();
+  return (
+    ["button", "a", "input", "select", "textarea"].includes(tag) ||
+    [
+      "data-signal",
+      "data-press",
+      "data-restart",
+      "data-continue",
+      "data-back",
+    ].some((name) => element.getAttribute(name) !== null)
+  );
+}
+
+function hasClass(element: PickableElement, name: string): boolean {
+  return (element.getAttribute("class") ?? "").split(/\s+/).includes(name);
 }
 
 function excerpt(text: string): string {

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { ProjectState } from "../shared/contracts.js";
 import type { NodeGraph } from "../shared/playable-nodes.js";
+import type { PlayableBackdropEffects } from "../shared/playable-backdrop-effects.js";
 import {
   canvasFormatForViewport,
   canvasFormatPreset,
@@ -11,15 +12,18 @@ import {
 import { formatStateValue } from "../shared/playable-debug.js";
 import { describePlayableValue } from "../shared/playable-editor.js";
 import { CanvasFormatOptions } from "./canvas-format-options.js";
-import { CircleHelp, Download, LoaderCircle } from "./icons.js";
+import { ChevronDown, Download, LoaderCircle } from "./icons.js";
 import { ProjectSettingsDialogFrame } from "./project-settings-dialog.js";
-import { t } from "./i18n.js";
+import { t, translateText } from "./i18n.js";
 
-const variablesHelp = t("storySettings.variablesHelp");
+const variablesHelp = translateText(
+  "What the game remembers between Scenes. Ask the AI to add or change these values.",
+);
 
 export function PlayableProjectSettingsDialog({
   project,
   graph,
+  backdropEffects,
   exporting,
   canExport,
   onSave,
@@ -28,24 +32,32 @@ export function PlayableProjectSettingsDialog({
 }: {
   project: ProjectState;
   graph: NodeGraph;
+  backdropEffects: PlayableBackdropEffects;
   exporting: boolean;
   canExport: boolean;
-  onSave: (viewport: Viewport) => Promise<void>;
-  onExport: (kind: "game" | "project") => Promise<void>;
+  onSave: (
+    viewport: Viewport,
+    effects: PlayableBackdropEffects,
+  ) => Promise<void>;
+  onExport: () => Promise<void>;
   onClose: () => void;
 }) {
   const [selection, setSelection] = useState<CanvasFormatPresetId | undefined>(
     () => canvasFormatForViewport(graph.viewport)?.id,
   );
+  const [effects, setEffects] = useState(backdropEffects);
   const [saving, setSaving] = useState(false);
-  const [exportKind, setExportKind] = useState<"game" | "project">("game");
   const [error, setError] = useState<string>();
   const viewport = selection
     ? canvasFormatPreset(selection).viewport
     : graph.viewport;
-  const changed =
+  const viewportChanged =
     viewport.width !== graph.viewport.width ||
     viewport.height !== graph.viewport.height;
+  const changed =
+    viewportChanged ||
+    effects.vignette !== backdropEffects.vignette ||
+    effects.grain !== backdropEffects.grain;
   const names = Object.keys(graph.initialState);
 
   async function submit(event: FormEvent): Promise<void> {
@@ -54,7 +66,7 @@ export function PlayableProjectSettingsDialog({
     setSaving(true);
     setError(undefined);
     try {
-      if (changed) await onSave(viewport);
+      if (changed) await onSave(viewport, effects);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -62,11 +74,10 @@ export function PlayableProjectSettingsDialog({
     }
   }
 
-  async function exportProject(kind: "game" | "project"): Promise<void> {
+  async function exportProject(): Promise<void> {
     setError(undefined);
-    setExportKind(kind);
     try {
-      await onExport(kind);
+      await onExport();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -75,15 +86,15 @@ export function PlayableProjectSettingsDialog({
   return (
     <ProjectSettingsDialogFrame busy={saving || exporting} onClose={onClose}>
       <form onSubmit={(event) => void submit(event)}>
-        <section className="project-settings-project" aria-label={t("projectSettings.project")}>
-          <span>{t("projectSettings.project")}</span>
+        <section className="project-settings-project" aria-label={translateText("Project")}>
+          <span>{translateText("Project")}</span>
           <strong title={project.name}>{project.name}</strong>
         </section>
         <fieldset
           className="project-settings-section"
           disabled={saving || exporting}
         >
-          <legend>{t("storySettings.screenSize")}</legend>
+          <legend>{translateText("Screen size")}</legend>
           <p className="project-settings-hint">
             {canvasFormatSummary(viewport)}
           </p>
@@ -92,76 +103,100 @@ export function PlayableProjectSettingsDialog({
             disabled={saving || exporting}
             onChange={setSelection}
           />
-          {changed && graph.nodes.length > 0 ? (
+          {viewportChanged && graph.nodes.length > 0 ? (
             <p className="project-settings-hint">
-              {t("storySettings.reviewScenes")}
+              {translateText("Review each Scene after changing screen size.")}
             </p>
           ) : null}
         </fieldset>
-        <fieldset className="project-settings-section" aria-label={t("storySettings.variables")}>
-          <legend className="project-settings-section-heading">
-            {t("storySettings.variables")}
-            <button
-              className="icon-button project-settings-help"
-              type="button"
-              aria-label={t("storySettings.aboutVariables")}
-              aria-description={variablesHelp}
-              data-tooltip={variablesHelp}
-              disabled={saving || exporting}
-            >
-              <CircleHelp size={14} aria-hidden="true" />
-            </button>
-          </legend>
-          {names.length ? (
-            <ul className="playable-variables" aria-label={t("storySettings.variables")}>
-              {names.map((name) => (
-                <li key={name}>
-                  <div className="playable-variables-head">
-                    <strong>{name}</strong>
-                    <span title={formatStateValue(graph.initialState[name])}>
-                      {t("storySettings.starts", { value: describePlayableValue(graph.initialState[name]!) })}
-                    </span>
-                  </div>
-                  {graph.variables?.[name] ? (
-                    <p>{graph.variables[name]}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="playable-variables-empty">
-              {t("storySettings.noVariables")}
-            </p>
-          )}
+        <fieldset
+          className="project-settings-section playable-backdrop-effects"
+          aria-label={translateText("Background appearance")}
+          disabled={saving || exporting}
+        >
+          <legend>{translateText("Background appearance")}</legend>
+          <div className="playable-backdrop-options">
+            <label className="playable-backdrop-option">
+              <input
+                type="checkbox"
+                checked={effects.vignette}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setEffects((current) => ({
+                    ...current,
+                    vignette: checked,
+                  }));
+                }}
+              />
+              <span>{translateText("Vignette")}</span>
+            </label>
+            <label className="playable-backdrop-option">
+              <input
+                type="checkbox"
+                checked={effects.grain}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setEffects((current) => ({
+                    ...current,
+                    grain: checked,
+                  }));
+                }}
+              />
+              <span>{translateText("Grain texture")}</span>
+            </label>
+          </div>
         </fieldset>
+        <details className="project-settings-fold playable-variables-fold">
+          <summary>
+            <span>{translateText("Variables")}</span>
+            <ChevronDown size={14} aria-hidden="true" />
+          </summary>
+          <div className="project-settings-section playable-variables-content">
+            <p className="project-settings-hint">{variablesHelp}</p>
+            {names.length ? (
+              <ul className="playable-variables" aria-label={translateText("Variables")}>
+                {names.map((name) => (
+                  <li key={name}>
+                    <div className="playable-variables-head">
+                      <strong>{name}</strong>
+                      <span title={formatStateValue(graph.initialState[name])}>
+                        {translateText("Starts")}{" "}
+                        {describePlayableValue(graph.initialState[name]!)}
+                      </span>
+                    </div>
+                    {graph.variables?.[name] ? (
+                      <p>{graph.variables[name]}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="playable-variables-empty">
+                {translateText("Nothing yet. The game doesn't remember anything between Scenes.")}
+              </p>
+            )}
+          </div>
+        </details>
         <fieldset className="project-settings-section">
-          <legend>{t("storySettings.export")}</legend>
+          <legend>{translateText("Export")}</legend>
           {changed ? (
             <p className="project-settings-hint">
-              {t("storySettings.saveBeforeExport")}
+              {translateText("Save project setting changes before exporting.")}
             </p>
           ) : null}
-          <p className="project-settings-hint">{t("storySettings.exportHint")}</p>
-          <div className="project-settings-export-actions">
-            {(["game", "project"] as const).map((kind) => (
-              <button
-                key={kind}
-                className="project-settings-browser"
-                type="button"
-                disabled={!canExport || saving || exporting || changed}
-                onClick={() => void exportProject(kind)}
-              >
-                {exporting && exportKind === kind ? (
-                  <LoaderCircle className="spin" size={14} />
-                ) : (
-                  <Download size={14} />
-                )}
-                {exporting && exportKind === kind
-                  ? t("storySettings.exporting")
-                  : t(kind === "game" ? "storySettings.exportGame" : "storySettings.exportProject")}
-              </button>
-            ))}
-          </div>
+          <button
+            className="project-settings-browser"
+            type="button"
+            disabled={!canExport || saving || exporting || changed}
+            onClick={() => void exportProject()}
+          >
+            {exporting ? (
+              <LoaderCircle className="spin" size={14} />
+            ) : (
+              <Download size={14} />
+            )}
+            {t(exporting ? "storySettings.exporting" : "storySettings.exportGame")}
+          </button>
         </fieldset>
         {error ? (
           <p className="project-settings-error" role="alert">
@@ -174,7 +209,7 @@ export function PlayableProjectSettingsDialog({
             disabled={saving || exporting}
             onClick={onClose}
           >
-            {t("common.cancel")}
+          {translateText("Cancel")}
           </button>
           <button
             className="project-settings-submit"
@@ -182,7 +217,7 @@ export function PlayableProjectSettingsDialog({
             disabled={saving || exporting}
           >
             {saving ? <LoaderCircle className="spin" size={14} /> : null}
-            {t("common.save")}
+            {translateText("Save")}
           </button>
         </footer>
       </form>

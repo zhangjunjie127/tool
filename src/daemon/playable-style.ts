@@ -171,6 +171,10 @@ export const PLAYABLE_PROJECT_STYLE_FILES: Record<string, string> = {
   list-style: none;
 }
 
+.menu li {
+  position: relative;
+}
+
 .menu .action {
   position: relative;
   border: 0;
@@ -181,22 +185,24 @@ export const PLAYABLE_PROJECT_STYLE_FILES: Record<string, string> = {
   transition: padding 0.25s, color 0.2s;
 }
 
-.menu .action::before {
-  content: "";
+.menu-indicator {
   position: absolute;
   left: 0;
   top: 50%;
   width: 0;
   height: 0.18cqw;
   background: var(--color-accent);
-  transition: width 0.25s;
+  transform: translateY(-50%);
+  transition: width 0.25s, left 0.25s;
+  cursor: pointer;
+  pointer-events: none;
 }
 
-.menu .action:not([aria-disabled="true"]):is(:hover, :focus-visible) {
+.menu li:is(:hover, :focus-within) .action:not([aria-disabled="true"]) {
   padding-left: 3cqw;
 }
 
-.menu .action:not([aria-disabled="true"]):is(:hover, :focus-visible)::before {
+.menu li:is(:hover, :focus-within) .menu-indicator {
   width: 1.8cqw;
 }
 
@@ -542,9 +548,13 @@ kbd,
 .backdrop {
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   overflow: hidden;
   background: radial-gradient(circle at 70% 30%, var(--color-panel), var(--color-page) 70%);
+}
+
+.has-backdrop > :not(.backdrop) {
+  z-index: 1;
 }
 
 .backdrop > video,
@@ -668,8 +678,9 @@ kbd,
   "shared/style/components.js": `/**
  * Shows the Node's background: the one \`.backdrop\` element, whose
  * \`data-asset\` and \`data-type\` ("image" or "video") name a declared
- * Asset. A video plays once with sound and stops on its last frame. The
- * editor sets the two attributes itself, so change the background there
+ * Asset. A video plays once with sound and stops on its last frame by default;
+ * set data-loop="true" on the backdrop to loop it. The editor sets the
+ * background attributes itself, so change the background there
  * rather than adding media elements. Call it from mount().
  *
  * @param {object} context the Node context passed to mount
@@ -690,6 +701,7 @@ export function showBackdrop(context) {
   const video = document.createElement("video");
   video.src = url;
   video.playsInline = true;
+  video.loop = backdrop.getAttribute("data-loop") === "true";
   backdrop.append(video);
   // Where sound may not start on its own, play muted rather than stay black.
   video.play?.().catch(() => {

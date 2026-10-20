@@ -1035,7 +1035,6 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   async function uploadAssetFile(file: File): Promise<LibraryAsset> {
     const mediaType = libraryUploadMediaType(file);
     if (!mediaType) throw new Error(t("assetCanvas.uploadTypes"));
-    if (file.size > 200 * 1024 * 1024) throw new Error(t("assetCanvas.uploadSize"));
     const kind = mediaType.startsWith("video/") ? "video" : mediaType.startsWith("audio/") ? "audio" : undefined;
     const duration = kind ? await readMediaFileDuration(file, kind) : undefined;
     const uploaded = await uploadLibraryAsset(file, mediaType, duration);
@@ -3774,7 +3773,6 @@ async function readUploadImage(file: File): Promise<{ name: string; image: Creat
   if (file.type !== "image/png" && file.type !== "image/jpeg" && file.type !== "image/webp") {
     throw new Error("Use PNG, JPEG, or WebP reference images.");
   }
-  if (file.size > 10 * 1024 * 1024) throw new Error(t("assetCanvas.referenceSize"));
   return { name: file.name, image: await promptImage(file) };
 }
 

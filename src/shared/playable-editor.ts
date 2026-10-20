@@ -82,6 +82,74 @@ export function deletePlayableSignal(
   return next;
 }
 
+export function deletePlayableButtonSignals(
+  graph: NodeGraph,
+  nodeId: string,
+  signalId: string,
+): NodeGraph {
+  if (!/^button-\d+$/.test(signalId))
+    return deletePlayableSignal(graph, nodeId, signalId);
+  const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+  if (!node) return graph;
+  return node.signals
+    .filter(
+      (signal) =>
+        signal.id === signalId ||
+        new RegExp(`^${signalId}-failure(?:-\\d+)?$`).test(signal.id),
+    )
+    .reduce(
+      (current, signal) =>
+        deletePlayableSignal(current, nodeId, signal.id),
+      graph,
+    );
+}
+
+export function removeOrphanedPlayableButtonSignals(
+  graph: NodeGraph,
+  nodeId: string,
+  html: string,
+): NodeGraph {
+  const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+  if (!node) return graph;
+  const presentSignals = new Set<string>();
+  for (const match of html.matchAll(
+    /\b(?:data-signal|data-putenggame-motion-timeout)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+  )) {
+    const signal = match[1] ?? match[2] ?? match[3];
+    if (signal) presentSignals.add(signal);
+  }
+  const orphaned = node.signals
+    .filter(
+      (signal) =>
+        /^button-\d+(?:-failure(?:-\d+)?)?$/.test(signal.id) &&
+        !presentSignals.has(signal.id),
+    )
+    .map((signal) => signal.id);
+  const declared = new Set(node.signals.map((signal) => signal.id));
+  const missing = [...presentSignals].filter(
+    (signalId) =>
+      /^button-\d+(?:-failure(?:-\d+)?)?$/.test(signalId) &&
+      !declared.has(signalId),
+  );
+  if (!orphaned.length && !missing.length) return graph;
+  const cleaned = orphaned.reduce(
+    (current, signalId) => deletePlayableSignal(current, nodeId, signalId),
+    graph,
+  );
+  const next = structuredClone(cleaned);
+  const nextNode = next.nodes.find((candidate) => candidate.id === nodeId)!;
+  nextNode.signals.push(
+    ...missing.map((signalId) => ({
+      id: signalId,
+      label:
+        signalId.endsWith("-failure") || /-failure-\d+$/.test(signalId)
+          ? "按钮失败"
+          : "按钮",
+    })),
+  );
+  return next;
+}
+
 export function setPlayableSignalLabel(
   graph: NodeGraph,
   nodeId: string,
@@ -148,6 +216,25 @@ export function addPlayableNodeAsset(
   return { graph: next, assetId };
 }
 
+/** Removes editor-managed HTML references to Assets that no longer exist. */
+export function removePlayableAssetReferences(
+  html: string,
+  assetIds: ReadonlySet<string>,
+): string {
+  let next = html;
+  for (const id of assetIds) {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    next = next.replace(
+      new RegExp(
+        `\\s+(?:data-putenggame-asset|data-putenggame-button-asset|data-putenggame-button-pressed-asset|data-asset)\\s*=\\s*(?:"${escaped}"|'${escaped}'|${escaped}(?=[\\s>/]))`,
+        "gi",
+      ),
+      "",
+    );
+  }
+  return next;
+}
+
 /** Removes the Asset from the Node, and from the graph once nothing declares it. */
 export function removePlayableNodeAsset(graph: NodeGraph, nodeId: string, assetId: string): NodeGraph {
   const next = structuredClone(graph);
@@ -171,7 +258,7 @@ export function playableRuntimeKey(definition: NodePlayerDefinition): string {
   });
 }
 
-/** Node ID to the thumbnail cached for it in `.ohmygame/thumbnails/`. */
+/** Node ID to the thumbnail cached for it in `.putenggame/thumbnails/`. */
 export type PlayableThumbnailManifest = Record<string, { hash: string; capturedAt: string }>;
 
 /**

@@ -17,6 +17,11 @@ import type {
   NodeSource,
 } from "../shared/playable-nodes.js";
 import { annotatePlayableSourceLocations } from "../shared/playable-source-locations.js";
+import {
+  DEFAULT_PLAYABLE_BACKDROP_EFFECTS,
+  preparePlayableBackdropCss,
+  type PlayableBackdropEffects,
+} from "../shared/playable-backdrop-effects.js";
 
 export type NodeCompilerErrorCode =
   | "invalid-graph"
@@ -42,6 +47,7 @@ export interface NodeCompilerOptions {
   sourcemap?: boolean;
   /** Annotates surface HTML elements with their source location for element picking. */
   sourceLocations?: boolean;
+  backdropEffects?: PlayableBackdropEffects;
 }
 
 export type {
@@ -150,7 +156,10 @@ async function compileSurface(
       html: options.sourceLocations
         ? annotatePlayableSourceLocations(html, source.html)
         : html,
-      css: [explicitCss, importedCss].filter(Boolean).join("\n"),
+      css: preparePlayableBackdropCss(
+        [explicitCss, importedCss].filter(Boolean).join("\n"),
+        options.backdropEffects ?? DEFAULT_PLAYABLE_BACKDROP_EFFECTS,
+      ),
       javascript,
       inputs: [...inputs].sort(),
     };

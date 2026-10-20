@@ -55,14 +55,14 @@ async function openWorkspace() {
     }, controller.signal).catch(() => false);
   });
   const cancel = vi.fn(async (batchId: string) => { controllers.get(batchId)?.abort(); });
-  Object.defineProperty(window, "ohMyGameDesktop", { configurable: true, value: {
+  Object.defineProperty(window, "putengGameDesktop", { configurable: true, value: {
     captureNodeThumbnail: capture, cancelNodeThumbnails: cancel,
   } });
   const container = document.createElement("div"); document.body.appendChild(container);
   const root = createRoot(container);
   dispose = async () => {
     await act(async () => { root.unmount(); for (const job of jobs) job.finish(false); });
-    container.remove(); delete window.ohMyGameDesktop;
+    container.remove(); delete window.putengGameDesktop;
   };
   const render = (revision: number) => act(async () => root.render(<PlayableEditorWorkspace
     project={{ id: "p", type: "interactive-story" } as ProjectState} agentBusy={false} publishing={false}

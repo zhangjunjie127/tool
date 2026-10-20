@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   addPlayableNodeAsset,
+  deletePlayableButtonSignals,
   deletePlayableSignal,
   describePlayableValue,
+  removeOrphanedPlayableButtonSignals,
   playableAssetId,
   playableAssetType,
   playableRuntimeKey,
@@ -38,6 +40,103 @@ describe("Playable editor graph changes", () => {
     );
     expect(updated.edges.some((edge) => edge.source.nodeId === "menu" && edge.source.signal === "start"))
       .toBe(false);
+  });
+
+  it("removes only deleted generated-button exits and their connections", () => {
+    const graph = createNodeGraphFixture();
+    graph.nodes[0]!.signals.push(
+      { id: "button-1", label: "New button" },
+      { id: "button-1-failure", label: "New button failed" },
+      { id: "button-2", label: "Another button" },
+    );
+    graph.edges.push(
+      {
+        id: "menu-button-1",
+        source: { nodeId: "menu", signal: "button-1" },
+        targetNodeId: "lobby",
+        mode: "push",
+      },
+      {
+        id: "menu-button-2",
+        source: { nodeId: "menu", signal: "button-2" },
+        targetNodeId: "archive",
+        mode: "push",
+      },
+    );
+
+    const repaired = removeOrphanedPlayableButtonSignals(
+      graph,
+      "menu",
+      '<main><button data-signal="button-1" data-putenggame-motion-timeout="button-1-failure">Keep</button></main>',
+    );
+
+    expect(
+      repaired.nodes[0]!.signals.map((signal) => signal.id),
+    ).toEqual(["start", "inspect", "button-1", "button-1-failure"]);
+    expect(repaired.edges.some((edge) => edge.id === "menu-button-1")).toBe(
+      true,
+    );
+    expect(repaired.edges.some((edge) => edge.id === "menu-button-2")).toBe(
+      false,
+    );
+    expect(graph.nodes[0]!.signals).toHaveLength(5);
+
+    const withoutFailureLogic = removeOrphanedPlayableButtonSignals(
+      graph,
+      "menu",
+      '<main><button data-signal="button-1">Keep</button></main>',
+    );
+    expect(
+      withoutFailureLogic.nodes[0]!.signals.map((signal) => signal.id),
+    ).not.toContain("button-1-failure");
+  });
+
+  it("removes a generated button's success and failure exits together", () => {
+    const graph = createNodeGraphFixture();
+    graph.nodes[0]!.signals.push(
+      { id: "button-1", label: "Charge" },
+      { id: "button-1-failure", label: "Charge failed" },
+    );
+    graph.edges.push(
+      {
+        id: "menu-button-1",
+        source: { nodeId: "menu", signal: "button-1" },
+        targetNodeId: "lobby",
+        mode: "push",
+      },
+      {
+        id: "menu-button-1-failure",
+        source: { nodeId: "menu", signal: "button-1-failure" },
+        targetNodeId: "archive",
+        mode: "push",
+      },
+    );
+
+    const updated = deletePlayableButtonSignals(graph, "menu", "button-1");
+    expect(updated.nodes[0]!.signals.map((signal) => signal.id)).toEqual([
+      "start",
+      "inspect",
+    ]);
+    expect(updated.edges.map((edge) => edge.id)).not.toContain(
+      "menu-button-1-failure",
+    );
+  });
+
+  it("restores generated button exits that exist in HTML but not in the graph", () => {
+    const graph = createNodeGraphFixture();
+    const repaired = removeOrphanedPlayableButtonSignals(
+      graph,
+      "menu",
+      '<main><button data-signal="button-1" data-putenggame-motion-timeout="button-1-failure">Continue</button></main>',
+    );
+
+    expect(repaired.nodes[0]!.signals).toEqual([
+      { id: "start", label: "Start" },
+      { id: "inspect", label: "Inspect archive" },
+      { id: "button-1", label: "按钮" },
+      { id: "button-1-failure", label: "按钮失败" },
+    ]);
+    expect(graph.nodes[0]!.signals).toHaveLength(2);
   });
 
   it("relabels a Signal without touching its ID or Edge", () => {

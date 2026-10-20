@@ -15,8 +15,8 @@ import { writePlayableFixtureWorkspace } from "./playable-fixture.js";
 const IMAGE = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 ")]);
 
 describe("Node thumbnail cache", () => {
-  it("stores a thumbnail with its hash under .ohmygame/thumbnails", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
+  it("stores a thumbnail with its hash under .putenggame/thumbnails", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     const nodeIds = new Set(["menu", "archive"]);
 
     expect(await listPlayableThumbnails(workspace)).toEqual({});
@@ -26,11 +26,11 @@ describe("Node thumbnail cache", () => {
     expect(entry.hash).toBe("0123abcd0123ab");
     expect(await listPlayableThumbnails(workspace)).toEqual({ menu: entry });
     expect(await readPlayableThumbnail(workspace, "menu")).toEqual(IMAGE);
-    expect((await readdir(path.join(workspace, ".ohmygame", "thumbnails"))).sort()).toEqual(["menu.json", "menu.webp"]);
+    expect((await readdir(path.join(workspace, ".putenggame", "thumbnails"))).sort()).toEqual(["menu.json", "menu.webp"]);
   });
 
   it("covers the project with the Start Scene's thumbnail, or else the first one captured", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     const nodeIds = new Set(["menu", "archive"]);
     const graph = (entryNodeId: string) => JSON.stringify({ entryNodeId, nodes: [{ id: "menu" }, { id: "archive" }] });
     await writeFile(path.join(workspace, "graph.json"), graph("menu"));
@@ -47,7 +47,7 @@ describe("Node thumbnail cache", () => {
   });
 
   it("drops the thumbnails of Nodes the graph no longer has", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     await writePlayableThumbnail(workspace, "menu", "0123abcd", IMAGE, new Set(["menu", "archive"]));
     await writePlayableThumbnail(workspace, "archive", "0123abcd", IMAGE, new Set(["archive"]));
 
@@ -56,16 +56,16 @@ describe("Node thumbnail cache", () => {
   });
 
   it("ignores broken cache entries", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
-    await mkdir(path.join(workspace, ".ohmygame", "thumbnails"), { recursive: true });
-    await writeFile(path.join(workspace, ".ohmygame", "thumbnails", "menu.json"), "{");
-    await writeFile(path.join(workspace, ".ohmygame", "thumbnails", "lobby.json"), JSON.stringify({ hash: "no" }));
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
+    await mkdir(path.join(workspace, ".putenggame", "thumbnails"), { recursive: true });
+    await writeFile(path.join(workspace, ".putenggame", "thumbnails", "menu.json"), "{");
+    await writeFile(path.join(workspace, ".putenggame", "thumbnails", "lobby.json"), JSON.stringify({ hash: "no" }));
 
     expect(await listPlayableThumbnails(workspace)).toEqual({});
   });
 
   it("rejects unknown Nodes, invalid IDs and hashes, and a linked cache", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     const nodeIds = new Set(["menu"]);
 
     await expect(writePlayableThumbnail(workspace, "lobby", "0123abcd", IMAGE, nodeIds)).rejects.toThrow(PlayableThumbnailError);
@@ -73,15 +73,15 @@ describe("Node thumbnail cache", () => {
     await expect(writePlayableThumbnail(workspace, "menu", "XYZ", IMAGE, nodeIds)).rejects.toThrow("hash is invalid");
     await expect(readPlayableThumbnail(workspace, "../../etc/passwd")).rejects.toThrow("Node ID is invalid");
 
-    const outside = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-outside-"));
-    const linked = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
-    await symlink(outside, path.join(linked, ".ohmygame"));
+    const outside = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-outside-"));
+    const linked = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
+    await symlink(outside, path.join(linked, ".putenggame"));
     await expect(writePlayableThumbnail(linked, "menu", "0123abcd", IMAGE, nodeIds)).rejects.toThrow(PlayableThumbnailError);
     expect(await readdir(outside)).toEqual([]);
   });
 
   it("reads Node IDs from graph.json alone", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "ohmygame-thumbnails-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     await expect(readGraphNodeIds(workspace)).rejects.toThrow("no graph.json");
     await writePlayableFixtureWorkspace(workspace);
     expect(await readGraphNodeIds(workspace)).toEqual(new Set(["menu", "lobby", "archive"]));

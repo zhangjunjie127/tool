@@ -23,7 +23,7 @@ async function draftDirectory(root: string, index: number): Promise<string> {
 
 describe("Playable draft server", () => {
   it("serves a draft under its token path only", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "ohmygame-draft-"));
+    const root = await mkdtemp(path.join(tmpdir(), "putenggame-draft-"));
     server = new PlayableDraftServer(() => draftDirectory(root, 1));
     const url = await server.open(project);
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{32}\/index\.html$/);
@@ -42,7 +42,7 @@ describe("Playable draft server", () => {
   });
 
   it("removes the oldest drafts and every draft on close", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "ohmygame-draft-"));
+    const root = await mkdtemp(path.join(tmpdir(), "putenggame-draft-"));
     let index = 0;
     server = new PlayableDraftServer(() => draftDirectory(root, ++index));
     const urls = [];

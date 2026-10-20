@@ -8,7 +8,17 @@ import hotspot from "./assets/templates/hotspot.webp";
 import mainMenu from "./assets/templates/main-menu.webp";
 import qte from "./assets/templates/qte.webp";
 import storyMap from "./assets/templates/story-map.webp";
-import { t } from "./i18n.js";
+import affection from "./assets/templates/affection.webp";
+import blankZh from "./assets/templates/blank-zh.webp";
+import choiceZh from "./assets/templates/choice-zh.webp";
+import endingZh from "./assets/templates/ending-zh.webp";
+import hotspotZh from "./assets/templates/hotspot-zh.webp";
+import mainMenuZh from "./assets/templates/main-menu-zh.webp";
+import qteZh from "./assets/templates/qte-zh.webp";
+import storyMapZh from "./assets/templates/story-map-zh.webp";
+import affectionZh from "./assets/templates/affection-zh.webp";
+import { useLanguage } from "./i18n.js";
+import { translateText } from "./i18n.js";
 
 /**
  * Pictures of each Template as a new Scene looks: its starter source with the
@@ -25,6 +35,18 @@ const TEMPLATE_PICTURES: Record<string, string> = {
   "main-menu": mainMenu,
   qte,
   "story-map": storyMap,
+  affection,
+};
+
+const TEMPLATE_PICTURES_ZH: Record<string, string> = {
+  blank: blankZh,
+  choice: choiceZh,
+  ending: endingZh,
+  hotspot: hotspotZh,
+  "main-menu": mainMenuZh,
+  qte: qteZh,
+  "story-map": storyMapZh,
+  affection: affectionZh,
 };
 
 /** Add a Scene: a grid of Templates, each with a picture and one line. */
@@ -34,6 +56,7 @@ export function PlayableTemplateDialog({ presets, busy, onChoose, onClose }: {
   onChoose: (presetId: string) => void;
   onClose: () => void;
 }) {
+  const { language } = useLanguage();
   const titleId = useId();
   const dialog = useRef<HTMLElement>(null);
 
@@ -62,14 +85,16 @@ export function PlayableTemplateDialog({ presets, busy, onChoose, onClose }: {
     };
   }, [onClose]);
 
+  const pictures = language === "zh-CN" ? TEMPLATE_PICTURES_ZH : TEMPLATE_PICTURES;
+
   return <div className="project-create-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialog} className="project-create-dialog playable-template-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
       <header>
         <div>
-          <h2 id={titleId}>{t("storyMenu.addAScene")}</h2>
-          <p>{t("storyMenu.templateHint")}</p>
+          <h2 id={titleId}>{translateText("Add a Scene")}</h2>
+          <p>{translateText("Pick a starting point, then describe the Scene in chat.")}</p>
         </div>
-        <button type="button" aria-label={t("common.close")} onClick={onClose}><X size={16} /></button>
+        <button type="button" aria-label={translateText("Close")} onClick={onClose}><X size={16} /></button>
       </header>
       <div className="playable-template-grid">
         {presets.map((preset) => <button
@@ -80,10 +105,10 @@ export function PlayableTemplateDialog({ presets, busy, onChoose, onClose }: {
           onClick={() => onChoose(preset.id)}
         >
           <span className="playable-template-picture">
-            {TEMPLATE_PICTURES[preset.id] ? <img src={TEMPLATE_PICTURES[preset.id]} alt="" /> : null}
+            {pictures[preset.id] ? <img src={pictures[preset.id]} alt="" /> : null}
           </span>
-          <strong>{preset.label}</strong>
-          <small>{preset.summary}</small>
+          <strong>{translateText(preset.label)}</strong>
+          <small>{translateText(preset.summary)}</small>
         </button>)}
       </div>
     </section>

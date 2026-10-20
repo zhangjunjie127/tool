@@ -18,7 +18,7 @@ afterEach(async () => {
 describe("Playable sandbox development server", () => {
   it("serves an untransformed document and executable IIFE", async () => {
     // This server must not invalidate a running renderer's optimized dependencies.
-    cacheDirectory = await mkdtemp(path.join(tmpdir(), "ohmygame-vite-test-"));
+    cacheDirectory = await mkdtemp(path.join(tmpdir(), "putenggame-vite-test-"));
     server = await createServer({
       configFile: path.resolve("vite.config.ts"),
       cacheDir: cacheDirectory,

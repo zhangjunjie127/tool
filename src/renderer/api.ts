@@ -19,6 +19,8 @@ import {
   type LibraryAsset,
   type LibraryAssetPurpose,
   type LibraryAssetSummary,
+  type LibrarySourceFolderCategory,
+  type LibrarySourceFolders,
   type LibraryUploadMediaType,
   type MediaModelDefaults,
   type ImageModel,
@@ -81,6 +83,7 @@ import type { ExampleSummary } from "../shared/examples.js";
 import type { PlaytestWatchState } from "../shared/playtest.js";
 import type { NodeRuntimeResponse } from "../shared/playable-player-protocol.js";
 import type { NodeCodebaseDetail, NodeCodebaseUpdate } from "../shared/playable-codebase.js";
+import type { PlayableBackdropEffects } from "../shared/playable-backdrop-effects.js";
 import type { PlayableAddedNode, PlayablePresetSummary, PlayableProjectValidationResult as PlayableProjectValidation, PlayableThumbnailManifest } from "../shared/playable-editor.js";
 import type { InstallPluginRequest, PluginCatalog, PluginDetail, PluginInstallInspection, PluginSettings, PluginSkillContent } from "../shared/plugins.js";
 import type { UpdateWebSearchSettings, WebSearchSettings } from "../shared/web-search.js";
@@ -137,6 +140,7 @@ declare global {
         popup: (label: string, x: number, y: number) => Promise<void>;
       };
       openProjectFile: (projectId: string, filePath: string, mode?: ProjectFileOpenMode) => Promise<void>;
+      selectLibraryDirectory?: () => Promise<string | undefined>;
       browsePluginDirectory: (pluginId: string) => Promise<void>;
       revealPluginSkill: (pluginId: string, skillId: string) => Promise<void>;
       selectPluginDirectory: () => Promise<string | undefined>;
@@ -177,6 +181,18 @@ declare global {
         takeCallback: () => Promise<string | undefined>;
         onCallback: (listener: () => void) => () => void;
       };
+    };
+    putengGameDesktop?: {
+      fonts?: {
+        list: () => Promise<string[]>;
+        onChanged: (listener: (fonts: string[]) => void) => () => void;
+      };
+      selectLibraryDirectory?: () => Promise<string | undefined>;
+      captureNodeThumbnail?: NonNullable<Window["ohMyGameDesktop"]>["captureNodeThumbnail"];
+      cancelNodeThumbnails?: NonNullable<Window["ohMyGameDesktop"]>["cancelNodeThumbnails"];
+      openPlaytest: NonNullable<Window["ohMyGameDesktop"]>["openPlaytest"];
+      openPlayableNode?: NonNullable<Window["ohMyGameDesktop"]>["openPlayableNode"];
+      onOpenPlayableNode?: NonNullable<Window["ohMyGameDesktop"]>["onOpenPlayableNode"];
     };
   }
 }
@@ -632,15 +648,6 @@ export async function publishProject(projectId: string, accessToken: string, met
   return request(`/projects/${projectId}/publish`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export async function exportInteractiveStoryProject(projectId: string, version?: string): Promise<Blob> {
-  const response = await fetch(apiUrl(`/projects/${projectId}/interactive-story/export-project`), {
-    method: "POST",
-    headers: projectRuntimeHeaders(projectId, version),
-  });
-  if (!response.ok) throw await responseError(response);
-  return response.blob();
-}
-
 export async function buildInteractiveStory(projectId: string, version?: string): Promise<Blob> {
   const response = await fetch(apiUrl(`/projects/${projectId}/interactive-story/build`), {
     method: "POST",
@@ -648,6 +655,22 @@ export async function buildInteractiveStory(projectId: string, version?: string)
   });
   if (!response.ok) throw await responseError(response);
   return response.blob();
+}
+
+export function getPlayableBackdropEffects(
+  projectId: string,
+): Promise<PlayableBackdropEffects> {
+  return request(`/projects/${encodeURIComponent(projectId)}/playable/backdrop-effects`);
+}
+
+export function updatePlayableBackdropEffects(
+  projectId: string,
+  effects: PlayableBackdropEffects,
+): Promise<PlayableBackdropEffects> {
+  return request(`/projects/${encodeURIComponent(projectId)}/playable/backdrop-effects`, {
+    method: "PUT",
+    body: JSON.stringify(effects),
+  });
 }
 
 export async function waitForRuntime(timeoutMs = 10_000): Promise<void> {
@@ -729,10 +752,12 @@ export async function updateNodeCodebase(
   codebase: NodeCodebaseUpdate & { revision: string },
   version?: string,
 ): Promise<{ revision: string }> {
+  const body = JSON.stringify(codebase);
   return request(`/projects/${projectId}/playable/codebase`, {
     method: "PUT",
     workspaceVersion: version,
-    body: JSON.stringify(codebase),
+    body,
+    keepalive: new TextEncoder().encode(body).byteLength < 60 * 1024,
   });
 }
 
@@ -797,19 +822,51 @@ export async function listLibraryAssets(): Promise<LibraryAssetSummary[]> {
   return request("/library/assets");
 }
 
+export async function listLibrarySourceFolders(): Promise<LibrarySourceFolders> {
+  return request("/library/source-folders");
+}
+
+export async function setLibrarySourceFolder(
+  category: LibrarySourceFolderCategory,
+  folder: string | undefined,
+): Promise<LibrarySourceFolders> {
+  return request(`/library/source-folders/${category}`, {
+    method: "PUT",
+    body: JSON.stringify({ path: folder ?? null }),
+  });
+}
+
 export async function createLibraryImage(input: CreateLibraryImageRequest): Promise<LibraryAsset> {
   return request("/library/assets", { method: "POST", body: JSON.stringify(input) });
 }
 
-export async function uploadLibraryAsset(file: File, mediaType: LibraryUploadMediaType, duration?: number, purpose?: LibraryAssetPurpose): Promise<LibraryAsset> {
+export async function uploadLibraryAsset(
+  file: File,
+  mediaType: LibraryUploadMediaType,
+  duration?: number,
+  purpose?: LibraryAssetPurpose,
+  source?: {
+    category: LibrarySourceFolderCategory;
+    sourceKey: string;
+    modifiedAt: string;
+  },
+): Promise<LibraryAsset> {
   const query = new URLSearchParams({ name: file.name, mediaType });
   if (duration !== undefined) query.set("duration", String(duration));
   if (purpose !== undefined) query.set("purpose", purpose);
-  return request(`/library/assets/upload?${query}`, {
-    method: "POST",
-    headers: { "content-type": "application/octet-stream" },
-    body: file,
-  });
+  if (source) {
+    query.set("category", source.category);
+    query.set("sourceKey", source.sourceKey);
+    query.set("modifiedAt", source.modifiedAt);
+  }
+  return request(
+    `${source ? "/library/assets/source-sync" : "/library/assets/upload"}?${query}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    },
+  );
 }
 
 export async function getLibraryAsset(assetId: string): Promise<Blob> {

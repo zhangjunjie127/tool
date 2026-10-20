@@ -56,6 +56,8 @@ type EditorCanvasProps<N extends Node> = Omit<ReactFlowProps<N, Edge>, "onPaneCo
   nodes: N[];
   /** The Add control at the start of the tool bar. */
   addControl: ReactNode;
+  /** Optional canvas action shown beside Add. */
+  arrangeControl?: ReactNode;
   onOpenMenu: (menu: CanvasContextMenuState) => void;
   /** Open the menu as "add" on a double-click on empty canvas in pointer mode. */
   addOnDoubleClick?: boolean;
@@ -72,6 +74,7 @@ export function EditorCanvas<N extends Node>({
   nodes,
   edges,
   addControl,
+  arrangeControl,
   onOpenMenu,
   addOnDoubleClick = false,
   onInit,
@@ -140,6 +143,7 @@ export function EditorCanvas<N extends Node>({
       {fitViewOnLoad ? <InitialCanvasView onReady={onInitialFit} /> : null}
       <Panel className="story-canvas-toolbar" position="bottom-center">
         {addControl}
+        {arrangeControl}
         <button className={mode === "pointer" ? "is-active" : undefined} type="button" title={t("editorCanvas.select")} aria-label={t("editorCanvas.select")} aria-pressed={mode === "pointer"} onClick={() => setMode("pointer")}>
           <MousePointer2 size={18} />
         </button>

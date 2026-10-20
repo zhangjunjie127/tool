@@ -8,71 +8,168 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Handle, Position, type NodeProps, type NodeTypes } from "@xyflow/react";
-import { type PlayableAssetDefinition, type PlayableNode, type PlayableSignal } from "../shared/playable-nodes.js";
+import {
+  Handle,
+  Position,
+  type NodeProps,
+  type NodeTypes,
+} from "@xyflow/react";
+import {
+  type PlayableAssetDefinition,
+  type PlayableNode,
+  type PlayableSignal,
+} from "../shared/playable-nodes.js";
 import { getPlayableThumbnail } from "./api.js";
 import { useWorkspaceAssetUrl } from "./use-workspace-asset-url.js";
+import { t, translateText } from "./i18n.js";
 import type { PlayableFlowData, PlayableFlowNode } from "./playable-flow.js";
-import { t } from "./i18n.js";
 
 const CARD_STYLE = {
   "--story-media-width": "var(--story-canvas-stage-width, 440px)",
   "--story-media-height": "var(--story-canvas-stage-height, 248px)",
 } as CSSProperties;
 
-export const PlayableCanvasContext = createContext<{
-  projectId: string;
-  onRenameNode: (nodeId: string, title: string) => void;
-  /** Selects a connection whose line is not drawn, such as a navigation Exit's. */
-  onSelectEdge: (edgeId: string) => void;
-  /** Opens the node workbench editor panel. */
-  onOpenNode: (nodeId: string) => void;
-} | undefined>(undefined);
+export const PlayableCanvasContext = createContext<
+  | {
+      projectId: string;
+      onRenameNode: (nodeId: string, title: string) => void;
+      /** Selects a connection whose line is not drawn, such as a navigation Exit's. */
+      onSelectEdge: (edgeId: string) => void;
+      /** Opens the node workbench editor panel. */
+      onOpenNode: (nodeId: string) => void;
+    }
+  | undefined
+>(undefined);
 
 export const PLAYABLE_NODE_TYPES: NodeTypes = { playable: PlayableNodeCard };
 
 function PlayableNodeCard({ id, data, selected }: NodeProps<PlayableFlowNode>) {
   const canvas = useContext(PlayableCanvasContext);
-  const { node, entry, ending, issues, connected, failed, thumbnail, coverAsset } = data;
-  return <div className={`story-node story-media-node story-presentation-node-card playable-node-card${selected ? " is-selected" : ""}`} style={CARD_STYLE}>
-    <Handle className="story-media-input-handle" type="target" position={Position.Left} />
-    <div className="story-media-node-label story-scene-node-label">
-      <span><InlinePlayableTitle nodeId={id} value={node.title} onRename={canvas?.onRenameNode} /></span>
-      <div className="playable-node-badges">
-        {entry ? <span className="playable-node-badge is-entry" title={t("sceneCard.startTitle")}><Flag size={11} /><span>{t("sceneCard.start")}</span></span> : null}
-        {node.story?.hidden ? <span className="playable-node-badge" title={t("sceneCard.offMapTitle")}><span>{t("sceneCard.offMap")}</span></span> : ending ? <span className="playable-node-badge" title={t("sceneCard.endingTitle")}><span>{t("storyMenu.ending")}</span></span> : null}
+  const {
+    node,
+    entry,
+    ending,
+    issues,
+    connected,
+    failed,
+    thumbnail,
+    coverAsset,
+  } = data;
+  const displayTitle = playableNodeTitle(node.title);
+  return (
+    <div
+      className={`story-node story-media-node story-presentation-node-card playable-node-card${selected ? " is-selected" : ""}`}
+      style={CARD_STYLE}
+    >
+      <Handle
+        className="story-media-input-handle"
+        type="target"
+        position={Position.Left}
+      />
+      <div className="story-media-node-label story-scene-node-label">
+        <span>
+          <InlinePlayableTitle
+            nodeId={id}
+            value={node.title}
+            displayValue={displayTitle}
+            onRename={canvas?.onRenameNode}
+          />
+        </span>
+        <div className="playable-node-badges">
+          {entry ? (
+            <span
+              className="playable-node-badge is-entry"
+              title={translateText("The player starts here")}
+            >
+              <Flag size={11} />
+              <span>{translateText("Start")}</span>
+            </span>
+          ) : null}
+          {node.story?.hidden ? (
+            <span
+              className="playable-node-badge"
+              title={translateText("Not shown on the Story map, and the Scenes before and after it are joined there")}
+            >
+              <span>{translateText("Off map")}</span>
+            </span>
+          ) : ending ? (
+            <span
+              className="playable-node-badge"
+              title={translateText("Counted as an ending on the Story map")}
+            >
+              <span>{translateText("Ending")}</span>
+            </span>
+          ) : null}
+        </div>
       </div>
-    </div>
-    <div data-alignment-frame className={`story-media-stage playable-node-stage${failed ? " is-failed" : ""}`}>
-      <PlayableNodePicture projectId={canvas?.projectId} node={node} thumbnail={thumbnail} coverAsset={coverAsset} />
-      {thumbnail?.stale && !failed ? <span className="playable-node-stale" title={t("sceneCard.staleTitle")}>{t("sceneCard.stale")}</span> : null}
-      {issues.length ? <p className="playable-node-issue" role="alert"><InfoCircle size={13} /><span title={issues.join("\n")}>{issues[0]}</span></p> : null}
-      <button
-        type="button"
-        className="playable-node-open-button nodrag"
-        onClick={(event) => {
-          event.stopPropagation();
-          canvas?.onOpenNode(id);
-        }}
+      <div
+        data-alignment-frame
+        className={`story-media-stage playable-node-stage${failed ? " is-failed" : ""}`}
       >
-        {t("sceneCard.openEditor")}
-      </button>
+        <PlayableNodePicture
+          projectId={canvas?.projectId}
+          node={node}
+          displayTitle={displayTitle}
+          thumbnail={thumbnail}
+          coverAsset={coverAsset}
+        />
+        {thumbnail?.stale && !failed ? (
+          <span
+            className="playable-node-stale"
+            title={translateText("The Scene changed since this picture was taken.")}
+          >
+            {translateText("Stale")}
+          </span>
+        ) : null}
+        {issues.length ? (
+          <p className="playable-node-issue" role="alert">
+            <InfoCircle size={13} />
+            <span title={issues.join("\n")}>{issues[0]}</span>
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="playable-node-open-button nodrag"
+          onClick={(event) => {
+            event.stopPropagation();
+            canvas?.onOpenNode(id);
+          }}
+        >
+          {translateText("Open Scene editor")}
+        </button>
+      </div>
+      <PlayableSignalOutputs
+        ending={ending}
+        signals={node.signals}
+        connected={connected}
+        onSelectEdge={canvas?.onSelectEdge}
+      />
     </div>
-    <PlayableSignalOutputs signals={node.signals} connected={connected} onSelectEdge={canvas?.onSelectEdge} />
-  </div>;
+  );
 }
 
 /**
- * What a Node card shows: the Node's last thumbnail, else its first image
- * Asset, else a neutral card with its title.
+ * What a Node card shows: the Node's last thumbnail, else its first image or
+ * video Asset, else a neutral card with its title.
  */
-function PlayableNodePicture({ projectId, node, thumbnail, coverAsset }: {
+function PlayableNodePicture({
+  projectId,
+  node,
+  displayTitle,
+  thumbnail,
+  coverAsset,
+}: {
   projectId?: string;
   node: PlayableNode;
+  displayTitle: string;
   thumbnail?: { capturedAt: string };
   coverAsset?: PlayableAssetDefinition;
 }) {
-  const captured = usePlayableThumbnailUrl(thumbnail ? projectId : undefined, node.id, thumbnail?.capturedAt);
+  const captured = usePlayableThumbnailUrl(
+    thumbnail ? projectId : undefined,
+    node.id,
+    thumbnail?.capturedAt,
+  );
   const source = coverAsset?.source;
   const cover = useWorkspaceAssetUrl(
     !captured && source?.kind === "workspace" ? projectId : undefined,
@@ -80,15 +177,44 @@ function PlayableNodePicture({ projectId, node, thumbnail, coverAsset }: {
     0,
     !captured && source?.kind === "library" ? source.assetId : undefined,
   );
-  const url = captured ?? cover.url;
-  if (url) return <img className={`playable-node-picture${captured ? "" : " is-asset"}`} src={url} alt="" draggable={false} />;
-  return <div className="playable-node-summary">
-    <strong>{node.title}</strong>
-  </div>;
+  const runtimeMediaUrl = cover.url;
+  const url = runtimeMediaUrl ?? captured;
+  if (runtimeMediaUrl && coverAsset?.type === "video") {
+    return (
+      <video
+        className="playable-node-picture is-asset"
+        src={runtimeMediaUrl}
+        muted
+        autoPlay
+        loop
+        playsInline
+        preload="metadata"
+        aria-label={displayTitle}
+      />
+    );
+  }
+  if (url)
+    return (
+      <img
+        className={`playable-node-picture${runtimeMediaUrl ? " is-asset" : ""}`}
+        src={url}
+        alt=""
+        draggable={false}
+      />
+    );
+  return (
+    <div className="playable-node-summary">
+      <strong>{displayTitle}</strong>
+    </div>
+  );
 }
 
 /** Keeps showing the previous screenshot until a newer one has loaded. */
-function usePlayableThumbnailUrl(projectId: string | undefined, nodeId: string, capturedAt: string | undefined): string | undefined {
+function usePlayableThumbnailUrl(
+  projectId: string | undefined,
+  nodeId: string,
+  capturedAt: string | undefined,
+): string | undefined {
   const [url, setUrl] = useState<string>();
   const current = useRef<string | undefined>(undefined);
   const show = useCallback((next: string | undefined) => {
@@ -96,17 +222,26 @@ function usePlayableThumbnailUrl(projectId: string | undefined, nodeId: string, 
     current.current = next;
     setUrl(next);
   }, []);
-  useEffect(() => () => { if (current.current) URL.revokeObjectURL(current.current); }, []);
+  useEffect(
+    () => () => {
+      if (current.current) URL.revokeObjectURL(current.current);
+    },
+    [],
+  );
   useEffect(() => {
     if (!projectId || !capturedAt) {
       show(undefined);
       return;
     }
     let disposed = false;
-    void getPlayableThumbnail(projectId, nodeId).then((blob) => {
-      if (!disposed) show(blob ? URL.createObjectURL(blob) : undefined);
-    }).catch(() => {});
-    return () => { disposed = true; };
+    void getPlayableThumbnail(projectId, nodeId)
+      .then((blob) => {
+        if (!disposed) show(blob ? URL.createObjectURL(blob) : undefined);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
   }, [projectId, nodeId, capturedAt, show]);
   return url;
 }
@@ -117,38 +252,88 @@ function usePlayableThumbnailUrl(projectId: string | undefined, nodeId: string, 
  * line is not drawn; the row names its target instead, and clicking the name
  * selects the connection.
  */
-function PlayableSignalOutputs({ signals, connected, onSelectEdge }: {
+function PlayableSignalOutputs({
+  ending,
+  signals,
+  connected,
+  onSelectEdge,
+}: {
+  ending: boolean;
   signals: readonly PlayableSignal[];
   connected: PlayableFlowData["connected"];
   onSelectEdge?: (edgeId: string) => void;
 }) {
-  if (!signals.length) return <div className="story-node-outputs playable-node-outputs-empty"><span>{t("sceneCard.noExits")}</span></div>;
-  return <div className="story-node-outputs">{signals.map((signal) => {
-    const route = connected[signal.id];
-    const name = signal.label || signal.id;
-    return <div className={`story-node-output${route ? "" : " is-unconnected"}`} key={signal.id}>
-      <span className="story-node-output-label" title={route
-        ? name
-        : t("sceneCard.unconnected", { name })}>{name}</span>
-      {signal.when ? <span className="playable-node-output-when" title={t("sceneCard.taken", { when: signal.when })}>{signal.when}</span> : null}
-      <Handle className="story-node-output-handle" id={signal.id} type="source" position={Position.Right} />
-      {route && signal.role === "navigation" ? <button
-        type="button"
-        className={`playable-node-output-target nodrag nopan${route.selected ? " is-selected" : ""}`}
-        title={t("sceneCard.goesTo", { name, target: route.target })}
-        onClick={(event) => {
-          // The row is inside the card, so the click would also select the Scene.
-          event.stopPropagation();
-          onSelectEdge?.(route.edgeId);
-        }}
-      ><ArrowRight size={10} /><span>{route.target}</span></button> : null}
-    </div>;
-  })}</div>;
+  if (!signals.length)
+    return ending ? null : (
+      <div className="story-node-outputs playable-node-outputs-empty">
+        <span>{translateText("No exits yet")}</span>
+      </div>
+    );
+  return (
+    <div className="story-node-outputs">
+      {signals.map((signal) => {
+        const route = connected[signal.id];
+        const name = translateText(signal.label || signal.id);
+        return (
+          <div
+            className={`story-node-output${route ? "" : " is-unconnected"}`}
+            key={signal.id}
+          >
+            <span
+              className="story-node-output-label"
+              title={
+                route
+                  ? name
+                  : `"${name}" doesn't go anywhere yet. Drag from here to a Scene.`
+              }
+            >
+              {name}
+            </span>
+            {signal.when ? (
+              <span
+                className="playable-node-output-when"
+                title={`Taken ${signal.when}`}
+              >
+                {signal.when}
+              </span>
+            ) : null}
+            <Handle
+              className="story-node-output-handle"
+              id={signal.id}
+              type="source"
+              position={Position.Right}
+            />
+            {route && signal.role === "navigation" ? (
+              <button
+                type="button"
+                className={`playable-node-output-target nodrag nopan${route.selected ? " is-selected" : ""}`}
+                title={`"${name}" goes to ${route.target}`}
+                onClick={(event) => {
+                  // The row is inside the card, so the click would also select the Scene.
+                  event.stopPropagation();
+                  onSelectEdge?.(route.edgeId);
+                }}
+              >
+                <ArrowRight size={10} />
+                <span>{route.target}</span>
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-function InlinePlayableTitle({ nodeId, value, onRename }: {
+function InlinePlayableTitle({
+  nodeId,
+  value,
+  displayValue,
+  onRename,
+}: {
   nodeId: string;
   value: string;
+  displayValue: string;
   onRename?: (nodeId: string, title: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -165,33 +350,50 @@ function InlinePlayableTitle({ nodeId, value, onRename }: {
     if (!editing) setDraft(value);
   }, [editing, value]);
 
-  if (!editing || !onRename) return <strong onDoubleClick={(event) => {
-    if (!onRename) return;
-    event.stopPropagation();
-    setDraft(value);
-    setEditing(true);
-  }}>{value}</strong>;
+  if (!editing || !onRename)
+    return (
+      <strong
+        onDoubleClick={(event) => {
+          if (!onRename) return;
+          event.stopPropagation();
+          setDraft(value);
+          setEditing(true);
+        }}
+      >
+        {displayValue}
+      </strong>
+    );
 
   const commit = () => {
     const next = draft.trim();
     if (next) onRename(nodeId, next);
     setEditing(false);
   };
-  return <input
-    ref={input}
-    className="story-node-title-input"
-    value={draft}
-    maxLength={120}
-    aria-label={t("sceneCard.title")}
-    onChange={(event) => setDraft(event.target.value)}
-    onBlur={commit}
-    onPointerDown={(event) => event.stopPropagation()}
-    onClick={(event) => event.stopPropagation()}
-    onDoubleClick={(event) => event.stopPropagation()}
-    onKeyDown={(event) => {
-      event.stopPropagation();
-      if (event.key === "Enter") commit();
-      if (event.key === "Escape") { setDraft(value); setEditing(false); }
-    }}
-  />;
+  return (
+    <input
+      ref={input}
+      className="story-node-title-input"
+      value={draft}
+      maxLength={120}
+      aria-label={translateText("Scene title")}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") commit();
+        if (event.key === "Escape") {
+          setDraft(value);
+          setEditing(false);
+        }
+      }}
+    />
+  );
+}
+
+function playableNodeTitle(value: string): string {
+  const match = /^Node (\d+)$/.exec(value);
+  return match ? t("sceneCard.defaultNodeTitle", { number: match[1] }) : value;
 }

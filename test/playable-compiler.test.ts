@@ -82,9 +82,9 @@ describe("Node compiler", () => {
       sourceLocations: true,
     });
 
-    expect(plain.nodes.menu!.html).not.toContain("data-ohmygame-source");
+    expect(plain.nodes.menu!.html).not.toContain("data-putenggame-source");
     expect(annotated.nodes.menu!.html).toContain(
-      'data-ohmygame-source="nodes/menu/index.html:1:1"',
+      'data-putenggame-source="nodes/menu/index.html:1:1"',
     );
   });
 
@@ -273,7 +273,7 @@ async function createCompilerWorkspace(
   graph: NodeGraph;
 }> {
   const root = await mkdtemp(
-    path.join(tmpdir(), "ohmygame-playable-compiler-"),
+    path.join(tmpdir(), "putenggame-playable-compiler-"),
   );
   temporaryRoots.push(root);
   const workspace = path.join(root, "workspace");

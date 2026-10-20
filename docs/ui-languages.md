@@ -1,7 +1,7 @@
 # UI languages
 
-The renderer ships in English and Simplified Chinese. English is the source
-language; every message lives in `src/renderer/locales/en.ts`, and
+The renderer ships in English and Simplified Chinese, with Simplified Chinese
+as the default. English is the source language; every message lives in `src/renderer/locales/en.ts`, and
 `src/renderer/locales/zh-CN.ts` must have exactly the same keys. Typecheck
 fails when a key is missing, and `test/i18n.test.ts` also checks that both
 languages use the same `{{placeholders}}`.
@@ -9,9 +9,8 @@ languages use the same `{{placeholders}}`.
 ## How it works
 
 `src/renderer/i18n.ts` wraps [i18next](https://www.i18next.com/). It resolves
-the language once, when the page loads: the choice in **Settings → Appearance
-→ Language**, or the first system language (any `zh*` locale uses Simplified
-Chinese). Changing the setting reloads the window, so module-level labels can
+the saved choice in **Settings → Appearance → Language**, defaulting to
+Simplified Chinese when no choice is saved. Changing the setting reloads the window, so module-level labels can
 call `t` directly. The module also sets `<html lang>` and exports `language`
 for `Intl` and `toLocale*` formatting.
 

@@ -86,7 +86,11 @@ describe("renderer event stream", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/projects/project-1/playable/codebase",
-      expect.objectContaining({ method: "PUT", body: JSON.stringify(update) }),
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify(update),
+        keepalive: true,
+      }),
     );
   });
 
@@ -101,6 +105,32 @@ describe("renderer event stream", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/library/assets/upload?name=opening.mp4&mediaType=video%2Fmp4&duration=6.5",
       expect.objectContaining({ method: "POST", body: file, headers: expect.objectContaining({ "content-type": "application/octet-stream" }) }),
+    );
+  });
+
+  it("sends files from remembered folders through the source sync endpoint", async () => {
+    installWindow();
+    const file = new File(["image"], "scene.png", { type: "image/png" });
+    const asset = { id: "asset-1", name: file.name, mediaType: "image" };
+    const fetchMock = vi.fn(async () => Response.json(asset, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      uploadLibraryAsset(file, "image/png", undefined, undefined, {
+        category: "image",
+        sourceKey: "browser-folder:image:scene.png",
+        modifiedAt: "2026-10-18T10:00:00.000Z",
+      }),
+    ).resolves.toEqual(asset);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/library/assets/source-sync?name=scene.png&mediaType=image%2Fpng&category=image&sourceKey=browser-folder%3Aimage%3Ascene.png&modifiedAt=2026-10-18T10%3A00%3A00.000Z",
+      expect.objectContaining({
+        method: "POST",
+        body: file,
+        headers: expect.objectContaining({
+          "content-type": "application/octet-stream",
+        }),
+      }),
     );
   });
 

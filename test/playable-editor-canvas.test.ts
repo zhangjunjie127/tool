@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  arrangePlayableNodes,
   buildCodebase,
   nodeIdForIssuePath,
   toFlowEdge,
@@ -51,6 +52,63 @@ const LAYOUT: NodeEditorLayout = {
 };
 
 describe("playable canvas serialization", () => {
+  it("arranges branches by signal order and keeps disconnected nodes after the story", () => {
+    const nodes = [
+      flowNode(playableNode("start", ["first", "second"]), { x: 0, y: 0 }),
+      flowNode(playableNode("second", ["continue"]), { x: 0, y: 0 }),
+      flowNode(playableNode("first"), { x: 0, y: 0 }),
+      flowNode(playableNode("ending"), { x: 0, y: 0 }),
+      flowNode(playableNode("orphan"), { x: 0, y: 0 }),
+    ];
+    nodes[0]!.measured = { width: 200, height: 120 };
+    nodes[2]!.measured = { width: 180, height: 300 };
+    const edges = [
+      toFlowEdge({ id: "second-edge", source: { nodeId: "start", signal: "second" }, targetNodeId: "second", mode: "replace" }),
+      toFlowEdge({ id: "first-edge", source: { nodeId: "start", signal: "first" }, targetNodeId: "first", mode: "replace" }),
+      toFlowEdge({ id: "ending-edge", source: { nodeId: "second", signal: "continue" }, targetNodeId: "ending", mode: "replace" }),
+    ];
+
+    const positions = arrangePlayableNodes(nodes, edges, "start");
+
+    expect(positions.start).toEqual({ x: 80, y: 80 });
+    expect(positions.first!.y).toBeLessThan(positions.second!.y);
+    expect(positions.ending!.x).toBeGreaterThan(positions.second!.x);
+    expect(positions.orphan!.x).toBeGreaterThan(positions.ending!.x);
+    expect(positions.second!.y).toBeGreaterThanOrEqual(positions.first!.y + 300 + 80);
+    for (let left = 0; left < nodes.length; left += 1) {
+      for (let right = left + 1; right < nodes.length; right += 1) {
+        const a = nodes[left]!;
+        const b = nodes[right]!;
+        const aPosition = positions[a.id]!;
+        const bPosition = positions[b.id]!;
+        const separated = aPosition.x + (a.measured?.width ?? 280) <= bPosition.x
+          || bPosition.x + (b.measured?.width ?? 280) <= aPosition.x
+          || aPosition.y + (a.measured?.height ?? 220) <= bPosition.y
+          || bPosition.y + (b.measured?.height ?? 220) <= aPosition.y;
+        expect(separated, `${a.id} and ${b.id} overlap`).toBe(true);
+      }
+    }
+  });
+
+  it("lays out cycles and disconnected components without overlapping nodes", () => {
+    const nodes = [
+      flowNode(playableNode("start", ["next"]), { x: 0, y: 0 }),
+      flowNode(playableNode("loop", ["back"]), { x: 0, y: 0 }),
+      flowNode(playableNode("isolated"), { x: 0, y: 0 }),
+    ];
+    nodes[0]!.measured = { width: 200, height: 200 };
+    nodes[1]!.measured = { width: 200, height: 260 };
+    const edges = [
+      toFlowEdge({ id: "forward", source: { nodeId: "start", signal: "next" }, targetNodeId: "loop", mode: "replace" }),
+      toFlowEdge({ id: "back", source: { nodeId: "loop", signal: "back" }, targetNodeId: "start", mode: "replace" }),
+    ];
+
+    const positions = arrangePlayableNodes(nodes, edges, "start");
+
+    expect(positions.loop!.x).toBeGreaterThan(positions.start!.x);
+    expect(positions.isolated!.x).toBeGreaterThan(positions.loop!.x);
+  });
+
   it("writes the graph from canvas state with rounded positions", () => {
     const nodes = [
       flowNode(playableNode("start", ["begin"]), { x: 80.4, y: 180.6 }),

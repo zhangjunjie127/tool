@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildPlayableProject, validatePlayableProject } from "../src/daemon/playable-project.js";
+import { writePlayableBackdropEffects } from "../src/daemon/playable-backdrop-effects.js";
 import { isCompiledNodeGraph } from "../src/shared/playable-compiled.js";
 import {
   createNodeGraphFixture,
@@ -95,9 +96,41 @@ describe("Playable project build", () => {
     const draft = await buildPlayableProject(workspace, "draft");
     const published = await buildPlayableProject(workspace, "publish");
 
-    expect(draft?.compiled.nodes.menu?.html).toContain("data-ohmygame-source");
+    expect(draft?.compiled.nodes.menu?.html).toContain("data-putenggame-source");
     expect(published?.compiled.nodes.menu?.html).not.toContain(
-      "data-ohmygame-source",
+      "data-putenggame-source",
+    );
+  });
+
+  it("applies one saved backdrop setting to every Scene and the published build", async () => {
+    const workspace = await temporaryWorkspace();
+    await writePlayableFixtureWorkspace(workspace);
+    await mkdir(path.join(workspace, "shared", "style"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "shared", "style", "components.css"),
+      `.backdrop::after{content:"";background:radial-gradient(circle,transparent,#000),url("data:image/svg+xml;utf8,<svg><feTurbulence/></svg>"),linear-gradient(#111,#222)}`,
+    );
+    for (const node of createNodeGraphFixture().nodes) {
+      await writeFile(
+        path.join(workspace, node.source.css),
+        `@import "../../shared/style/components.css";\nmain { display: grid; }\n`,
+      );
+    }
+    await writePlayableBackdropEffects(workspace, {
+      vignette: false,
+      grain: true,
+    });
+
+    const draft = await buildPlayableProject(workspace, "draft");
+    const published = await buildPlayableProject(workspace, "publish");
+
+    for (const scene of Object.values(draft!.compiled.nodes)) {
+      expect(scene.css).toContain("--putenggame-backdrop-vignette: none");
+      expect(scene.css).toContain("--putenggame-backdrop-grain: var(--putenggame-backdrop-grain-source)");
+      expect(scene.css).toMatch(/linear-gradient\(#111,\s*#222\)/);
+    }
+    expect(published!.compiled.nodes.menu!.css).toContain(
+      "--putenggame-backdrop-vignette: none",
     );
   });
 
@@ -136,7 +169,7 @@ describe("Playable project build", () => {
 
 async function temporaryWorkspace(): Promise<string> {
   const workspace = await mkdtemp(
-    path.join(tmpdir(), "ohmygame-playable-project-"),
+    path.join(tmpdir(), "putenggame-playable-project-"),
   );
   temporaryRoots.push(workspace);
   return workspace;

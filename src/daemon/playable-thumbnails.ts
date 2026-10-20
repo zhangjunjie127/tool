@@ -4,11 +4,11 @@ import path from "node:path";
 import type { PlayableThumbnailManifest } from "../shared/playable-editor.js";
 
 /**
- * Node thumbnails are editor cache under `.ohmygame/thumbnails/`: one WebP
+ * Node thumbnails are editor cache under `.putenggame/thumbnails/`: one WebP
  * screenshot per Node, plus the hash of the compiled Node it shows. They are
  * never part of the graph, the layout, or a published project.
  */
-const THUMBNAIL_DIRECTORY = ".ohmygame/thumbnails";
+const THUMBNAIL_DIRECTORY = ".putenggame/thumbnails";
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const HASH_PATTERN = /^[0-9a-f]{8,64}$/;
 
@@ -120,7 +120,7 @@ export async function readGraphNodeIds(workspacePath: string): Promise<Set<strin
 
 /**
  * The real cache directory, or `undefined` when it does not exist yet. Each
- * level is checked before anything is created in it, so a linked `.ohmygame`
+ * level is checked before anything is created in it, so a linked `.putenggame`
  * never leads a write outside the workspace.
  */
 async function thumbnailDirectory(workspacePath: string, create: boolean): Promise<string | undefined> {

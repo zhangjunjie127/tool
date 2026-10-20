@@ -38,12 +38,12 @@ export class NodeCodebaseConflictError extends NodeCodebaseError {
 
 const AGENT_INSTRUCTIONS = `# Playable Nodes Project
 
-This workspace is the source of truth for an OhMyGame Playable Nodes project.
+This workspace is the source of truth for an PutengGame Playable Nodes project.
 
 - \`graph.json\` declares the viewport, initial State, Assets, Nodes, Signals, and navigation edges.
 - Every Node follows the same protocol. Its HTML, CSS, and JavaScript are ordinary source files referenced by \`node.source\`.
 - Node JavaScript exports \`mount(context)\`. Render into \`context.root\` and optionally return a cleanup function.
-- Emit only Signals declared by the current Node: \`context.navigation.emit(signalId)\`. Signals describe outcomes; they do not name target Nodes.
+- Emit only Signals declared by the current Node: \`context.navigation.emit(signalId)\`. Signals describe outcomes; they do not name target Nodes. For a failed interaction or timeout, use \`context.navigation.fail(signalId)\`; the Scene's “continue without input” setting can then suppress that failure Exit. Use \`emit()\` for success and other intentional outcomes.
 - Read and update authoritative project State through \`context.state\`. Do not keep navigation-critical state only in the DOM.
 - A top-level State key is a Variable: something that crosses Nodes or belongs in the save, such as \`trust\` or an \`inventory\` list. Progress inside one Node stays in that Node's code, and content such as item definitions goes in \`shared/\` modules.
 - When you add a Variable, give it a starting value in \`initialState\` and a one-line description in \`variables\`, such as \`"trust": "How much the guard trusts the player"\`. The user sees them read-only in Project → Variables.
@@ -52,8 +52,8 @@ This workspace is the source of truth for an OhMyGame Playable Nodes project.
 - Every Node must show something sensible with the initial State, because the editor previews each Node from a new game.
 - A Node may use only Assets listed in its \`assets\` array. Resolve them with \`context.assets.url(assetId)\`.
 - Build every screen with the Project Style in \`shared/style/\`: import \`shared/style/components.css\` from a Node's CSS and use its tokens and classes. Add a token or component there instead of hard-coding values in a Node, and restyle the game by changing \`shared/style/\` first.
-- A Node's background is one \`<div class="backdrop" data-media="backdrop" data-asset="ID" data-type="video|image">\` inside a \`.has-backdrop\` container. The author sets \`data-asset\` and \`data-type\` from the editor, so keep exactly one such element in the Node's HTML and never replace it; to change the background, change those two attributes. \`showBackdrop(context)\` from \`shared/style/components.js\` shows it: a video plays once with sound and stops on its last frame, an image stays still. It returns \`{ video, cleanup }\`.
-- \`playScene(context, { signal })\` from the same file shows the background and emits the Signal when its video ends or the player clicks. The Blank Template uses it; change or replace it freely.
+- A Node's background is one \`<div class="backdrop" data-media="backdrop" data-asset="ID" data-type="video|image">\` inside a \`.has-backdrop\` container. The author sets \`data-asset\` and \`data-type\` from the editor, so keep exactly one such element in the Node's HTML and never replace it; to change the background, change those two attributes. Set \`data-loop="true"\` on the backdrop for looping video; otherwise it plays once and stops on its last frame. \`showBackdrop(context)\` from \`shared/style/components.js\` shows it, and returns \`{ video, cleanup }\`.
+- \`playScene(context, { signal })\` from the same file shows the background and emits the Signal when a single-play video ends or the player clicks. A looping video continues until the player clicks. The Blank Template uses it; change or replace it freely.
 - Use normal modules under \`shared/\` for code shared by Nodes. Imports must remain inside this workspace; project dependencies resolve from this project's own \`node_modules\`.
 - UI that appears on more than one Node, such as a top bar or a Home button, is a shared component under \`shared/components/\`. Each Node that shows it imports it, and declares and routes the Signals it emits like its own. There is no layer drawn over every Node; State carries whatever must continue across Nodes.
 - A Signal that is a way around the game rather than a step in the story, such as Home, Menu, or Settings, has \`"role": "navigation"\`. The editor names its target on the Exit instead of drawing a line; routing is the same.
@@ -63,7 +63,7 @@ This workspace is the source of truth for an OhMyGame Playable Nodes project.
 - An entry, button, or link whose Signal may go nowhere checks \`context.navigation.connected(signalId)\` and shows disabled instead of emitting. Publishing requires every Signal other than navigation ones to be connected.
 - A new project has no Nodes. \`playable_add_node\` makes the first Node the Entry Node; when you add the first Node to graph.json yourself, set \`entryNodeId\` to it.
 - Keep IDs and source paths stable when editing existing objects. You do not need to edit \`editor/layout.json\`; the editor places new Nodes.
-- Read \`README.md\` and the schemas in \`schemas/\` before changing the contract. Do not copy or modify the OhMyGame Runtime inside this project.
+- Read \`README.md\` and the schemas in \`schemas/\` before changing the contract. Do not copy or modify the PutengGame Runtime inside this project.
 
 ## Words the editor uses
 
@@ -94,7 +94,7 @@ This project is made of one graph plus ordinary browser source files. Every Node
 - \`shared/style/\` is the Project Style: \`theme.css\` tokens, \`components.css\` classes, and \`components.js\` components such as \`playScene()\`.
 - \`editor/layout.json\` contains editor-only positions and viewport state.
 - \`schemas/\` contains the exact persisted JSON contracts.
-- \`.ohmygame/\` is editor cache, such as Node thumbnails. It is never published; leave it alone.
+- \`.putenggame/\` is editor cache, such as Node thumbnails. It is never published; leave it alone.
 
 ## Node API
 
@@ -103,7 +103,7 @@ Each Node module exports \`mount(context)\`. The Runtime supplies:
 - \`context.root\`: the Node's isolated ShadowRoot.
 - \`context.assets.url(id)\`: a URL for an Asset declared by this Node.
 - \`context.state.get(key)\`, \`set(key, value)\`, \`patch(values)\`, and \`subscribe(listener)\`.
-- \`context.navigation.emit(signalId)\`, \`back()\`, and \`connected(signalId)\`, which is true when this Node declares the Signal and an edge routes it.
+- \`context.navigation.emit(signalId)\` for normal outcomes, \`fail(signalId)\` for failed interactions/timeouts, \`back()\`, and \`connected(signalId)\`, which is true when this Node declares the Signal and an edge routes it. A Scene configured to continue without input suppresses only connected failure Exits sent through \`fail()\`; success via \`emit()\` is unaffected.
 - \`context.session.hasSave()\`, \`save()\`, \`continue()\`, \`restart()\`, and \`reset()\`.
 - \`context.story.map()\`: the story laid out from the graph in rows from the Start, with what the player has seen across every game. Nodes have \`id\`, \`label\`, \`row\`, \`column\` (from the left of its row of \`rowSize\`), \`ending\`, and \`seen\`; edges have \`from\`, \`to\`, and \`seen\`. It leaves out \`push\` side screens, navigation Signals, steps back up the story, and Nodes with \`story.hidden\`.
 - \`context.lifecycle.signal\`: aborted before cleanup when the Node exits.
@@ -120,12 +120,6 @@ export function createPlayableStarterCodebase(
   return blankCodebase(title, viewport);
 }
 
-/**
- * Adds the files of a new project that the workspace does not have yet and
- * never overwrites one it has. A workspace that already holds graph.json is
- * an existing project, such as one removed from OhMyGame and opened again: it
- * keeps its own graph and Scenes, even when they need repair in the editor.
- */
 export async function createNodeCodebase(
   workspacePath: string,
   codebase: NodeCodebase,
@@ -140,17 +134,21 @@ export async function createNodeCodebase(
           [LAYOUT_FILE]: jsonText(codebase.editorLayout),
           ...starterSources(codebase.graph),
         };
-    const snapshot = await snapshotFiles(workspacePath, [
+    const touchedFiles = [
       ...Object.keys(files),
       "AGENTS.md",
       "README.md",
       GRAPH_SCHEMA_FILE,
       LAYOUT_SCHEMA_FILE,
       PROJECT_STYLE_MIGRATION_FILE,
-    ]);
+    ];
+    const snapshot = await snapshotFiles(workspacePath, touchedFiles);
     try {
       for (const [file, content] of Object.entries(files)) {
-        await ensureFile(await resolveWorkspaceMutationPath(workspacePath, file), content);
+        await ensureFile(
+          await resolveWorkspaceMutationPath(workspacePath, file),
+          content,
+        );
       }
       await ensureNodeCodebaseContract(workspacePath);
     } catch (cause) {
@@ -204,11 +202,13 @@ export async function writeNodeCodebase(
  */
 export async function changeNodeCodebase(
   workspacePath: string,
-  change: (codebase: NodeCodebaseDetail) => NodeCodebaseUpdate | undefined,
+  change: (
+    codebase: NodeCodebaseDetail,
+  ) => NodeCodebaseUpdate | undefined | Promise<NodeCodebaseUpdate | undefined>,
 ): Promise<void> {
   await withCodebaseLock(workspacePath, async () => {
     const current = await readCodebase(workspacePath);
-    const update = change(current);
+    const update = await change(current);
     // The revision still refuses to write over a file the Agent edited in the meantime.
     if (update) await writeCodebase(workspacePath, { ...update, revision: current.revision });
   });
@@ -408,7 +408,7 @@ function layout(
 
 // A new project brings the Project Style; any Node it starts with comes from
 // the Blank Template. Examples, which ship their own sources, live in the
-// ohmygame-examples repository.
+// the examples repository.
 function starterSources(graph: NodeGraph): Record<string, string> {
   const sources: Record<string, string> = { ...PLAYABLE_PROJECT_STYLE_FILES };
   const blank = blankSource();

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { filterLibraryAssets } from "../src/renderer/library.js";
 import type { LibraryAsset } from "../src/renderer/library-assets.js";
-import { libraryAssetProjects } from "../src/renderer/library-assets.js";
+import { browserLibrarySyncAction } from "../src/renderer/browser-library-folders.js";
+import {
+  filterCustomLibraryAssets,
+  filterLocalLibraryAssets,
+  libraryAssetProjects,
+  sortLibraryAssets,
+} from "../src/renderer/library-assets.js";
 
 const ASSETS: LibraryAsset[] = [
   { id: "hero", assetId: "hero", name: "hero.webp", path: "hero.webp", size: 10, mediaType: "image", contentType: "image/webp", createdAt: "2026-08-24T12:00:00Z", prompt: "Ancient forest shrine" },
@@ -10,9 +16,110 @@ const ASSETS: LibraryAsset[] = [
 ];
 
 describe("library filters", () => {
+  it("skips unchanged browser-folder files and accepts arbitrarily large files", () => {
+    const unchanged = { size: 24, lastModified: 100 };
+    expect(browserLibrarySyncAction(unchanged, unchanged)).toBe("unchanged");
+    expect(
+      browserLibrarySyncAction(
+        { size: Number.MAX_SAFE_INTEGER, lastModified: 200 },
+      ),
+    ).toBe("upload");
+  });
+
   it("filters by media type", () => {
     expect(filterLibraryAssets(ASSETS, "image", "")).toEqual([ASSETS[0]]);
     expect(filterLibraryAssets(ASSETS, "audio", "")).toEqual([ASSETS[1]]);
+  });
+
+  it("separates UI images and sorts by file size or modification time", () => {
+    const video: LibraryAsset = {
+      ...ASSETS[0]!,
+      id: "video",
+      assetId: "video",
+      name: "intro.mp4",
+      path: "intro.mp4",
+      mediaType: "video",
+      contentType: "video/mp4",
+      category: "video",
+    };
+    const ui = {
+      ...ASSETS[0]!,
+      id: "ui",
+      assetId: "ui",
+      category: "ui" as const,
+      size: 100,
+      modifiedAt: "2026-08-25T12:00:00Z",
+    };
+    const photo = {
+      ...ASSETS[0]!,
+      id: "photo",
+      assetId: "photo",
+      size: 50,
+      modifiedAt: "2026-08-26T12:00:00Z",
+    };
+    const assets = [ui, photo];
+    expect(filterLibraryAssets([video, ...assets], "video", "")).toEqual([video]);
+    expect(filterLibraryAssets(assets, "image", "")).toEqual([photo]);
+    expect(filterLibraryAssets(assets, "ui", "")).toEqual([ui]);
+    expect(sortLibraryAssets(assets, "size").map((asset) => asset.id)).toEqual(["ui", "photo"]);
+    expect(sortLibraryAssets(assets, "modified").map((asset) => asset.id)).toEqual(["photo", "ui"]);
+  });
+
+  it("shows only this-session imports in the custom picker category", () => {
+    const ui = {
+      ...ASSETS[0]!,
+      id: "ui",
+      assetId: "ui",
+      category: "ui" as const,
+      origin: "local" as const,
+    };
+    const imported = {
+      ...ASSETS[0]!,
+      id: "imported",
+      assetId: "imported",
+      origin: "uploaded" as const,
+    };
+    expect(
+      filterCustomLibraryAssets(
+        [ui, imported, ASSETS[0]!],
+        "",
+        {},
+        new Set(["imported"]),
+      ).map((asset) => asset.id),
+    ).toEqual(["imported"]);
+    expect(filterLocalLibraryAssets([imported, ui], "image", "")).toEqual([]);
+  });
+
+  it("shows only files scanned from the matching local folder in video and image tabs", () => {
+    const localImage = {
+      ...ASSETS[0]!,
+      id: "local-image",
+      assetId: "local-image",
+      origin: "local" as const,
+      category: "image" as const,
+    };
+    const localVideo: LibraryAsset = {
+      ...localImage,
+      id: "local-video",
+      assetId: "local-video",
+      name: "intro.mp4",
+      path: "intro.mp4",
+      mediaType: "video",
+      contentType: "video/mp4",
+      category: "video",
+    };
+    const uploaded = {
+      ...localImage,
+      id: "uploaded-image",
+      assetId: "uploaded-image",
+      origin: "uploaded" as const,
+    };
+    expect(
+      filterLocalLibraryAssets([localImage, localVideo, uploaded], "image", ""),
+    ).toEqual([localImage]);
+    expect(
+      filterLocalLibraryAssets([localImage, localVideo, uploaded], "video", ""),
+    ).toEqual([localVideo]);
   });
 
   it("searches paths and project names case-insensitively", () => {

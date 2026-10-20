@@ -2125,7 +2125,7 @@ describe("Playable Nodes projects", () => {
     const presets = await app.inject({ method: "GET", url: "/playable/presets" });
     expect(presets.statusCode).toBe(200);
     expect(presets.json().presets.map((preset: { id: string }) => preset.id)).toEqual([
-      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map",
+      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map", "affection",
     ]);
 
     const created = await app.inject({
@@ -2305,30 +2305,12 @@ describe("Playable Nodes projects", () => {
       payload: { name: "Story", type: "interactive-story", workspacePath },
     });
 
-    expect(response.statusCode).toBe(201);
+    expect(response.statusCode, response.body).toBe(201);
     const codebase = await app.inject({ method: "GET", url: `/projects/${response.json().id}/playable/codebase` });
     expect(codebase.statusCode).toBe(200);
     expect(await readFile(path.join(workspacePath, "graph.json"), "utf8")).toBe(graph);
     expect(await readFile(path.join(workspacePath, "notes.txt"), "utf8")).toBe("keep me\n");
     await rm(workspacePath, { recursive: true, force: true });
-  });
-
-  it("exports an Interactive Story as an editable project archive", async () => {
-    const app = await createPlayableApp("ohmygame-playable-export-project-");
-    const webGame = (await app.inject({ method: "POST", url: "/projects", payload: { name: "Web" } })).json();
-    const story = (await app.inject({
-      method: "POST",
-      url: "/projects",
-      payload: { name: "Story", type: "interactive-story" },
-    })).json();
-
-    const exported = await app.inject({ method: "POST", url: `/projects/${story.id}/interactive-story/export-project` });
-    const rejected = await app.inject({ method: "POST", url: `/projects/${webGame.id}/interactive-story/export-project` });
-
-    expect(exported.statusCode).toBe(200);
-    expect(exported.headers["content-type"]).toBe("application/zip");
-    expect(exported.rawPayload.subarray(0, 2).toString()).toBe("PK");
-    expect(rejected.statusCode).toBe(409);
   });
 
   it("protects Library assets declared by a Playable Nodes graph", async () => {
@@ -2350,6 +2332,11 @@ describe("Playable Nodes projects", () => {
       source: { kind: "library", assetId: asset.id },
     };
     codebase.graph.nodes[0].assets.push("portrait");
+    const htmlPath = path.join(project.workspacePath, codebase.graph.nodes[0].source.html);
+    await writeFile(
+      htmlPath,
+      '<main><img data-putenggame-asset="portrait"><button data-putenggame-button-pressed-asset="portrait"></button><div class="backdrop" data-asset="portrait"></div></main>',
+    );
     expect((await app.inject({
       method: "PUT",
       url: `/projects/${project.id}/playable/codebase`,
@@ -2365,6 +2352,7 @@ describe("Playable Nodes projects", () => {
     const updated = (await app.inject({ method: "GET", url: `/projects/${project.id}/playable/codebase` })).json();
     expect(updated.graph.assets.portrait).toBeUndefined();
     expect(updated.graph.nodes[0].assets).not.toContain("portrait");
+    expect(await readFile(htmlPath, "utf8")).not.toContain('="portrait"');
   });
 });
 

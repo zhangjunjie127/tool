@@ -1,6 +1,7 @@
 import type { LibraryAsset as StoredLibraryAsset, LibraryAssetOrigin, LibraryAssetProject } from "../shared/contracts.js";
 import type { BrowsableAsset, MediaFilter } from "./asset-browser.js";
 import { getLibraryAsset, listLibraryAssets, waitForRuntime } from "./api.js";
+import { syncRememberedBrowserLibraryFolders } from "./browser-library-folders.js";
 
 export interface LibraryAsset extends StoredLibraryAsset, BrowsableAsset { assetId: string; path: string }
 
@@ -10,16 +11,46 @@ export interface LibraryAssetFilters {
   includeReferences?: boolean;
 }
 
+export type LibraryAssetSort = "modified" | "size";
+
 export function filterLibraryAssets(assets: readonly LibraryAsset[], media: MediaFilter, query: string, filters: LibraryAssetFilters = {}): LibraryAsset[] {
   const normalized = query.trim().toLowerCase();
   const origin = filters.origin ?? "saved";
   return assets.filter((asset) => (
-    (media === "all" || asset.mediaType === media) &&
+    (media === "all" || media === "ui" ? media === "all" || asset.category === "ui" : asset.mediaType === media && (media !== "image" || asset.category !== "ui")) &&
     (filters.includeReferences || !(asset.referenceOnly ?? asset.purpose === "reference")) &&
     (origin === "saved" ? (asset.saved ?? asset.origin !== "workspace") : origin === "all" || (asset.origin ?? "unknown") === origin) &&
     (!filters.projectId || (filters.projectId === "unassigned" ? !asset.projects?.length : asset.projects?.some((project) => project.id === filters.projectId))) &&
     (!normalized || `${asset.path} ${asset.prompt ?? ""} ${asset.projectName ?? ""} ${asset.projects?.map((project) => project.name).join(" ") ?? ""}`.toLowerCase().includes(normalized))
   ));
+}
+
+export function filterCustomLibraryAssets(
+  assets: readonly LibraryAsset[],
+  query: string,
+  filters: LibraryAssetFilters,
+  sessionImportedAssetIds: ReadonlySet<string>,
+): LibraryAsset[] {
+  return filterLibraryAssets(assets, "all", query, filters).filter(
+    (asset) => sessionImportedAssetIds.has(asset.id),
+  );
+}
+
+export function filterLocalLibraryAssets(
+  assets: readonly LibraryAsset[],
+  media: "image" | "video",
+  query: string,
+  filters: LibraryAssetFilters = {},
+): LibraryAsset[] {
+  return filterLibraryAssets(assets, media, query, filters).filter(
+    (asset) => asset.origin === "local" && asset.category === media,
+  );
+}
+
+export function sortLibraryAssets(assets: readonly LibraryAsset[], sort: LibraryAssetSort): LibraryAsset[] {
+  return [...assets].sort((left, right) => sort === "size"
+    ? right.size - left.size || left.name.localeCompare(right.name)
+    : Date.parse(right.modifiedAt ?? right.createdAt) - Date.parse(left.modifiedAt ?? left.createdAt) || left.name.localeCompare(right.name));
 }
 
 export function libraryAssetProjects(assets: readonly LibraryAsset[]): LibraryAssetProject[] {
@@ -30,6 +61,7 @@ export function libraryAssetProjects(assets: readonly LibraryAsset[]): LibraryAs
 
 export async function loadLibraryAssets(): Promise<LibraryAsset[]> {
   await waitForRuntime();
+  await syncRememberedBrowserLibraryFolders();
   return (await listLibraryAssets()).map((asset) => ({ ...asset, assetId: asset.id, path: asset.name }));
 }
 

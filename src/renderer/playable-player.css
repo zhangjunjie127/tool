@@ -2,6 +2,7 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; }
 
 .playable-player {
+  position: relative;
   display: grid;
   width: 100%;
   height: 100%;
@@ -11,6 +12,35 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   overflow: hidden;
   background: #090a0c;
   color: #f2f3f5;
+}
+
+.playable-player-context-menu {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  min-width: 144px;
+  padding: 4px;
+  border: 1px solid #454a54;
+  border-radius: 5px;
+  background: #1b1e24;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+
+.playable-player-context-menu button {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playable-player-context-menu button:hover,
+.playable-player-context-menu button:focus-visible {
+  background: #303640;
+  outline: none;
 }
 
 .playable-player-stage {
@@ -64,6 +94,63 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   color: #a5a7ad;
   font-size: 12px;
   text-align: center;
+}
+
+.published-player-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.published-player-shell > .playable-player {
+  position: absolute;
+  inset: 0;
+}
+
+.published-player-controls {
+  position: absolute;
+  z-index: 2;
+  right: clamp(12px, 3vw, 36px);
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: clamp(12px, 3vw, 36px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 7px;
+  background: rgb(0 0 0 / 68%);
+  color: #fff;
+  font: 12px/1 system-ui, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms;
+  visibility: hidden;
+}
+
+.published-player-controls.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.published-player-controls input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  margin: 0;
+  accent-color: #e7edf6;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.published-player-controls input[type="range"]:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
 }
 
 .playable-thumbnail-page {

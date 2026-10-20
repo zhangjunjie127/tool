@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function setup() {
-  const directory = await mkdtemp(path.join(tmpdir(), "ohmygame-library-filters-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "putenggame-library-filters-"));
   const app = createApp({ dataDirectory: directory });
   fixtures.push({ app, directory });
   return app;
@@ -38,6 +38,170 @@ async function list(app: App): Promise<LibraryAssetSummary[]> {
 }
 
 describe("Library provenance and project filters", () => {
+  it("syncs browser folder files idempotently and updates changed content in place", async () => {
+    const app = await setup();
+    const source = {
+      name: "scene.png",
+      mediaType: "image/png",
+      category: "image",
+      sourceKey: "browser-folder:image:subfolder/scene.png",
+      modifiedAt: "2026-10-18T10:00:00.000Z",
+    };
+    const url = `/library/assets/source-sync?${new URLSearchParams(source)}`;
+    const headers = { "content-type": "application/octet-stream" };
+    const contents = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    const first = await app.inject({ method: "POST", url, headers, payload: contents });
+    expect(first.statusCode, first.body).toBe(200);
+    const repeated = await app.inject({ method: "POST", url, headers, payload: contents });
+    expect(repeated.statusCode, repeated.body).toBe(200);
+    expect(repeated.json<LibraryAsset>().id).toBe(first.json<LibraryAsset>().id);
+    expect(await list(app)).toHaveLength(1);
+
+    const changed = await app.inject({
+      method: "POST",
+      url: `/library/assets/source-sync?${new URLSearchParams({
+        ...source,
+        modifiedAt: "2026-10-18T10:01:00.000Z",
+      })}`,
+      headers,
+      payload: Buffer.concat([contents, Buffer.from("new")]),
+    });
+    expect(changed.statusCode, changed.body).toBe(200);
+    expect(changed.json<LibraryAsset>()).toMatchObject({
+      id: first.json<LibraryAsset>().id,
+      size: contents.length + 3,
+      origin: "local",
+      category: "image",
+    });
+    expect(await list(app)).toHaveLength(1);
+  });
+
+  it("accepts and refreshes browser-synced videos larger than the default request limit", async () => {
+    const app = await setup();
+    const source = {
+      name: "opening.mp4",
+      mediaType: "video/mp4",
+      category: "video",
+      sourceKey: "browser-folder:video:opening.mp4",
+      modifiedAt: "2026-10-18T10:00:00.000Z",
+    };
+    const url = `/library/assets/source-sync?${new URLSearchParams(source)}`;
+    const headers = { "content-type": "application/octet-stream" };
+    const original = Buffer.alloc(1024 * 1024 + 1);
+    original.writeUInt32BE(24, 0);
+    original.write("ftyp", 4);
+
+    const first = await app.inject({ method: "POST", url, headers, payload: original });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json<LibraryAsset>().size).toBe(original.length);
+
+    const updated = Buffer.concat([original, Buffer.from("updated")]);
+    const changed = await app.inject({
+      method: "POST",
+      url: `/library/assets/source-sync?${new URLSearchParams({
+        ...source,
+        modifiedAt: "2026-10-18T10:01:00.000Z",
+      })}`,
+      headers,
+      payload: updated,
+    });
+    expect(changed.statusCode, changed.body).toBe(200);
+    expect(changed.json<LibraryAsset>()).toMatchObject({
+      id: first.json<LibraryAsset>().id,
+      size: updated.length,
+    });
+    const content = await app.inject({
+      method: "GET",
+      url: `/library/assets/${changed.json<LibraryAsset>().id}/content`,
+    });
+    expect(content.rawPayload).toEqual(updated);
+  });
+
+  it("accepts uploaded video assets larger than the default request limit", async () => {
+    const app = await setup();
+    const video = Buffer.alloc(1024 * 1024 + 1);
+    video.writeUInt32BE(24, 0);
+    video.write("ftyp", 4);
+    const response = await app.inject({
+      method: "POST",
+      url: "/library/assets/upload?name=opening.mp4&mediaType=video%2Fmp4",
+      headers: { "content-type": "application/octet-stream" },
+      payload: video,
+    });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(response.json<LibraryAsset>().size).toBe(video.length);
+  });
+
+  it("accepts image Library uploads larger than the former image limit", async () => {
+    const app = await setup();
+    const image = Buffer.alloc(10 * 1024 * 1024 + 1);
+    image.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const response = await app.inject({
+      method: "POST",
+      url: "/library/assets",
+      payload: {
+        name: "large-reference.png",
+        purpose: "reference",
+        image: {
+          mediaType: "image/png",
+          data: image.toString("base64"),
+        },
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+    expect(response.json<LibraryAsset>().size).toBe(image.length);
+  });
+
+  it("persists separate local folders and scans matching assets into the Library API", async () => {
+    const app = await setup();
+    const folders = {
+      video: path.join(fixtures.at(-1)!.directory, "videos"),
+      image: path.join(fixtures.at(-1)!.directory, "images"),
+    };
+    await Promise.all(Object.values(folders).map((folder) => mkdir(folder)));
+    await Promise.all([
+      writeFile(path.join(folders.video, "intro.mp4"), "video"),
+      writeFile(path.join(folders.image, "scene.png"), "image"),
+    ]);
+
+    for (const category of ["video", "image"] as const) {
+      const configured = await app.inject({
+        method: "PUT",
+        url: `/library/source-folders/${category}`,
+        payload: { path: folders[category] },
+      });
+      expect(configured.statusCode, configured.body).toBe(200);
+    }
+
+    expect((await app.inject({ method: "GET", url: "/library/source-folders" })).json()).toEqual(folders);
+    expect((await list(app)).map(({ name, category, origin }) => ({ name, category, origin }))).toEqual(
+      expect.arrayContaining([
+        { name: "intro.mp4", category: "video", origin: "local" },
+        { name: "scene.png", category: "image", origin: "local" },
+      ]),
+    );
+    expect(await list(app)).toHaveLength(2);
+
+    await writeFile(path.join(folders.image, "new-scene.png"), "new image");
+    expect((await list(app)).map(({ name, category, origin }) => ({ name, category, origin }))).toContainEqual({
+      name: "new-scene.png",
+      category: "image",
+      origin: "local",
+    });
+    expect(await list(app)).toHaveLength(3);
+
+    const cleared = await app.inject({
+      method: "PUT",
+      url: "/library/source-folders/image",
+      payload: { path: null },
+    });
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(cleared.json()).not.toHaveProperty("image");
+    expect((await app.inject({ method: "PUT", url: "/library/source-folders/ui", payload: { path: path.join(fixtures.at(-1)!.directory, "videos") } })).statusCode).toBe(400);
+  });
+
   it("keeps upload provenance across projects and only saves project files explicitly", async () => {
     const app = await setup();
     const asset = await upload(app);

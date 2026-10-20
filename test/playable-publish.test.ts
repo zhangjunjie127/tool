@@ -24,7 +24,7 @@ afterEach(async () => {
 
 describe("Web output", () => {
   it.each(["web-game", "general"] as const)("publishes %s from its configured startup directory", async (type) => {
-    const workspace = await temporary("ohmygame-web-publish-");
+    const workspace = await temporary("putenggame-web-publish-");
     const client = path.join(workspace, "client");
     await mkdir(client);
     await writeFile(path.join(workspace, "index.html"), "Wrong root output");
@@ -63,9 +63,9 @@ describe("Published Player", () => {
   });
 
   it("packages the same compiled definition consumed by Playtest", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
-    const player = await temporary("ohmygame-playable-publish-player-");
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
+    const player = await temporary("putenggame-playable-publish-player-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
@@ -126,12 +126,26 @@ describe("Published Player", () => {
     expect(files.get("assets/playable-sandbox.js")?.toString()).toBe(
       "window.sandbox = true",
     );
+    expect(files.get("start-game.bat")?.toString()).toContain(
+      "set \"PORT=8000\"",
+    );
+    expect(files.get("start-game.bat")?.toString()).toContain(
+      "-WindowStyle Hidden",
+    );
+    expect(files.get("start-game.bat")?.toString()).toContain(
+      "start-game-server.ps1",
+    );
+    expect(files.get("start-game-server.ps1")?.toString()).toContain("HttpListener");
+    expect(files.get("start-game-server.ps1")?.toString()).toContain("Start-Process $url");
+    expect(files.get("start-game.bat")?.toString()).not.toContain(
+      "Keep the server window open",
+    );
   });
 
   it("deduplicates identical Asset content while retaining stable IDs", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
     const player = await playerFixture();
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     graph.assets.poster = structuredClone(graph.assets.background!);
@@ -150,9 +164,9 @@ describe("Published Player", () => {
   });
 
   it("rejects missing Library content as a publish validation error", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
     const player = await playerFixture();
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const data = await temporary("putenggame-playable-publish-data-");
     await writePlayableFixtureWorkspace(workspace);
     const library = new AssetLibrary(data);
     await library.load();
@@ -162,9 +176,9 @@ describe("Published Player", () => {
   });
 
   it("rejects an Asset whose file type does not match its graph declaration", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
     const player = await playerFixture();
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     graph.assets.background!.type = "video";
@@ -178,9 +192,9 @@ describe("Published Player", () => {
   });
 
   it("detects a modified Asset before a static directory is published", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
     const player = await playerFixture();
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
@@ -188,7 +202,7 @@ describe("Published Player", () => {
     const library = new AssetLibrary(data);
     await library.load();
     const files = await unzip(await new ArtifactBuilder(library, player).buildInteractiveStory(project(workspace)));
-    const output = await temporary("ohmygame-playable-publish-output-");
+    const output = await temporary("putenggame-playable-publish-output-");
     for (const [relative, contents] of files) {
       await mkdir(path.dirname(path.join(output, relative)), { recursive: true });
       await writeFile(path.join(output, relative), contents);
@@ -201,9 +215,9 @@ describe("Published Player", () => {
   });
 
   it("rejects a definition whose compiled surfaces do not match its graph", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
     const player = await playerFixture();
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
@@ -211,7 +225,7 @@ describe("Published Player", () => {
     const library = new AssetLibrary(data);
     await library.load();
     const files = await unzip(await new ArtifactBuilder(library, player).buildInteractiveStory(project(workspace)));
-    const output = await temporary("ohmygame-playable-publish-output-");
+    const output = await temporary("putenggame-playable-publish-output-");
     for (const [relative, contents] of files) {
       await mkdir(path.dirname(path.join(output, relative)), { recursive: true });
       await writeFile(path.join(output, relative), contents);
@@ -236,9 +250,9 @@ describe("Published Player", () => {
   });
 
   it("rejects an incomplete Published Player build", async () => {
-    const workspace = await temporary("ohmygame-playable-publish-workspace-");
-    const player = await temporary("ohmygame-playable-publish-player-");
-    const data = await temporary("ohmygame-playable-publish-data-");
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
+    const player = await temporary("putenggame-playable-publish-player-");
+    const data = await temporary("putenggame-playable-publish-data-");
     const graph = createNodeGraphFixture();
     delete graph.assets.theme;
     for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
@@ -261,7 +275,7 @@ describe("Published Player", () => {
 });
 
 async function playerFixture(): Promise<string> {
-  const player = await temporary("ohmygame-playable-publish-player-");
+  const player = await temporary("putenggame-playable-publish-player-");
   await mkdir(path.join(player, "assets"));
   await Promise.all([
     writeFile(path.join(player, "index.html"), "Published Player"),

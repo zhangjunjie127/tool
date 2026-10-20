@@ -2,28 +2,24 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from "react-dom";
 import { SlidersHorizontal, X } from "./icons.js";
 import { libraryAssetProjects, type LibraryAsset, type LibraryAssetFilters } from "./library-assets.js";
-import type { LibraryAssetProject } from "../shared/contracts.js";
 import { menuPlacement } from "./popover-placement.js";
 import type { ProjectAssetFilters, BrowsableAsset } from "./asset-browser.js";
 import { t } from "./i18n.js";
 
-export function LibraryCollectionFilters({ assets, filters, onChange, defaultIncludeReferences = false, defaultProjectId, defaultProject }: {
+export function LibraryCollectionFilters({ assets, filters, onChange, defaultIncludeReferences = false }: {
   assets: readonly LibraryAsset[];
   filters: LibraryAssetFilters;
   onChange: (filters: LibraryAssetFilters) => void;
   defaultIncludeReferences?: boolean;
-  defaultProjectId?: string;
-  defaultProject?: LibraryAssetProject;
 }) {
   const projects = libraryAssetProjects(assets);
-  if (defaultProject && !projects.some((project) => project.id === defaultProject.id)) projects.push(defaultProject);
-  projects.sort((left, right) => left.name.localeCompare(right.name));
-  const active = (filters.origin ?? "saved") !== "saved" || (filters.projectId ?? "") !== (defaultProjectId ?? "") || (filters.includeReferences ?? false) !== defaultIncludeReferences;
-  return <AssetFilterPopover active={active} onReset={() => onChange({ includeReferences: defaultIncludeReferences, ...(defaultProjectId ? { projectId: defaultProjectId } : {}) })}>
+  const active = (filters.origin ?? "saved") !== "saved" || Boolean(filters.projectId) || (filters.includeReferences ?? false) !== defaultIncludeReferences;
+  return <AssetFilterPopover active={active} onReset={() => onChange({ includeReferences: defaultIncludeReferences })}>
     <label>{t("libraryFilters.source")}<select value={filters.origin ?? "saved"} onChange={(event) => onChange({ ...filters, origin: event.target.value as LibraryAssetFilters["origin"] })}>
       <option value="saved">{t("libraryFilters.saved")}</option>
       <option value="generated">{t("libraryFilters.generated")}</option>
       <option value="uploaded">{t("libraryFilters.uploaded")}</option>
+      <option value="local">{t("libraryFilters.localFolders")}</option>
       <option value="workspace">{t("libraryFilters.fromProjects")}</option>
       <option value="all">{t("libraryFilters.allSources")}</option>
     </select></label>

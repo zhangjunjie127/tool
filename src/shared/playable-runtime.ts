@@ -354,6 +354,24 @@ export class NodeRuntime {
     return this.#started ? "running" : "idle";
   }
 
+  registerSignal(
+    nodeId: string,
+    signal: { id: string; label: string },
+  ): boolean {
+    const node = this.#graph.nodes.find((candidate) => candidate.id === nodeId);
+    if (
+      !node ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(signal.id) ||
+      !signal.label.trim() ||
+      signal.label.length > 120 ||
+      node.signals.some((candidate) => candidate.id === signal.id)
+    )
+      return false;
+    node.signals.push({ id: signal.id, label: signal.label });
+    this.#changed();
+    return true;
+  }
+
   async dispose(): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise;
     this.#disposed = true;
@@ -495,16 +513,25 @@ export class NodeRuntime {
     try {
       prepare?.();
       const previous = this.#activeNode;
-      this.#activeNode = undefined;
-      await this.#disposeActiveSurface(previous);
-      this.#navigation = next;
-      this.#activeNode = await this.#mountNode(next.currentNodeId);
-      this.#assertNotDisposed();
-      this.#activeNode.token.navigationReady = true;
+      // Mount the destination before tearing down the current surface. A
+      // malformed destination must not turn a playable scene into a blank
+      // screen; the current scene remains available when mounting fails.
+      const mounted = await this.#mountNode(next.currentNodeId);
+      try {
+        this.#assertNotDisposed();
+        this.#navigation = next;
+        this.#activeNode = mounted;
+        await this.#disposeActiveSurface(previous);
+        this.#assertNotDisposed();
+        mounted.token.navigationReady = true;
+      } catch (cause) {
+        if (this.#activeNode !== mounted)
+          await this.#disposeActiveSurface(mounted);
+        throw cause;
+      }
       this.#see("nodes", next.currentNodeId);
     } catch (cause) {
       this.#recordError(cause, next.currentNodeId);
-      if (!this.#disposed) await this.#failRuntime();
       throw cause;
     }
     // A way around the game does not move the save from the story.
@@ -543,6 +570,9 @@ export class NodeRuntime {
       ...this.#baseContext(token, abortController, node.assets),
       navigation: {
         emit: this.#guardAsync(token, (signal: string) =>
+          this.#emit(token, signal),
+        ),
+        fail: this.#guardAsync(token, (signal: string) =>
           this.#emit(token, signal),
         ),
         back: this.#guardAsync(token, () => this.#back(token)),

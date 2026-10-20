@@ -960,8 +960,12 @@ export interface WorkspaceFile {
   purpose?: LibraryAssetPurpose;
 }
 
-export type LibraryAssetOrigin = "generated" | "uploaded" | "workspace" | "builtin" | "unknown";
+export type LibraryAssetOrigin = "generated" | "uploaded" | "workspace" | "builtin" | "local" | "unknown";
 export type LibraryAssetPurpose = "asset" | "reference";
+export type LibrarySourceFolderCategory = "video" | "image";
+export type LibrarySourceFolders = Partial<
+  Record<LibrarySourceFolderCategory, string>
+>;
 
 export interface LibraryAsset {
   model3d?: Model3DMetadata;
@@ -980,6 +984,8 @@ export interface LibraryAsset {
   purpose?: LibraryAssetPurpose;
   /** Project copies remain available by ID without appearing in the saved collection. */
   saved?: boolean;
+  category?: "video" | "image" | "ui";
+  modifiedAt?: string;
 }
 
 export interface LibraryAssetProject {

@@ -20,7 +20,7 @@ import { createStarterCodebaseWithScene } from "./playable-fixture.js";
 
 /** A project with one Blank Scene, `start`, unless it should be new and empty. */
 async function createWorkspace(name: string, empty = false): Promise<string> {
-  const workspacePath = await mkdtemp(path.join(tmpdir(), `ohmygame-${name}-`));
+  const workspacePath = await mkdtemp(path.join(tmpdir(), `putenggame-${name}-`));
   await createNodeCodebase(
     workspacePath,
     empty
@@ -67,7 +67,9 @@ describe("Playable Presets", () => {
 class FakeElement {
   children: FakeElement[] = [];
   parentElement?: FakeElement;
-  listeners = new Map<string, () => void>();
+  listeners = new Map<string, (event?: { currentTarget: FakeElement }) => unknown>();
+  dataset: Record<string, string> = {};
+  style: Record<string, string> = {};
   [key: string]: unknown;
   constructor(readonly tagName: string, readonly attributes: Record<string, string> = {}) {}
   append(...children: FakeElement[]) {
@@ -83,8 +85,10 @@ class FakeElement {
     }
     return null;
   }
-  addEventListener(type: string, listener: () => void) { this.listeners.set(type, listener); }
+  addEventListener(type: string, listener: (event?: { currentTarget: FakeElement }) => unknown) { this.listeners.set(type, listener); }
   removeEventListener(type: string) { this.listeners.delete(type); }
+  setAttribute(name: string, value: string) { this.attributes[name] = value; }
+  click() { return this.listeners.get("click")?.({ currentTarget: this }); }
   remove() { this.removed = true; }
   focus() {}
   play() { return Promise.resolve(); }
@@ -116,7 +120,7 @@ async function mountScene(attributes: Record<string, string>) {
 }
 
 async function loadSceneModule() {
-  const directory = await mkdtemp(path.join(tmpdir(), "ohmygame-scene-module-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "putenggame-scene-module-"));
   try {
     const file = path.join(directory, "components.mjs");
     await writeFile(file, PLAYABLE_PROJECT_STYLE_FILES["shared/style/components.js"]!);
@@ -131,7 +135,7 @@ describe("playScene", () => {
     const { scene, backdrop, emitted, click, cleanup } = await mountScene({ "data-asset": "opening", "data-type": "video" });
     const video = backdrop.children[0]!;
     expect(video).toMatchObject({ tagName: "video", src: "blob:opening" });
-    expect(video.loop).toBeUndefined();
+    expect(video.loop).toBe(false);
     expect(scene.children).toEqual([backdrop]);
     video.listeners.get("ended")!();
     click();
@@ -140,6 +144,19 @@ describe("playScene", () => {
     expect(video.paused).toBe(true);
     expect(video.removed).toBe(true);
     expect(scene.listeners.size).toBe(0);
+  });
+
+  it("loops a background video when the Node enables looping", async () => {
+    const { backdrop, emitted, click, cleanup } = await mountScene({
+      "data-asset": "opening",
+      "data-type": "video",
+      "data-loop": "true",
+    });
+    const video = backdrop.children[0]!;
+    expect(video.loop).toBe(true);
+    click();
+    expect(emitted).toEqual(["next"]);
+    cleanup();
   });
 
   it("shows a background image the player clicks past", async () => {
@@ -174,7 +191,7 @@ class FakeButton {
 
 /** The Main menu's node.js, beside the Project Style module it imports. */
 async function loadMainMenuModule(javascript: string): Promise<{ mount: (context: unknown) => () => void }> {
-  const directory = await mkdtemp(path.join(tmpdir(), "ohmygame-menu-module-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "putenggame-menu-module-"));
   try {
     await mkdir(path.join(directory, "nodes/menu"), { recursive: true });
     await mkdir(path.join(directory, "shared/style"), { recursive: true });
@@ -189,6 +206,37 @@ async function loadMainMenuModule(javascript: string): Promise<{ mount: (context
 }
 
 describe("Main menu Template", () => {
+  it("mounts when the optional Continue button has been removed", async () => {
+    const source = playablePreset("main-menu")!.source("Ash Club");
+    const { mount } = await loadMainMenuModule(source.javascript);
+    const root = {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    const context = {
+      root,
+      assets: { url: () => "" },
+      session: { hasSave: () => false, continue: () => {} },
+      navigation: { connected: () => true, emit: () => {} },
+    } as unknown as PlayableNodeContext;
+
+    const cleanup = mount(context);
+    expect(cleanup).toBeTypeOf("function");
+    cleanup();
+  });
+
+  it("makes each menu accent an independently selectable element", () => {
+    const source = playablePreset("main-menu")!.source("Ash Club");
+    expect(source.html.match(/class="menu-indicator"/g)).toHaveLength(3);
+    expect(source.html.match(/data-putenggame-selectable/g)).toHaveLength(3);
+    expect(PLAYABLE_PROJECT_STYLE_FILES["shared/style/components.css"]).toContain(
+      ".menu li:is(:hover, :focus-within) .menu-indicator",
+    );
+    expect(PLAYABLE_PROJECT_STYLE_FILES["shared/style/components.css"]).not.toContain(
+      ".menu .action::before",
+    );
+  });
+
   it("starts a new game with the starting Variables after the player goes Home", async () => {
     const preset = playablePreset("main-menu")!;
     const source = preset.source("Ash Club");
@@ -253,6 +301,75 @@ describe("Main menu Template", () => {
   });
 });
 
+it("lets the QTE Template keep playing instead of emitting a missed-action failure when enabled", () => {
+  const qte = playablePreset("qte")!.source("Timed choice");
+  expect(qte.javascript).toContain('context.navigation.fail(signal)');
+  expect(qte.javascript).toContain('context.navigation.emit(signal)');
+});
+
+describe("Affection Template", () => {
+  it("changes the declared score and emits the threshold branch", async () => {
+    const source = playablePreset("affection")!.source("Relationship");
+    const directory = await mkdtemp(path.join(tmpdir(), "putenggame-affection-module-"));
+    const previousDocument = globalThis.document;
+    try {
+      await mkdir(path.join(directory, "nodes/relationship"), { recursive: true });
+      await mkdir(path.join(directory, "shared/style"), { recursive: true });
+      await writeFile(path.join(directory, "package.json"), '{ "type": "module" }');
+      await writeFile(
+        path.join(directory, "shared/style/components.js"),
+        'export function showBackdrop() { return { cleanup() {} }; }',
+      );
+      const file = path.join(directory, "nodes/relationship/node.js");
+      await writeFile(file, source.javascript);
+      const { mount } = await import(pathToFileURL(file).href) as {
+        mount: (context: never) => () => void;
+      };
+      const configText = source.html.match(/data-affection-config>(.*?)<\/script>/)?.[1]!;
+      const config = new FakeElement("script");
+      config.textContent = configText;
+      const roster = new FakeElement("div");
+      const choices = new FakeElement("div");
+      const root = {
+        querySelector: (selector: string) => ({
+          "[data-affection-config]": config,
+          "[data-roster]": roster,
+          "[data-choices]": choices,
+        })[selector],
+      };
+      globalThis.document = {
+        createElement: (tag: string) => new FakeElement(tag),
+      } as unknown as Document;
+      const state: Record<string, number> = { affection_lan: 0 };
+      const listeners = new Set<() => void>();
+      const emitted: string[] = [];
+      const cleanup = mount({
+        root,
+        state: {
+          get: (key: string) => state[key],
+          set: async (key: string, value: number) => {
+            state[key] = value;
+            listeners.forEach((listener) => listener());
+          },
+          subscribe: (listener: () => void) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        },
+        navigation: { emit: async (signal: string) => { emitted.push(signal); } },
+      } as never);
+
+      await choices.children[0]!.click();
+      expect(state.affection_lan).toBe(2);
+      expect(emitted).toEqual(["closer"]);
+      cleanup();
+    } finally {
+      globalThis.document = previousDocument;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("addPlayableNode", () => {
   it("writes the Preset source, Signals, and canvas position", async () => {
     const workspacePath = await createWorkspace("add-node");
@@ -278,10 +395,13 @@ describe("addPlayableNode", () => {
       signals: [{ id: "option-a" }, { id: "option-b" }],
       source: { html: "nodes/carriage/index.html" },
     });
-    // The first slot is under the Scene at (120, 180), so the new one goes beside it.
-    expect(codebase.editorLayout.nodes.carriage).toEqual({ x: 560, y: 180 });
-    expect(await readFile(path.join(workspacePath, "nodes/carriage/index.html"), "utf8"))
-      .toContain("The carriage");
+    expect(codebase.editorLayout.nodes.carriage).toEqual({ x: 80, y: 180 });
+    const starterHtml = await readFile(
+      path.join(workspacePath, "nodes/carriage/index.html"),
+      "utf8",
+    );
+    expect(starterHtml).toContain("The carriage");
+    expect(starterHtml).toContain('data-putenggame-no-input-mode="continue"');
     // The new Node compiles alongside the rest of the project.
     const validation = await validatePlayableProject(workspacePath, "draft");
     expect(validation.issues).toEqual([]);
@@ -297,6 +417,19 @@ describe("addPlayableNode", () => {
     expect(nodes.find((node) => node.id === "start")?.story).toBeUndefined();
     expect(nodes.find((node) => node.id === "menu")?.story).toEqual({ hidden: true });
     expect(nodes.find((node) => node.id === "map")?.story).toEqual({ hidden: true });
+    expect((await validatePlayableProject(workspacePath, "draft")).issues).toEqual([]);
+  });
+
+  it("adds the affection Template's persistent character Variables and a playable branch scene", async () => {
+    const workspacePath = await createWorkspace("affection-preset");
+    const result = await addPlayableNode(workspacePath, { preset: "affection", id: "relationship" });
+    const { graph } = await readNodeCodebase(workspacePath);
+    const node = graph.nodes.find((candidate) => candidate.id === result.id)!;
+
+    expect(graph.initialState.affection_lan).toBe(0);
+    expect(graph.variables?.affection_lan).toContain("affection");
+    expect(node.signals.map(({ id }) => id)).toEqual(["closer", "distant", "reassure", "guarded"]);
+    expect((await readFile(path.join(workspacePath, node.source.html), "utf8"))).toContain("data-affection-config");
     expect((await validatePlayableProject(workspacePath, "draft")).issues).toEqual([]);
   });
 

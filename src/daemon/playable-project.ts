@@ -8,6 +8,7 @@ import {
 } from "../shared/playable-graph-validation.js";
 import type { NodeGraph } from "../shared/playable-nodes.js";
 import type { NodePlayerDefinition } from "../shared/playable-player-protocol.js";
+import { readPlayableBackdropEffects } from "./playable-backdrop-effects.js";
 import { compileNodeGraph, NodeCompilerError } from "./playable-compiler.js";
 import type {
   PlayableProjectValidationIssue,
@@ -58,6 +59,7 @@ export async function validatePlayableProject(
       .filter((file) => !file.directory)
       .map((file) => file.path),
   );
+  const backdropEffects = await readPlayableBackdropEffects(workspacePath);
   const graphValidation = validateNodeGraph(graph, {
     mode,
     availableFiles: files,
@@ -72,6 +74,7 @@ export async function validatePlayableProject(
       minify: mode === "publish",
       sourcemap: mode === "draft",
       sourceLocations: mode === "draft",
+      backdropEffects,
     });
   } catch (cause) {
     if (!(cause instanceof NodeCompilerError)) throw cause;

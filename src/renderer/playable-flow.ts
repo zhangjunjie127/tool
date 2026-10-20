@@ -8,7 +8,6 @@ import {
   type PlayableAssetDefinition,
   type PlayableNode,
 } from "../shared/playable-nodes.js";
-import { t } from "./i18n.js";
 
 export type GraphMeta = Omit<NodeGraph, "nodes" | "edges">;
 
@@ -71,14 +70,103 @@ export function createFlowNode(node: PlayableNode, position: { x: number; y: num
   };
 }
 
+/** Lays out the entry story from left to right, then places remaining components after it. */
+export function arrangePlayableNodes(
+  nodes: readonly PlayableFlowNode[],
+  edges: readonly Edge[],
+  entryNodeId: string,
+): Record<string, { x: number; y: number }> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, Edge[]>();
+  for (const edge of edges) {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue;
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge]);
+  }
+  for (const [source, sourceEdges] of outgoing) {
+    const signals = nodeById.get(source)!.data.node.signals;
+    sourceEdges.sort((left, right) =>
+      signals.findIndex((signal) => signal.id === left.sourceHandle)
+      - signals.findIndex((signal) => signal.id === right.sourceHandle),
+    );
+  }
+
+  const depthById = new Map<string, number>();
+  const orderById = new Map<string, number>();
+  let nextOrder = 0;
+  let maxDepth = -1;
+  const visit = (roots: readonly string[], depth: number): number => {
+    const queue = roots.filter((id) => !depthById.has(id));
+    for (const id of queue) {
+      depthById.set(id, depth);
+      orderById.set(id, nextOrder++);
+    }
+    let componentMaxDepth = depth;
+    for (let index = 0; index < queue.length; index += 1) {
+      const id = queue[index]!;
+      const nodeDepth = depthById.get(id)!;
+      componentMaxDepth = Math.max(componentMaxDepth, nodeDepth);
+      for (const edge of outgoing.get(id) ?? []) {
+        if (depthById.has(edge.target)) continue;
+        depthById.set(edge.target, nodeDepth + 1);
+        orderById.set(edge.target, nextOrder++);
+        queue.push(edge.target);
+      }
+    }
+    return componentMaxDepth;
+  };
+
+  if (nodeById.has(entryNodeId)) maxDepth = visit([entryNodeId], 0);
+  let remaining = nodes.filter((node) => !depthById.has(node.id));
+  while (remaining.length) {
+    const remainingIds = new Set(remaining.map((node) => node.id));
+    const hasIncoming = new Set(
+      edges
+        .filter((edge) => remainingIds.has(edge.target) && remainingIds.has(edge.source))
+        .map((edge) => edge.target),
+    );
+    const roots = remaining
+      .filter((node) => !hasIncoming.has(node.id))
+      .map((node) => node.id);
+    maxDepth = visit(roots.length ? roots : [remaining[0]!.id], maxDepth + 1);
+    remaining = nodes.filter((node) => !depthById.has(node.id));
+  }
+
+  const columns = new Map<number, PlayableFlowNode[]>();
+  for (const node of nodes) {
+    const depth = depthById.get(node.id) ?? 0;
+    columns.set(depth, [...(columns.get(depth) ?? []), node]);
+  }
+  for (const column of columns.values()) {
+    column.sort((left, right) => orderById.get(left.id)! - orderById.get(right.id)!);
+  }
+
+  const positions: Record<string, { x: number; y: number }> = {};
+  let x = 80;
+  for (const depth of [...columns.keys()].sort((left, right) => left - right)) {
+    const column = columns.get(depth)!;
+    let y = 80;
+    let width = 0;
+    for (const node of column) {
+      const nodeWidth = node.measured?.width ?? node.width ?? 280;
+      const nodeHeight = node.measured?.height ?? node.height ?? 220;
+      width = Math.max(width, nodeWidth);
+      positions[node.id] = { x, y };
+      y += nodeHeight + 80;
+    }
+    x += width + 180;
+  }
+  return positions;
+}
+
 export function toFlowEdge(edge: PlayableEdge): Edge {
   return {
     id: edge.id,
+    type: "playable",
     source: edge.source.nodeId,
     sourceHandle: edge.source.signal,
     target: edge.targetNodeId,
     data: { mode: edge.mode },
-    ...(edge.mode === "push" ? { label: t("sceneCard.back"), className: "playable-edge-push" } : {}),
+    ...(edge.mode === "push" ? { label: "↩ Back", className: "playable-edge-push" } : {}),
   };
 }
 

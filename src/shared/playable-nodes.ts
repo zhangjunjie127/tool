@@ -120,6 +120,8 @@ export interface NodeRuntimeContext {
 export interface PlayableNodeContext extends NodeRuntimeContext {
   navigation: {
     emit(signal: string): Promise<void>;
+    /** Emits a failure outcome unless this Node is configured to continue without input. */
+    fail(signal: string): Promise<void>;
     back(): Promise<void>;
     /** The Node declares the Signal and an edge routes it, so emitting it goes somewhere. */
     connected(signal: string): boolean;

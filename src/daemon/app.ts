@@ -21,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
+import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibrarySourceFolderCategory, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
 import { isWebRuntimeProjectType, supportsWebPreview, webPreviewSettingsChanged } from "../shared/project-runtime.js";
 import { groupThreadItems } from "../shared/turns.js";
@@ -110,7 +110,11 @@ import { hasPluginMentionToken, pluginMentionToken, type InstallPluginRequest, t
 import { getWorkspaceMedia, listWorkspaceFiles, locateWorkspaceEntry, readWorkspaceFile, validateWorkspaceFile, workspaceMediaInfo, WorkspaceError } from "./workspace.js";
 import { listWorkspaceGitChanges, readWorkspaceGitFile } from "./workspace-git.js";
 import { AssetLibrary, AssetLibraryError } from "./asset-library.js";
-import { exportPlayableProject, PlayableProjectExportError } from "./playable-project-export.js";
+import {
+  readPlayableBackdropEffects,
+  writePlayableBackdropEffects,
+} from "./playable-backdrop-effects.js";
+import type { PlayableBackdropEffects } from "../shared/playable-backdrop-effects.js";
 import { AgentAttachmentError, AgentAttachmentStore, MAX_AGENT_ATTACHMENT_BYTES, MAX_AGENT_ATTACHMENTS_PER_TURN } from "./agent-attachments.js";
 import type { GameRuntimeAdapter } from "../shared/playtest.js";
 import type { UpdateWebSearchSettings } from "../shared/web-search.js";
@@ -447,8 +451,6 @@ const setConversationReasoningSchema = {
   },
 } as const;
 const MAX_PROJECT_COVER_BYTES = 5 * 1024 * 1024;
-const MAX_LIBRARY_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_LIBRARY_UPLOAD_BYTES = 200 * 1024 * 1024;
 const LIBRARY_UPLOAD_MEDIA_TYPES = new Set<LibraryUploadMediaType>([
   "image/png", "image/jpeg", "image/svg+xml", "image/webp",
   "video/mp4", "video/quicktime", "video/webm",
@@ -953,7 +955,7 @@ export function createApp(options: AppOptions = {}) {
   app.addContentTypeParser("image/webp", { parseAs: "buffer", bodyLimit: MAX_PROJECT_COVER_BYTES }, (_request, body, done) => {
     done(null, body);
   });
-  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: MAX_LIBRARY_UPLOAD_BYTES }, (_request, body, done) => {
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: Number.MAX_SAFE_INTEGER }, (_request, body, done) => {
     done(null, body);
   });
   app.addContentTypeParser("application/vnd.ohmygame.attachment", { bodyLimit: MAX_AGENT_ATTACHMENT_BYTES }, (_request, payload, done) => {
@@ -1347,6 +1349,53 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
+  app.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId/playable/backdrop-effects",
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (project.type !== "interactive-story") {
+        return reply.code(409).send({ error: "Backdrop effects require an Interactive Story project" });
+      }
+      try {
+        return await readPlayableBackdropEffects(project.workspacePath);
+      } catch (cause) {
+        return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+  );
+
+  app.put<{
+    Params: { projectId: string };
+    Body: PlayableBackdropEffects;
+  }>("/projects/:projectId/playable/backdrop-effects", {
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["vignette", "grain"],
+        properties: { vignette: { type: "boolean" }, grain: { type: "boolean" } },
+      },
+    },
+  }, async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    if (project.type !== "interactive-story") {
+      return reply.code(409).send({ error: "Backdrop effects require an Interactive Story project" });
+    }
+    try {
+      const effects = {
+        vignette: request.body.vignette,
+        grain: request.body.grain,
+      };
+      await writePlayableBackdropEffects(project.workspacePath, effects);
+      await projects.touch(project.id);
+      return effects;
+    } catch (cause) {
+      return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
   app.put<{ Params: { projectId: string }; Body: NodeCodebaseUpdate }>("/projects/:projectId/playable/codebase", {
     schema: { body: { type: "object" } },
     bodyLimit: 1_000_000,
@@ -1675,12 +1724,49 @@ export function createApp(options: AppOptions = {}) {
   registerCommunityRoutes(app, publisher, projects);
 
   app.get("/library/assets", async (request) => {
+    await library.syncSourceFolders();
     const associations = await projects.libraryAssetAssociations((project, cause) => request.log.warn({ projectId: project.id, err: cause }, "Could not read Library asset usage"));
     return library.list().map((asset) => ({
       ...asset,
       projects: associations.get(asset.id)?.projects ?? [],
       referenceOnly: asset.purpose === "reference" && !associations.get(asset.id)?.hasAssetUsage,
     }));
+  });
+
+  app.get("/library/source-folders", async () => library.sourceFolders());
+
+  app.put<{
+    Params: { category: LibrarySourceFolderCategory };
+    Body: { path: string | null };
+  }>("/library/source-folders/:category", {
+    schema: {
+      params: {
+        type: "object",
+        additionalProperties: false,
+        required: ["category"],
+        properties: { category: { enum: ["video", "image"] } },
+      },
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: {
+          path: { anyOf: [{ type: "string", maxLength: 4_000 }, { type: "null" }] },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      return await library.setSourceFolder(
+        request.params.category,
+        request.body.path ?? undefined,
+      );
+    } catch (cause) {
+      if (cause instanceof AssetLibraryError) {
+        return reply.code(cause.statusCode).send({ error: cause.message });
+      }
+      throw cause;
+    }
   });
 
   app.post<{ Params: { assetId: string } }>("/library/assets/:assetId/save", async (request, reply) => {
@@ -1693,7 +1779,7 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.post<{ Body: CreateLibraryImageRequest }>("/library/assets", {
-    bodyLimit: 15 * 1024 * 1024,
+    bodyLimit: Number.MAX_SAFE_INTEGER,
     schema: {
       body: {
         type: "object",
@@ -1717,9 +1803,7 @@ export function createApp(options: AppOptions = {}) {
   }, async (request, reply) => {
     if (!validBase64(request.body.image.data)) return reply.code(400).send({ error: "Image data is invalid" });
     const contents = Buffer.from(request.body.image.data, "base64");
-    if (contents.length === 0 || contents.length > MAX_LIBRARY_IMAGE_BYTES) {
-      return reply.code(400).send({ error: "Image must be no larger than 10 MB" });
-    }
+    if (contents.length === 0) return reply.code(400).send({ error: "Image is empty" });
     if (!isImageOfType(contents, request.body.image.mediaType)) {
       return reply.code(400).send({ error: "Image data does not match its media type" });
     }
@@ -1735,7 +1819,7 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
-  app.post<{ Querystring: { name: string; mediaType: string; duration?: string; purpose?: "asset" | "reference" }; Body: Buffer }>("/library/assets/upload", {
+  app.post<{ Querystring: { name: string; mediaType: string; duration?: string; purpose?: "asset" | "reference"; category?: LibrarySourceFolderCategory; sourceKey?: string; modifiedAt?: string }; Body: Buffer }>("/library/assets/upload", {
     schema: {
       querystring: {
         type: "object",
@@ -1746,6 +1830,9 @@ export function createApp(options: AppOptions = {}) {
           mediaType: { type: "string", enum: [...LIBRARY_UPLOAD_MEDIA_TYPES] },
           duration: { type: "string", pattern: "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$" },
           purpose: { enum: ["asset", "reference"] },
+          category: { enum: ["video", "image"] },
+          sourceKey: { type: "string", minLength: 1, maxLength: 4_000 },
+          modifiedAt: { type: "string", format: "date-time" },
         },
       },
     },
@@ -1765,7 +1852,68 @@ export function createApp(options: AppOptions = {}) {
       return reply.code(400).send({ error: "Invalid media duration" });
     }
     try {
-      return reply.code(201).send(await library.add(name, contents, { origin: "uploaded", purpose: request.query.purpose, ...(duration !== undefined ? { duration } : {}) }));
+      if (
+        request.query.category &&
+        !mediaType.startsWith(request.query.category === "video" ? "video/" : "image/")
+      ) {
+        return reply.code(400).send({ error: "Source folder category does not match media type" });
+      }
+      const origin = request.query.category ? "local" : "uploaded";
+      return reply.code(201).send(await library.add(name, contents, {
+        origin,
+        purpose: request.query.purpose,
+        ...(request.query.category ? { category: request.query.category } : {}),
+        ...(request.query.sourceKey ? { sourceKey: request.query.sourceKey } : {}),
+        ...(request.query.modifiedAt ? { modifiedAt: request.query.modifiedAt } : {}),
+        ...(duration !== undefined ? { duration } : {}),
+      }));
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : String(cause);
+      return reply.code(cause instanceof AssetLibraryError ? cause.statusCode : 500).send({ error });
+    }
+  });
+
+  app.post<{
+    Querystring: {
+      name: string;
+      mediaType: LibraryUploadMediaType;
+      category: "video" | "image";
+      sourceKey: string;
+      modifiedAt: string;
+    };
+    Body: Buffer;
+  }>("/library/assets/source-sync", {
+    schema: {
+      querystring: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "mediaType", "category", "sourceKey", "modifiedAt"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 200 },
+          mediaType: { type: "string", enum: [...LIBRARY_UPLOAD_MEDIA_TYPES] },
+          category: { enum: ["video", "image"] },
+          sourceKey: { type: "string", minLength: 1, maxLength: 4_000 },
+          modifiedAt: { type: "string", format: "date-time" },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { name: inputName, mediaType, category, sourceKey, modifiedAt } = request.query;
+    const contents = request.body;
+    const name = path.basename(inputName);
+    if (!Buffer.isBuffer(contents) || contents.length === 0)
+      return reply.code(400).send({ error: "File is empty" });
+    if (!name || workspaceMediaInfo(name)?.contentType !== mediaType)
+      return reply.code(400).send({ error: "File name does not match its media type" });
+    if (!isLibraryMediaOfType(contents, mediaType))
+      return reply.code(400).send({ error: "File data does not match its media type" });
+    try {
+      return reply.code(200).send(await library.syncSourceFile(name, contents, {
+        category,
+        modifiedAt,
+        origin: "local",
+        sourceKey,
+      }));
     } catch (cause) {
       const error = cause instanceof Error ? cause.message : String(cause);
       return reply.code(cause instanceof AssetLibraryError ? cause.statusCode : 500).send({ error });
@@ -3434,23 +3582,6 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
-  app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/export-project", async (request, reply) => {
-    const project = projects.get(request.params.projectId);
-    if (!project) return reply.code(404).send({ error: "Project not found" });
-    if (project.type !== "interactive-story") return reply.code(409).send({ error: "Project export requires an Interactive Story project" });
-    if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before exporting" });
-    try {
-      const archive = await exportPlayableProject(project.workspacePath, library);
-      return reply
-        .header("content-type", "application/zip")
-        .header("content-disposition", `attachment; filename="${encodeURIComponent(project.name)}.zip"`)
-        .send(archive);
-    } catch (cause) {
-      if (cause instanceof PlayableProjectExportError) return reply.code(cause.statusCode).send({ error: cause.message });
-      throw cause;
-    }
-  });
-
   app.get<{ Params: { projectId: string }; Querystring: { cursor?: string } }>("/projects/:projectId/events", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
@@ -3572,7 +3703,25 @@ function isLibraryMediaOfType(value: Buffer, mediaType: LibraryUploadMediaType):
 }
 
 function validBase64(value: string): boolean {
-  return value.length % 4 === 0 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+  if (value.length % 4 !== 0) return false;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const contentLength = value.length - padding;
+  if (
+    padding === 2 && contentLength % 4 !== 2 ||
+    padding === 1 && contentLength % 4 !== 3 ||
+    padding === 0 && contentLength % 4 !== 0
+  ) return false;
+
+  for (let index = 0; index < contentLength; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      !(code >= 65 && code <= 90) &&
+      !(code >= 97 && code <= 122) &&
+      !(code >= 48 && code <= 57) &&
+      code !== 43 && code !== 47
+    ) return false;
+  }
+  return true;
 }
 
 async function addConversationImageToProject(

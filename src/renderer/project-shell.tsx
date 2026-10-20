@@ -386,10 +386,6 @@ export function ProjectShell({
     if (pending) void publish(pending).catch(() => undefined);
   }, [auth.state.status, state.phase, state.project?.id, state.project?.type, state.agent.status, sendingInitialPrompt, publishing]);
 
-  if (state.phase === "fatal") {
-    return <FatalState message={state.notice ?? t("projectShell.runtimeUnreachable")} onHome={onHome} homeLabel={homeLabel} />;
-  }
-
   const project = state.project;
   const conversation = state.conversation;
   const publishDialogStatus = publishDialog?.projectId === project?.id ? publishDialog?.status : undefined;
@@ -765,6 +761,10 @@ export function ProjectShell({
   const agentIsCollapsed = !isGodotProject && agentCollapsed;
   const viewerCollapsed = isGodotProject && !godotWorkspaceOpen && !designOpen;
 
+  if (state.phase === "fatal") {
+    return <FatalState message={state.notice ?? t("projectShell.runtimeUnreachable")} onHome={onHome} homeLabel={homeLabel} />;
+  }
+
   return (
     <WorkspaceShell chatLayout={chatLayout} agentCollapsed={agentIsCollapsed} viewerCollapsed={viewerCollapsed}
       onHome={requestHome} homeLabel={homeLabel} homeIcon={ArrowLeft} onExpandAgent={() => setAgentCollapsed(false)}
@@ -965,7 +965,6 @@ export function ProjectShell({
         chatOnRight={chatLayout === "right"}
         chatCollapsed={agentIsCollapsed}
         onHome={requestHome}
-        homeLabel={homeLabel}
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
       /></Suspense> : <PlayableEditorWorkspace
         project={project}
@@ -985,7 +984,6 @@ export function ProjectShell({
         chatOnRight={chatLayout === "right"}
         chatCollapsed={agentIsCollapsed}
         onHome={requestHome}
-        homeLabel={homeLabel}
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
         onChatContextChange={setPlayableChat}
         onAskAgent={requestPrompt}

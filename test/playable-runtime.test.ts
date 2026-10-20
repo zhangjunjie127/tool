@@ -51,6 +51,24 @@ class FakeSurfaceHost implements PlayableSurfaceHost {
 }
 
 describe("Node Runtime", () => {
+  it("routes a failure through its declared Exit by default", async () => {
+    const { runtime, host } = createRuntime();
+    await runtime.start();
+
+    await nodeContext(host, "menu").navigation.fail("start");
+
+    expect(runtime.snapshot()).toMatchObject({
+      currentNodeId: "lobby",
+      recentSignals: [
+        expect.objectContaining({
+          nodeId: "menu",
+          signal: "start",
+          targetNodeId: "lobby",
+        }),
+      ],
+    });
+  });
+
   it("mounts the Entry Node and replaces the current Node", async () => {
     const { runtime, host } = createRuntime();
 
@@ -59,9 +77,9 @@ describe("Node Runtime", () => {
 
     expect(host.events).toEqual([
       "mount:menu",
+      "mount:lobby",
       "cleanup:menu",
       "destroy:menu",
-      "mount:lobby",
     ]);
     expect(runtime.snapshot()).toMatchObject({
       currentNodeId: "lobby",
@@ -160,7 +178,7 @@ describe("Node Runtime", () => {
     const first = menu.navigation.emit("inspect");
     await expect(
       menu.navigation.emit("start"),
-    ).rejects.toMatchObject({ code: "stale-surface" });
+    ).rejects.toMatchObject({ code: "navigation-in-progress" });
     releaseArchive();
     await first;
   });
@@ -240,15 +258,15 @@ describe("Node Runtime", () => {
     await disposal;
     expect(host.events).toEqual([
       "mount:menu",
-      "cleanup:menu",
-      "destroy:menu",
       "mount:archive",
       "cleanup:archive",
       "destroy:archive",
+      "cleanup:menu",
+      "destroy:menu",
     ]);
   });
 
-  it("enters a cleaned failed state when a navigation target cannot mount", async () => {
+  it("keeps the current Node when a navigation target cannot mount", async () => {
     const host = new FakeSurfaceHost();
     host.onMountNode = (surface) => {
       if (surface.id === "archive") throw new Error("archive mount failed");
@@ -260,21 +278,14 @@ describe("Node Runtime", () => {
     );
 
     expect(runtime.snapshot()).toMatchObject({
-      currentNodeId: "archive",
-      status: "failed",
+      currentNodeId: "menu",
+      status: "running",
     });
     expect(host.events).toEqual([
       "mount:menu",
-      "cleanup:menu",
-      "destroy:menu",
       "mount:archive",
     ]);
-    expect(() => nodeContext(host, "archive").state.get()).toThrowError(
-      expect.objectContaining({ code: "runtime-failed" }),
-    );
-    await expect(runtime.start()).rejects.toMatchObject({
-      code: "runtime-failed",
-    });
+    expect(() => nodeContext(host, "menu").state.get()).not.toThrow();
   });
 
   it("fails cleanly when continue restores State but its saved Node cannot mount", async () => {
@@ -297,9 +308,9 @@ describe("Node Runtime", () => {
     );
 
     expect(runtime.snapshot()).toMatchObject({
-      currentNodeId: "archive",
+      currentNodeId: "menu",
       state: saved.state,
-      status: "failed",
+      status: "running",
     });
   });
 
@@ -649,6 +660,24 @@ function seenRecord(nodes: string[]): PlayableSeen {
 }
 
 describe("NodeRuntime preview tooling", () => {
+  it("registers a newly added button Signal in the running preview", async () => {
+    const { runtime, host } = createRuntime({ policy: "report" });
+    await runtime.start();
+
+    expect(
+      runtime.registerSignal("menu", { id: "button-1", label: "新按钮" }),
+    ).toBe(true);
+    expect(
+      runtime.registerSignal("menu", { id: "button-1", label: "重复" }),
+    ).toBe(false);
+    await nodeContext(host, "menu").navigation.emit("button-1");
+
+    expect(runtime.snapshot().recentSignals).toEqual([
+      expect.objectContaining({ nodeId: "menu", signal: "button-1" }),
+    ]);
+    await runtime.dispose();
+  });
+
   it("reports Signals under the report policy without leaving the Node", async () => {
     const { runtime, host } = createRuntime({ policy: "report" });
     await runtime.start();

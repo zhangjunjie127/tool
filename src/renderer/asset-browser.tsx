@@ -6,7 +6,7 @@ import { AssetCardShell, AssetDialogShell, AssetMedia, useNearViewport } from ".
 import { ModelPreview } from "./model-preview.js";
 import { t } from "./i18n.js";
 
-export type MediaFilter = "all" | NonNullable<WorkspaceFile["mediaType"]>;
+export type MediaFilter = "all" | "ui" | NonNullable<WorkspaceFile["mediaType"]>;
 
 export interface ProjectAssetFilters {
   origin?: "all" | LibraryAssetOrigin;
@@ -15,6 +15,7 @@ export interface ProjectAssetFilters {
 
 export interface BrowsableAsset extends Omit<WorkspaceFile, "mediaType"> {
   mediaType: NonNullable<WorkspaceFile["mediaType"]>;
+  category?: "video" | "image" | "ui";
   projectId?: string;
   assetId?: string;
   projectName?: string;
@@ -30,19 +31,20 @@ export function libraryAssetOriginLabel(origin: LibraryAssetOrigin | undefined):
   return t(`assets.origin.${origin ?? "unknown"}`);
 }
 
-const MEDIA_FILTERS: readonly { id: MediaFilter; label: string; icon: typeof Layers3 }[] = [
-  { id: "all", label: t("assets.filter.all"), icon: Layers3 },
-  { id: "image", label: t("assets.filter.image"), icon: ImageIcon },
-  { id: "video", label: t("assets.filter.video"), icon: Film },
-  { id: "audio", label: t("assets.filter.audio"), icon: Music2 },
-  { id: "model", label: t("assets.filter.model"), icon: Box },
+const MEDIA_FILTERS: readonly { id: MediaFilter; label: "all" | "image" | "video" | "audio" | "model"; icon: typeof Layers3 }[] = [
+  { id: "all", label: "all", icon: Layers3 },
+  { id: "image", label: "image", icon: ImageIcon },
+  { id: "video", label: "video", icon: Film },
+  { id: "audio", label: "audio", icon: Music2 },
+  { id: "model", label: "model", icon: Box },
 ];
 
-export function AssetToolbar({ mediaFilter, query, onMediaFilterChange, onQueryChange, children }: {
+export function AssetToolbar({ mediaFilter, query, onMediaFilterChange, onQueryChange, mediaFilters, children }: {
   mediaFilter: MediaFilter;
   query: string;
   onMediaFilterChange: (filter: MediaFilter) => void;
   onQueryChange: (query: string) => void;
+  mediaFilters?: readonly MediaFilter[];
   children?: ReactNode;
 }) {
   const searchId = `asset-search-${useId()}`;
@@ -64,9 +66,9 @@ export function AssetToolbar({ mediaFilter, query, onMediaFilterChange, onQueryC
   return (
     <div className="library-toolbar">
       <nav ref={filtersRef} className="library-filters" aria-label={t("assets.mediaTypes")} onFocusCapture={(event) => event.target.scrollIntoView({ block: "nearest", inline: "nearest" })}>
-        {MEDIA_FILTERS.map(({ id, label, icon: Icon }) => (
+        {MEDIA_FILTERS.filter(({ id }) => mediaFilters?.includes(id) ?? true).map(({ id, label, icon: Icon }) => (
           <button className={mediaFilter === id ? "is-active" : undefined} type="button" key={id} aria-pressed={mediaFilter === id} onClick={() => onMediaFilterChange(id)}>
-            <Icon size={15} /><span>{label}</span>
+            <Icon size={15} /><span>{t(`assets.filter.${label}`)}</span>
           </button>
         ))}
       </nav>
@@ -107,7 +109,7 @@ export function WorkspaceAssetCard({ asset, title, onOpen, onRename, onDelete, o
 
   return <AssetCardShell
     title={title ?? asset.prompt ?? fileName(asset.path)}
-    subtitle={<>{mediaTypeLabel(asset.mediaType)}{asset.referenceOnly ? " · Reference" : ""}{asset.projectName ? ` · ${asset.projectName}` : asset.projects?.length === 1 ? ` · ${asset.projects[0]!.name}` : asset.projects?.length ? ` · ${asset.projects.length} projects` : ""}</>}
+    subtitle={<>{mediaTypeLabel(asset.mediaType)}{asset.referenceOnly ? ` · ${t("assets.reference")}` : ""}{asset.projectName ? ` · ${asset.projectName}` : asset.projects?.length === 1 ? ` · ${asset.projects[0]!.name}` : asset.projects?.length ? ` · ${t("assets.projectCount", { count: asset.projects.length })}` : ""}</>}
     preview={<AssetThumbnail asset={asset} visible={visible} />}
     badge={assetTypeBadge(asset.mediaType)}
     actions={onRename || onDelete || onSaveToLibrary ? <div className="library-asset-actions">
@@ -207,7 +209,7 @@ export function WorkspaceAssetDialog({ asset, onClose, onOpenProject, onRename, 
 export function filterAssets<T extends BrowsableAsset>(assets: readonly T[], media: MediaFilter, query: string, filters: ProjectAssetFilters = {}): T[] {
   const normalizedQuery = query.trim().toLowerCase();
   return assets.filter((asset) => (
-    (media === "all" || asset.mediaType === media) &&
+    (media === "all" || media === "ui" ? media === "all" || asset.category === "ui" : asset.mediaType === media && (media !== "image" || asset.category !== "ui")) &&
     (!filters.origin || filters.origin === "all" || (asset.origin ?? "workspace") === filters.origin) &&
     (!filters.purpose || filters.purpose === "all" || (asset.purpose ?? "asset") === filters.purpose) &&
     (!normalizedQuery || `${asset.path} ${asset.prompt ?? ""} ${asset.projectName ?? ""}`.toLowerCase().includes(normalizedQuery))

@@ -14,7 +14,7 @@ function argument(name: string): string {
 }
 
 if (process.isMainFrame) {
-  contextBridge.exposeInMainWorld("ohMyGameDesktop", Object.freeze({
+  const desktopBridge = Object.freeze({
     platform: process.platform,
     runtime: Object.freeze({
       daemonUrl: argument("ohmygame-daemon-url"),
@@ -58,6 +58,7 @@ if (process.isMainFrame) {
     revealPluginSkill: (pluginId: string, skillId: string) => ipcRenderer.invoke("ohmygame:reveal-plugin-skill", pluginId, skillId) as Promise<void>,
     selectPluginDirectory: () => ipcRenderer.invoke("ohmygame:select-plugin-directory") as Promise<string | undefined>,
     selectProjectDirectory: () => ipcRenderer.invoke("ohmygame:select-project-directory") as Promise<string | undefined>,
+    selectLibraryDirectory: () => ipcRenderer.invoke("ohmygame:select-library-directory") as Promise<string | undefined>,
     clipboard: Object.freeze({
       files: () => ipcRenderer.invoke("ohmygame:clipboard-files") as Promise<DesktopClipboardFile[]>,
       paste: () => ipcRenderer.invoke("ohmygame:paste-native") as Promise<void>,
@@ -129,5 +130,7 @@ if (process.isMainFrame) {
         return () => ipcRenderer.removeListener("ohmygame:auth-callback", callback);
       },
     }),
-  }));
+  });
+  contextBridge.exposeInMainWorld("ohMyGameDesktop", desktopBridge);
+  contextBridge.exposeInMainWorld("putengGameDesktop", desktopBridge);
 }

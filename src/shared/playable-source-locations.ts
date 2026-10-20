@@ -1,5 +1,5 @@
 /** Attribute that preview builds add to every element written in surface HTML. */
-export const PLAYABLE_SOURCE_ATTRIBUTE = "data-ohmygame-source";
+export const PLAYABLE_SOURCE_ATTRIBUTE = "data-putenggame-source";
 
 const RAW_TEXT_ELEMENTS = new Set([
   "script",
@@ -13,14 +13,8 @@ const RAW_TEXT_ELEMENTS = new Set([
   "plaintext",
 ]);
 
-export interface PlayableStartTag {
-  start: number;
-  nameEnd: number;
-  end: number;
-}
-
 /**
- * Adds `data-ohmygame-source="<file>:<line>:<column>"` to each start tag.
+ * Adds `data-putenggame-source="<file>:<line>:<column>"` to each start tag.
  * This is a tag scanner, not a full HTML parser: it skips comments,
  * declarations, end tags, and raw-text element content, and leaves the rest
  * of the markup byte-for-byte unchanged. Lines and columns are 1-based and
@@ -47,20 +41,6 @@ export function annotatePlayableSourceLocations(
 
   let output = "";
   let copied = 0;
-  for (const { start: open, nameEnd, end: tagEnd } of scanPlayableStartTags(html)) {
-    const tag = html.slice(open, tagEnd);
-    if (!hasSourceAttribute(tag)) {
-      output +=
-        html.slice(copied, nameEnd) +
-        ` ${PLAYABLE_SOURCE_ATTRIBUTE}="${escapeAttribute(location(open))}"`;
-      copied = nameEnd;
-    }
-  }
-  return output + html.slice(copied);
-}
-
-/** Walks complete start tags, skipping comments, declarations, end tags and raw-text content. */
-export function* scanPlayableStartTags(html: string): Generator<PlayableStartTag> {
   let index = 0;
   while (index < html.length) {
     const open = html.indexOf("<", index);
@@ -82,14 +62,19 @@ export function* scanPlayableStartTags(html: string): Generator<PlayableStartTag
     while (nameEnd < html.length && /[^\s/>]/.test(html[nameEnd]!)) nameEnd += 1;
     const tagName = html.slice(open + 1, nameEnd).toLowerCase();
     const tagEnd = startTagEnd(html, nameEnd);
-    if (tagEnd === undefined) return;
     const tag = html.slice(open, tagEnd);
-    yield { start: open, nameEnd, end: tagEnd };
+    if (!hasSourceAttribute(tag)) {
+      output +=
+        html.slice(copied, nameEnd) +
+        ` ${PLAYABLE_SOURCE_ATTRIBUTE}="${escapeAttribute(location(open))}"`;
+      copied = nameEnd;
+    }
     index = tagEnd;
     if (RAW_TEXT_ELEMENTS.has(tagName) && !tag.endsWith("/>")) {
       index = rawTextEnd(html, tagName, index);
     }
   }
+  return output + html.slice(copied);
 }
 
 function skipPast(html: string, marker: string, from: number): number {
@@ -98,7 +83,7 @@ function skipPast(html: string, marker: string, from: number): number {
 }
 
 /** Returns the offset after the start tag's `>`, honoring quoted attribute values. */
-function startTagEnd(html: string, from: number): number | undefined {
+function startTagEnd(html: string, from: number): number {
   let quote: string | undefined;
   for (let index = from; index < html.length; index += 1) {
     const character = html[index];
@@ -110,7 +95,7 @@ function startTagEnd(html: string, from: number): number | undefined {
       return index + 1;
     }
   }
-  return undefined;
+  return html.length;
 }
 
 function rawTextEnd(html: string, tagName: string, from: number): number {

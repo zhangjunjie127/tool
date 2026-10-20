@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { LibraryAsset, LibraryAssetOrigin, LibraryAssetPurpose } from "../shared/contracts.js";
+import type { LibraryAsset, LibraryAssetOrigin, LibraryAssetPurpose, LibrarySourceFolderCategory, LibrarySourceFolders } from "../shared/contracts.js";
 import { workspaceMediaInfo } from "./workspace.js";
 import { readMediaDimensions } from "./media-dimensions.js";
 
@@ -9,6 +9,7 @@ interface StoredLibrary {
   version: 1;
   assets: LibraryAsset[];
   sources: Record<string, string>;
+  sourceFolders: LibrarySourceFolders;
 }
 
 interface AddAssetOptions {
@@ -18,6 +19,8 @@ interface AddAssetOptions {
   duration?: number;
   origin?: LibraryAssetOrigin;
   purpose?: LibraryAssetPurpose;
+  category?: LibraryAsset["category"];
+  modifiedAt?: string;
 }
 
 export class AssetLibraryError extends Error {
@@ -81,7 +84,65 @@ export class AssetLibrary {
         await rename(temporary, destination);
         return await this.#record(id, fileName, contents.byteLength, media, options);
       } catch (error) {
-        await rm(destination, { force: true });
+        if (!existing) await rm(destination, { force: true });
+        throw error;
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    });
+  }
+
+  async syncSourceFile(
+    fileName: string,
+    contents: Uint8Array,
+    options: AddAssetOptions & { sourceKey: string; modifiedAt: string },
+  ): Promise<LibraryAsset> {
+    return this.#mutate(async () => {
+      const media = workspaceMediaInfo(fileName);
+      if (!media) throw new AssetLibraryError("File is not a supported media asset", 400);
+      if (
+        options.category === "video" && media.mediaType !== "video" ||
+        options.category === "image" && media.mediaType !== "image"
+      ) throw new AssetLibraryError("File does not match its Library folder category", 400);
+
+      const existing = this.#existing(options.sourceKey);
+      if (
+        existing?.size === contents.byteLength &&
+        existing.modifiedAt === options.modifiedAt &&
+        existing.category === options.category
+      ) return existing;
+
+      const id = existing?.id ?? randomUUID();
+      const destination = this.#contentPath(id, fileName);
+      const temporary = `${destination}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, contents, { flag: "wx" });
+        await rename(temporary, destination);
+        if (!existing)
+          return await this.#record(id, fileName, contents.byteLength, media, options);
+
+        const updated = await this.#withDimensions({
+          ...existing,
+          name: path.basename(fileName),
+          size: contents.byteLength,
+          ...media,
+          category: options.category,
+          modifiedAt: options.modifiedAt,
+          origin: options.origin ?? "local",
+          width: undefined,
+          height: undefined,
+        });
+        const state = {
+          ...this.#state,
+          assets: this.#state.assets.map((asset) => asset.id === id ? updated : asset),
+        };
+        await this.#write(state);
+        this.#state = state;
+        if (this.#contentPath(id, existing.name) !== destination)
+          await rm(this.#contentPath(id, existing.name), { force: true });
+        return updated;
+      } catch (error) {
+        if (!existing) await rm(destination, { force: true });
         throw error;
       } finally {
         await rm(temporary, { force: true });
@@ -95,24 +156,102 @@ export class AssetLibrary {
     options: AddAssetOptions = {},
   ): Promise<LibraryAsset> {
     return this.#mutate(async () => {
-      const existing = this.#existing(options.sourceKey);
-      if (existing) return existing;
       const media = workspaceMediaInfo(fileName);
       if (!media) throw new AssetLibraryError("File is not a supported media asset", 400);
-      const id = randomUUID();
+      if (
+        options.category === "video" && media.mediaType !== "video" ||
+        (options.category === "image" || options.category === "ui") && media.mediaType !== "image"
+      ) throw new AssetLibraryError("File does not match its Library folder category", 400);
+      const source = await stat(sourcePath);
+      if (!source.isFile()) throw new AssetLibraryError("Asset source is not a file", 400);
+      const modifiedAt = source.mtime.toISOString();
+      const existing = this.#existing(options.sourceKey);
+      if (!options.category && existing) return existing;
+      if (
+        existing &&
+        existing.size === source.size &&
+        existing.modifiedAt === modifiedAt &&
+        existing.category === options.category
+      ) return existing;
+      const id = existing?.id ?? randomUUID();
       const destination = this.#contentPath(id, fileName);
       const temporary = `${destination}.${randomUUID()}.tmp`;
       try {
         await copyFile(sourcePath, temporary);
         await rename(temporary, destination);
-        return await this.#record(id, fileName, (await stat(destination)).size, media, options);
+        if (!existing)
+          return await this.#record(id, fileName, source.size, media, { ...options, modifiedAt });
+        const updated = await this.#withDimensions({
+          ...existing,
+          name: path.basename(fileName),
+          size: source.size,
+          ...media,
+          category: options.category,
+          modifiedAt,
+          width: undefined,
+          height: undefined,
+        });
+        const state = {
+          ...this.#state,
+          assets: this.#state.assets.map((asset) => asset.id === id ? updated : asset),
+        };
+        await this.#write(state);
+        this.#state = state;
+        return updated;
       } catch (error) {
-        await rm(destination, { force: true });
+        if (!existing) await rm(destination, { force: true });
         throw error;
       } finally {
         await rm(temporary, { force: true });
       }
     });
+  }
+
+  sourceFolders(): LibrarySourceFolders {
+    return { ...this.#state.sourceFolders };
+  }
+
+  async setSourceFolder(
+    category: LibrarySourceFolderCategory,
+    directory: string | undefined,
+  ): Promise<LibrarySourceFolders> {
+    if (directory) {
+      if (!path.isAbsolute(directory) || directory.length > 4_000)
+        throw new AssetLibraryError("Select a valid local folder", 400);
+      const info = await stat(directory);
+      if (!info.isDirectory())
+        throw new AssetLibraryError("Selected path is not a folder", 400);
+    }
+    await this.#mutate(async () => {
+      const sourceFolders = { ...this.#state.sourceFolders };
+      if (directory) sourceFolders[category] = path.resolve(directory);
+      else delete sourceFolders[category];
+      const state = { ...this.#state, sourceFolders };
+      await this.#write(state);
+      this.#state = state;
+    });
+    return this.sourceFolders();
+  }
+
+  async syncSourceFolders(): Promise<void> {
+    for (const [category, directory] of Object.entries(this.#state.sourceFolders) as [
+      LibrarySourceFolderCategory,
+      string,
+    ][]) {
+      for (const sourcePath of await filesInDirectory(directory)) {
+        const fileName = path.basename(sourcePath);
+        const media = workspaceMediaInfo(fileName);
+        if (
+          !media ||
+          (category === "video" ? media.mediaType !== "video" : media.mediaType !== "image")
+        ) continue;
+        await this.addFile(fileName, sourcePath, {
+          category,
+          origin: "local",
+          sourceKey: `local-folder:${category}:${sourcePath}`,
+        });
+      }
+    }
   }
 
   async content(id: string): Promise<{ asset: LibraryAsset; absolutePath: string }> {
@@ -190,6 +329,8 @@ export class AssetLibrary {
       origin,
       purpose: options.purpose ?? "asset",
       saved: origin !== "workspace",
+      ...(options.category ? { category: options.category } : {}),
+      ...(options.modifiedAt ? { modifiedAt: options.modifiedAt } : {}),
       ...(options.model3d ? { model3d: options.model3d } : {}),
       ...(options.duration !== undefined ? { duration: options.duration } : {}),
       ...(options.prompt?.trim() ? { prompt: options.prompt.trim() } : {}),
@@ -232,7 +373,7 @@ export class AssetLibrary {
 }
 
 function emptyLibrary(): StoredLibrary {
-  return { version: 1, assets: [], sources: {} };
+  return { version: 1, assets: [], sources: {}, sourceFolders: {} };
 }
 
 function parseLibrary(value: unknown): StoredLibrary | undefined {
@@ -248,8 +389,20 @@ function parseLibrary(value: unknown): StoredLibrary | undefined {
     keys.push(source);
     sources.set(id, keys);
   }
+  const storedSourceFolders = stored.sourceFolders && typeof stored.sourceFolders === "object" && !Array.isArray(stored.sourceFolders)
+    ? stored.sourceFolders
+    : {};
+  if (!Object.entries(storedSourceFolders).every(([category, directory]) =>
+    ["video", "image", "ui"].includes(category) &&
+    typeof directory === "string" &&
+    path.isAbsolute(directory)
+  )) return undefined;
+  const sourceFolders = Object.fromEntries(
+    Object.entries(storedSourceFolders).filter(([category]) => category !== "ui"),
+  ) as LibrarySourceFolders;
   return {
     ...(stored as StoredLibrary),
+    sourceFolders,
     assets: stored.assets.map((asset) => {
       const keys = sources.get(asset.id) ?? [];
       const inferred = keys.map(originFromSource);
@@ -270,6 +423,7 @@ function originFromSource(source?: string): LibraryAssetOrigin {
   if (source?.startsWith("tool:")) return "generated";
   if (source?.startsWith("conversation-image:")) return "uploaded";
   if (source?.startsWith("builtin:")) return "builtin";
+  if (source?.startsWith("local-folder:")) return "local";
   if (source?.startsWith("project:") || source?.startsWith("canvas:")) return "workspace";
   return "unknown";
 }
@@ -284,7 +438,30 @@ function isLibraryAsset(value: unknown): value is LibraryAsset {
     (asset.duration === undefined || typeof asset.duration === "number" && Number.isFinite(asset.duration) && asset.duration >= 0) &&
     [asset.width, asset.height].every((value) => value === undefined || Number.isInteger(value) && value > 0) &&
     (asset.prompt === undefined || typeof asset.prompt === "string") &&
-    (asset.origin === undefined || ["generated", "uploaded", "workspace", "builtin", "unknown"].includes(asset.origin)) &&
+    (asset.origin === undefined || ["generated", "uploaded", "workspace", "builtin", "local", "unknown"].includes(asset.origin)) &&
     (asset.purpose === undefined || asset.purpose === "asset" || asset.purpose === "reference") &&
-    (asset.saved === undefined || typeof asset.saved === "boolean");
+    (asset.saved === undefined || typeof asset.saved === "boolean") &&
+    (asset.category === undefined || ["video", "image", "ui"].includes(asset.category)) &&
+    (asset.modifiedAt === undefined || typeof asset.modifiedAt === "string" && Number.isFinite(Date.parse(asset.modifiedAt)));
+}
+
+async function filesInDirectory(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  const pending = [directory];
+  while (pending.length) {
+    const current = pending.pop()!;
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) pending.push(absolutePath);
+      else if (entry.isFile()) files.push(absolutePath);
+    }
+  }
+  return files;
 }

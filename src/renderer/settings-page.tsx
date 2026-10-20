@@ -25,7 +25,6 @@ const CHAT_LAYOUT_OPTIONS: readonly { value: ChatLayout; label: string }[] = [
   { value: "right", label: t("settings.appearance.right") },
 ];
 const LANGUAGE_OPTIONS: readonly { value: LanguagePreference; label: string }[] = [
-  { value: "system", label: t("settings.appearance.system") },
   // Language names stay in their own language so people can find theirs.
   { value: "en", label: "English" },
   { value: "zh-CN", label: "简体中文" },
