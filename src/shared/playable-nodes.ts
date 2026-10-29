@@ -1,4 +1,9 @@
 import type { PlayableStoryMap } from "./playable-story-map.js";
+import type {
+  PlayableSettingsService,
+  PlayableTranscriptionService,
+} from "./playable-settings.js";
+import type { PlayableSettingsButton } from "./playable-settings-button.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
@@ -61,6 +66,8 @@ export interface PlayableNode {
   source: NodeSource;
   assets: string[];
   signals: PlayableSignal[];
+  /** When enabled, a single-play background video routes its sole story Exit only after it ends. */
+  videoEndAutoAdvance?: boolean;
   story?: PlayableStoryOptions;
 }
 
@@ -89,6 +96,8 @@ export interface NodeGraph {
    */
   variables?: Record<string, string>;
   assets: Record<string, PlayableAssetDefinition>;
+  /** One settings entry shared by every Scene in the game. */
+  settingsButton?: PlayableSettingsButton;
   nodes: PlayableNode[];
   edges: PlayableEdge[];
 }
@@ -103,7 +112,10 @@ export interface PlayableStateService {
 
 export interface NodeRuntimeContext {
   root: ShadowRoot;
-  assets: { url(id: string): string };
+  assets: {
+    url(id: string): string;
+    list?(): Array<{ id: string; type: PlayableAssetType }>;
+  };
   state: PlayableStateService;
   session: {
     hasSave(): boolean;
@@ -112,6 +124,9 @@ export interface NodeRuntimeContext {
     save(): Promise<void>;
     restart(): Promise<void>;
   };
+  settings?: PlayableSettingsService;
+  /** Optional host integration; unavailable until a transcription provider is configured. */
+  transcription?: PlayableTranscriptionService;
   /** The story the player has seen so far, across every game they started. */
   story: { map(): PlayableStoryMap };
   lifecycle: { signal: AbortSignal };

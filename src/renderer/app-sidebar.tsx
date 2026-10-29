@@ -120,8 +120,8 @@ export function AppSidebar({ active, onNavigate }: AppSidebarProps) {
       {resizing ? <div className="home-sidebar-resize-shield" /> : null}
       <div className="home-sidebar-header-spacer" aria-hidden="true" />
       <div className="home-sidebar-brand">
-        <img src={brandMark} alt="OhMyGame" />
-        <span>OhMyGame</span>
+        <img src={brandMark} alt="puteng game" />
+        <span>puteng game</span>
       </div>
       <nav aria-label={t("sidebar.mainNavigation")}>
         <NavigationItem active={active === "home"} icon="home" label={t("sidebar.home")} onClick={() => onNavigate("home")} />

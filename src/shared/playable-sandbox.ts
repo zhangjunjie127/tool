@@ -34,6 +34,7 @@ import type {
   PlayableMediaState,
   PlayableTextStyleCommand,
   PlayableTransformEdit,
+  PlayableVrButton,
 } from "./playable-player-protocol.js";
 import { playableOriginalText } from "./playable-text-source.js";
 import {
@@ -45,13 +46,17 @@ import {
   PLAYABLE_BUTTON_PRESET_STYLE,
   mountPlayableMotionElement,
   PLAYABLE_MOTION_ATTRIBUTES,
-  type PlayableMotionConfig,
+  PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID,
+  PLAYABLE_MOTION_HOLDING_ATTRIBUTE,
+  PLAYABLE_MOTION_TIMING_UPDATE_EVENT,
+  circularHoldChargeAssetFrame,
   playableButtonAssetScales,
   playableElementRuntimeScale,
   playableElementTransformScale,
   updatePlayableButtonLabelScale,
 } from "./playable-motion.js";
 import { PLAYABLE_SOURCE_ATTRIBUTE } from "./playable-source-locations.js";
+import { createPlayableSettingsService } from "./playable-settings.js";
 import type {
   PlayableMountedSurface,
   PlayableSurfaceHost,
@@ -78,9 +83,24 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     delete: (pick: PlayablePickResult) => void;
     copy: () => void;
     paste: () => Promise<void>;
+    setLockedPicks: (picks: readonly PlayablePickResult[]) => void;
+    alignToCenter: (
+      reference: PlayablePickResult,
+      targets: readonly PlayablePickResult[],
+    ) => void;
   };
   #mediaListener?: (state: PlayableMediaState) => void;
+  #vrButtonIds = new WeakMap<HTMLButtonElement, string>();
+  #nextVrButtonId = 0;
   #mediaBindings = new WeakSet<HTMLVideoElement>();
+  #vrBackdropStyles = new WeakMap<HTMLVideoElement, {
+    width: string;
+    height: string;
+    objectFit: string;
+    transform: string;
+    transformOrigin: string;
+  }>();
+  #vrBackdropOverflow = new WeakMap<HTMLElement, string>();
   #mediaObservers: MutationObserver[] = [];
   #motionCleanups = new WeakMap<HTMLElement, () => void>();
   #motionContexts = new WeakMap<HTMLElement, PlayableNodeContext>();
@@ -98,6 +118,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   #pausedVideos = new WeakMap<HTMLElement, HTMLVideoElement[]>();
   #timingTimer?: number;
   #backdropEffects?: PlayableBackdropEffects;
+  #playerPaused = false;
 
   constructor(
     document: Document,
@@ -115,8 +136,22 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   mountNode(
     surface: CompiledPlayableSurface,
     context: Omit<PlayableNodeContext, "root">,
+    onBackdropVideoEnded?: () => void,
   ): Promise<PlayableMountedSurface> {
-    return this.#mount(this.#nodeLayer, surface, context);
+    return this.#mount(this.#nodeLayer, surface, context, onBackdropVideoEnded).then(
+      (mounted) => {
+        if (this.#playerPaused) {
+          const host = [
+            ...this.#nodeLayer.querySelectorAll<HTMLElement>(
+              "[data-playable-surface]",
+            ),
+          ].find((candidate) => candidate.dataset.playableSurface === surface.id);
+          if (host?.shadowRoot)
+            this.#pauseSurface(host, host.shadowRoot);
+        }
+        return mounted;
+      },
+    );
   }
 
   setMediaStateListener(
@@ -126,7 +161,151 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     this.#syncMedia();
   }
 
+  setPlayerPaused(paused: boolean): void {
+    if (this.#playerPaused === paused) return;
+    this.#playerPaused = paused;
+    for (const host of this.#nodeLayer.querySelectorAll<HTMLElement>(
+      "[data-playable-surface]",
+    )) {
+      const root = host.shadowRoot;
+      if (!root) continue;
+      const stage = this.#stage(root);
+      if (paused) this.#pauseSurface(host, root);
+      else if (stage && !stage.hasAttribute("data-putenggame-awaiting-input"))
+        this.#resumeSurface(host, root, stage);
+    }
+  }
+
+  inspectVrButtons(
+    nodeId: string,
+    viewport: { width: number; height: number },
+  ): PlayableVrButton[] {
+    const surface = [...this.#nodeLayer.querySelectorAll<HTMLElement>(
+      "[data-playable-surface]",
+    )].find((candidate) => candidate.dataset.playableSurface === nodeId);
+    const root = surface?.shadowRoot;
+    if (!surface || !root) return [];
+    const bounds = surface.getBoundingClientRect();
+    const view = this.#document.defaultView;
+    if (!bounds.width || !bounds.height || !view) return [];
+    return [...root.querySelectorAll<HTMLButtonElement>("button")]
+      .flatMap((button) => {
+        const rect = button.getBoundingClientRect();
+        const style = view.getComputedStyle(button);
+        if (!rect.width || !rect.height || style.display === "none" || style.visibility === "hidden")
+          return [];
+        let id = this.#vrButtonIds.get(button);
+        if (!id) {
+          id = `vr-button-${++this.#nextVrButtonId}`;
+          this.#vrButtonIds.set(button, id);
+        }
+        const imageDataUrl = buttonImageDataUrl(button);
+        const pressedImageDataUrl = buttonImageDataUrl(
+          button,
+          "[data-putenggame-button-pressed-image] img",
+        );
+        const position = (value: number, size: number) =>
+          Math.max(0, Math.min(1, value / size));
+        return [{
+          id,
+          label: (button.getAttribute("aria-label") || button.textContent || button.title || "Button").trim().slice(0, 256),
+          x: position(rect.left - bounds.left, bounds.width),
+          y: position(rect.top - bounds.top, bounds.height),
+          width: position(rect.width, bounds.width),
+          height: position(rect.height, bounds.height),
+          color: style.color.slice(0, 128),
+          backgroundColor: style.backgroundColor.slice(0, 128),
+          ...(button.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.kind) ===
+          "hold-charge"
+            ? { holdToCharge: true }
+            : {}),
+          ...(imageDataUrl ? { imageDataUrl } : {}),
+          ...(pressedImageDataUrl ? { pressedImageDataUrl } : {}),
+        }];
+      })
+      .slice(0, 256);
+  }
+
+  activateVrButton(nodeId: string, buttonId: string): void {
+    const surface = [...this.#nodeLayer.querySelectorAll<HTMLElement>(
+      "[data-playable-surface]",
+    )].find((candidate) => candidate.dataset.playableSurface === nodeId);
+    const button = [...(surface?.shadowRoot?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+      .find((candidate) => this.#vrButtonIds.get(candidate) === buttonId);
+    if (button && !button.disabled) button.click();
+  }
+
+  pressVrButton(
+    nodeId: string,
+    buttonId: string,
+    phase: "start" | "end",
+  ): void {
+    const surface = [...this.#nodeLayer.querySelectorAll<HTMLElement>(
+      "[data-playable-surface]",
+    )].find((candidate) => candidate.dataset.playableSurface === nodeId);
+    const button = [...(surface?.shadowRoot?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+      .find((candidate) => this.#vrButtonIds.get(candidate) === buttonId);
+    const view = button?.ownerDocument.defaultView;
+    if (!button || button.disabled || !view) return;
+    const type = phase === "start" ? "pointerdown" : "pointerup";
+    const event = view.PointerEvent
+      ? new view.PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          pointerId: -1,
+          pointerType: "xr",
+          isPrimary: true,
+          button: 0,
+          buttons: phase === "start" ? 1 : 0,
+        })
+      : new view.Event(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+    button.dispatchEvent(event);
+  }
+
   controlMedia(command: PlayableMediaCommand): void {
+    if (command.command === "vr-eye-preview") {
+      const surface = [...this.#nodeLayer.querySelectorAll<HTMLElement>(
+        "[data-playable-surface]",
+      )].find((candidate) => candidate.dataset.playableSurface === command.nodeId);
+      const backdrop = surface?.shadowRoot?.querySelector<HTMLElement>(
+        '[data-media="backdrop"]',
+      );
+      const video = backdrop?.querySelector<HTMLVideoElement>("video");
+      if (!backdrop || !video) return;
+      const original = this.#vrBackdropStyles.get(video);
+      if (command.eye === "full") {
+        if (original) Object.assign(video.style, original);
+        this.#vrBackdropStyles.delete(video);
+        const overflow = this.#vrBackdropOverflow.get(backdrop);
+        if (overflow !== undefined) backdrop.style.overflow = overflow;
+        this.#vrBackdropOverflow.delete(backdrop);
+        return;
+      }
+      if (!original) {
+        this.#vrBackdropOverflow.set(backdrop, backdrop.style.overflow);
+        this.#vrBackdropStyles.set(video, {
+          width: video.style.width,
+          height: video.style.height,
+          objectFit: video.style.objectFit,
+          transform: video.style.transform,
+          transformOrigin: video.style.transformOrigin,
+        });
+      }
+      backdrop.style.overflow = "hidden";
+      Object.assign(video.style, {
+        width: "200%",
+        height: "100%",
+        objectFit: "fill",
+        transform: command.eye === "left" ? "translateX(0)" : "translateX(-50%)",
+        transformOrigin: "left center",
+      });
+      return;
+    }
     if (command.command === "set-backdrop") {
       const surface = [
         ...this.#nodeLayer.querySelectorAll<HTMLElement>(
@@ -440,6 +619,33 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       }
       return;
     }
+    if (command.command === "element-scale-preview") {
+      const host = [
+        ...this.#nodeLayer.querySelectorAll<HTMLElement>(
+          "[data-playable-surface]",
+        ),
+      ].find(
+        (candidate) => candidate.dataset.playableSurface === command.nodeId,
+      );
+      const root = host?.shadowRoot;
+      if (!root) return;
+      try {
+        const element = root.querySelector<HTMLElement>(command.cssPath);
+        if (
+          !element ||
+          element.getAttribute(PLAYABLE_SOURCE_ATTRIBUTE) !== command.source
+        )
+          return;
+        element.style.scale = playableElementRuntimeScale(
+          element,
+          command.scale,
+        );
+        this.#picking?.refresh();
+      } catch {
+        return;
+      }
+      return;
+    }
     if (command.command === "motion-progress-preview") {
       const host = [
         ...this.#nodeLayer.querySelectorAll<HTMLElement>(
@@ -465,27 +671,83 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           preview.dataset.putenggameMotionProgressPreview = "";
           Object.assign(preview.style, {
             position: "absolute",
-            left: "8%",
-            right: "8%",
-            bottom: "0.2em",
-            height: "1em",
             display: "grid",
             placeItems: "center",
             overflow: "visible",
             pointerEvents: "none",
-            zIndex: "2",
           });
           element.append(preview);
         }
+        preview.style.zIndex = command.barLayer === "bottom" ? "-2" : "2";
+        const buttonBaseImage = element.querySelector<HTMLElement>(
+          "[data-putenggame-button-asset-image]",
+        );
+        if (buttonBaseImage) element.style.isolation = "isolate";
         const oldUrl = preview.dataset.assetUrl;
         if (oldUrl) {
           URL.revokeObjectURL(oldUrl);
           this.#motionAssetUrls.delete(oldUrl);
         }
+        const motionUi = element.querySelector<HTMLElement>(
+          "[data-putenggame-motion-ui]",
+        );
+        if (motionUi)
+          motionUi.style.zIndex =
+            command.barLayer === "bottom" ? "-2" : "2";
         const url = URL.createObjectURL(
           new Blob([command.asset.bytes], { type: command.asset.contentType }),
         );
         this.#motionAssetUrls.add(url);
+        preview.dataset.assetUrl = url;
+        if (command.circular) {
+          Object.assign(preview.style, {
+            inset: "0",
+            left: "",
+            right: "",
+            bottom: "",
+            width: "100%",
+            height: "100%",
+          });
+          const frame = circularHoldChargeAssetFrame({
+            scale: command.scale,
+            offsetX: command.offsetX,
+            offsetY: command.offsetY,
+          });
+          const svg = this.#document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "svg",
+          );
+          svg.setAttribute("viewBox", "0 0 100 100");
+          Object.assign(svg.style, {
+            position: "absolute",
+            inset: "0",
+            width: "100%",
+            height: "100%",
+          });
+          const image = this.#document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "image",
+          );
+          image.setAttribute("data-putenggame-motion-bar-preview", "");
+          image.setAttribute("href", url);
+          image.setAttribute("x", String(frame.x));
+          image.setAttribute("y", String(frame.y));
+          image.setAttribute("width", String(frame.width));
+          image.setAttribute("height", String(frame.height));
+          image.setAttribute("preserveAspectRatio", "xMidYMid meet");
+          svg.append(image);
+          preview.replaceChildren(svg);
+          return;
+        }
+        Object.assign(preview.style, {
+          inset: "",
+          left: "8%",
+          right: "8%",
+          bottom: "0.2em",
+          width: "",
+          height: "1em",
+        });
+        preview.replaceChildren();
         const fill = element.querySelector<HTMLElement>(
           "[data-putenggame-motion-fill]",
         );
@@ -519,7 +781,6 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           preview.remove();
           return;
         }
-        preview.dataset.assetUrl = url;
         image = preview.querySelector("img");
         if (!image) {
           image = this.#document.createElement("img");
@@ -659,6 +920,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       selectableSourceTargets(this.#projectRoot),
     );
     const movableElements = tool === "move" ? selectableElements : undefined;
+    let lockedPickKeys = new Set<string>();
     let editing: TextEditing | undefined;
     let dragging: Dragging | undefined;
     let selected: SelectedElement | undefined;
@@ -678,24 +940,41 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       if (!inside(event)) event.preventDefault();
       event.stopImmediatePropagation();
     };
+    const projectScale = (root: DOMRect) => ({
+      x:
+        root.width > 0 && this.#projectRoot.clientWidth > 0
+          ? this.#projectRoot.clientWidth / root.width
+          : 1,
+      y:
+        root.height > 0 && this.#projectRoot.clientHeight > 0
+          ? this.#projectRoot.clientHeight / root.height
+          : 1,
+    });
     const place = (box: PlayablePickResult["box"] | undefined) => {
-      const rotateHandle = handles.find(
-        (handle) => handle.dataset.playableTransformHandle === "rotate",
+      const selectionLocked = Boolean(
+        selected &&
+          lockedPickKeys.has(selectionKey(selected.pick, selected.part)),
       );
-      if (rotateHandle)
-        rotateHandle.style.display =
-          selected?.pick.tag === "button" ? "none" : "";
+      for (const handle of handles) {
+        handle.style.display = selectionLocked
+          ? "none"
+          : handle.dataset.playableTransformHandle === "rotate" &&
+              selected?.pick.tag === "button"
+            ? "none"
+            : "";
+      }
       if (!box) {
         outline.style.display = "none";
         return;
       }
       const root = this.#projectRoot.getBoundingClientRect();
+      const scale = projectScale(root);
       Object.assign(outline.style, {
         display: "block",
-        left: `${box.x - root.x}px`,
-        top: `${box.y - root.y}px`,
-        width: `${box.width}px`,
-        height: `${box.height}px`,
+        left: `${(box.x - root.x) * scale.x}px`,
+        top: `${(box.y - root.y) * scale.y}px`,
+        width: `${box.width * scale.x}px`,
+        height: `${box.height * scale.y}px`,
       });
     };
     const placeSelectionBox = (
@@ -707,12 +986,13 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         return;
       }
       const root = this.#projectRoot.getBoundingClientRect();
+      const scale = projectScale(root);
       Object.assign(target.style, {
         display: "block",
-        left: `${box.x - root.x}px`,
-        top: `${box.y - root.y}px`,
-        width: `${box.width}px`,
-        height: `${box.height}px`,
+        left: `${(box.x - root.x) * scale.x}px`,
+        top: `${(box.y - root.y) * scale.y}px`,
+        width: `${box.width * scale.x}px`,
+        height: `${box.height * scale.y}px`,
       });
     };
     const selectionKey = (
@@ -771,12 +1051,13 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       }
       const box = rectangle(current.start, current.current);
       const root = this.#projectRoot.getBoundingClientRect();
+      const scale = projectScale(root);
       Object.assign(marquee.style, {
         display: "block",
-        left: `${box.x - root.x}px`,
-        top: `${box.y - root.y}px`,
-        width: `${box.width}px`,
-        height: `${box.height}px`,
+        left: `${(box.x - root.x) * scale.x}px`,
+        top: `${(box.y - root.y) * scale.y}px`,
+        width: `${box.width * scale.x}px`,
+        height: `${box.height * scale.y}px`,
       });
     };
     const hover = (event: Event) => {
@@ -1003,7 +1284,13 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     const press = (event: Event) => {
       const pointer = event as PointerEvent;
       const handle = transformHandle(event.composedPath());
-      if (tool === "select" && handle && selected && pointer.button === 0) {
+      if (
+        tool === "select" &&
+        handle &&
+        selected &&
+        !lockedPickKeys.has(selectionKey(selected.pick, selected.part)) &&
+        pointer.button === 0
+      ) {
         block(event);
         startTransform(handle.kind, pointer);
         return;
@@ -1031,6 +1318,11 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
             pointer.clientY,
           )
         : undefined;
+      if (
+        target &&
+        lockedPickKeys.has(selectionKey(target.pick, target.part))
+      )
+        return;
       const root = target?.element.getRootNode();
       const size =
         root instanceof ShadowRoot
@@ -1121,11 +1413,16 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         x: box.x + box.width / 2,
         y: box.y + box.height / 2,
       };
-      const { x: originX, y: originY } = parseTransformOrigin(
-        computed.transformOrigin,
-        element.offsetWidth,
-        element.offsetHeight,
+      const centeredButton = element.hasAttribute(
+        "data-putenggame-button-preset",
       );
+      const { x: originX, y: originY } = centeredButton
+        ? { x: 50, y: 50 }
+        : parseTransformOrigin(
+            computed.transformOrigin,
+            element.offsetWidth,
+            element.offsetHeight,
+          );
       const original = {
         scale: element.style.scale,
         rotate: element.style.rotate,
@@ -1216,22 +1513,26 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           width: current.element.offsetWidth,
           height: current.element.offsetHeight,
         };
-        const correctedOrigin = playableTransformOriginCorrection(
-          {
-            x: current.transform.originX ?? 50,
-            y: current.transform.originY ?? 50,
-          },
-          size,
-          { x: scaleX, y: scaleY },
-          current.transform.rotation,
-          linearTransformMatrix(
-            view.getComputedStyle(current.element).transform,
-          ),
-          {
-            x: current.center.x - (box.x + box.width / 2),
-            y: current.center.y - (box.y + box.height / 2),
-          },
-        );
+        const correctedOrigin = current.element.hasAttribute(
+          "data-putenggame-button-preset",
+        )
+          ? { x: 50, y: 50 }
+          : playableTransformOriginCorrection(
+              {
+                x: current.transform.originX ?? 50,
+                y: current.transform.originY ?? 50,
+              },
+              size,
+              { x: scaleX, y: scaleY },
+              current.transform.rotation,
+              linearTransformMatrix(
+                view.getComputedStyle(current.element).transform,
+              ),
+              {
+                x: current.center.x - (box.x + box.width / 2),
+                y: current.center.y - (box.y + box.height / 2),
+              },
+            );
         current.transform.originX = roundOffset(correctedOrigin.x);
         current.transform.originY = roundOffset(correctedOrigin.y);
         current.element.style.setProperty(
@@ -1370,6 +1671,11 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           selectionKey(current.pick, current.part),
       );
       selected = selectedElements.at(-1);
+      this.#motionCleanups.get(current.element)?.();
+      this.#motionCleanups.delete(current.element);
+      this.#motionContexts.delete(current.element);
+      this.#buttonPresetCleanups.get(current.element)?.();
+      this.#buttonPresetCleanups.delete(current.element);
       current.element.remove();
       placeSelected();
       handlers.onDelete({
@@ -1403,6 +1709,38 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       const copies: PlayableElementCopy[] = copiedElements.map(
         ({ element, pick }) => {
           const clone = element.cloneNode(true) as HTMLElement;
+          for (const runtimeElement of clone.querySelectorAll<HTMLElement>(
+            [
+              "[data-putenggame-button-asset-image]",
+              "[data-putenggame-button-pressed-image]",
+              "[data-putenggame-motion-ui]",
+              "[data-putenggame-motion-progress-preview]",
+              "[data-putenggame-motion-bar-preview]",
+              "[data-putenggame-motion-fill]",
+              "[data-putenggame-motion-bar]",
+              "[data-putenggame-motion-ring]",
+              "[data-putenggame-ripple-hint]",
+              "[data-putenggame-swipe-rail]",
+              "[data-putenggame-swipe-thumb]",
+            ].join(","),
+          ))
+            runtimeElement.remove();
+          for (const label of clone.querySelectorAll<HTMLElement>(
+            "[data-putenggame-button-label]",
+          ))
+            label.replaceWith(...Array.from(label.childNodes));
+          clone.removeAttribute(PLAYABLE_MOTION_HOLDING_ATTRIBUTE);
+          if (clone.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset)) {
+            const { x, y } = playableButtonAssetScales(clone);
+            const [scaleX, scaleY] = parseScaleAxes(clone.style.scale);
+            const baseScaleX = scaleX / (x / 100);
+            const baseScaleY = scaleY / (y / 100);
+            clone.style.scale =
+              Math.abs(baseScaleX - 1) < 0.0001 &&
+              Math.abs(baseScaleY - 1) < 0.0001
+                ? ""
+                : `${baseScaleX} ${baseScaleY}`;
+          }
           const subtree = [
             clone,
             ...Array.from(clone.querySelectorAll<HTMLElement>("*")),
@@ -1515,6 +1853,63 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
             target.setAttribute(PLAYABLE_SOURCE_ATTRIBUTE, source);
         }
         original.element.after(clone);
+        const context =
+          this.#motionContexts.get(original.element) ??
+          this.#motionContextsBySurface.get(original.pick.nodeId);
+        if (context) {
+          if (clone.hasAttribute("data-putenggame-button-preset"))
+            this.#buttonPresetCleanups.set(
+              clone,
+              this.#bindButtonPreset(clone, context),
+            );
+          if (
+            clone.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.kind) ||
+            clone.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset) ||
+            clone.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.pressedAsset)
+          ) {
+            this.#motionContexts.set(clone, context);
+            const assetUrl = this.#motionAssetUrlsByElement.get(
+              original.element,
+            );
+            const pressedAssetUrl = this.#pressedMotionAssetUrlsByElement.get(
+              original.element,
+            );
+            const ringAssetUrl = this.#ringMotionAssetUrlsByElement.get(
+              original.element,
+            );
+            const barAssetUrl = this.#barMotionAssetUrlsByElement.get(
+              original.element,
+            );
+            const swipeAssetUrl = this.#swipeMotionAssetUrlsByElement.get(
+              original.element,
+            );
+            if (assetUrl)
+              this.#motionAssetUrlsByElement.set(clone, assetUrl);
+            if (pressedAssetUrl)
+              this.#pressedMotionAssetUrlsByElement.set(
+                clone,
+                pressedAssetUrl,
+              );
+            if (ringAssetUrl)
+              this.#ringMotionAssetUrlsByElement.set(clone, ringAssetUrl);
+            if (barAssetUrl)
+              this.#barMotionAssetUrlsByElement.set(clone, barAssetUrl);
+            if (swipeAssetUrl)
+              this.#swipeMotionAssetUrlsByElement.set(clone, swipeAssetUrl);
+            this.#motionCleanups.set(
+              clone,
+              mountPlayableMotionElement(
+                clone,
+                context,
+                assetUrl,
+                pressedAssetUrl,
+                ringAssetUrl,
+                barAssetUrl,
+                swipeAssetUrl,
+              ),
+            );
+          }
+        }
         const pick = pickForElement(clone);
         if (!pick?.source) continue;
         pasted.push({ element: clone, pick });
@@ -1808,6 +2203,58 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     this.#picking = {
       copy: copySelected,
       paste: pasteCopied,
+      setLockedPicks: (picks) => {
+        lockedPickKeys = new Set(picks.map((pick) => selectionKey(pick)));
+        placeSelected();
+      },
+      alignToCenter: (reference, targets) => {
+        if (tool !== "select" || reference.tag !== "button") return;
+        const referenceElement = elementForPick(this.#projectRoot, reference);
+        const referenceBox = referenceElement
+          ? selectedBox(referenceElement)
+          : undefined;
+        if (!referenceElement || !referenceBox) return;
+        const referenceCenter = {
+          x: referenceBox.x + referenceBox.width / 2,
+          y: referenceBox.y + referenceBox.height / 2,
+        };
+        for (const pick of targets) {
+          if (
+            pick.tag !== "button" ||
+            selectionKey(pick) === selectionKey(reference) ||
+            lockedPickKeys.has(selectionKey(pick))
+          )
+            continue;
+          const element = elementForPick(this.#projectRoot, pick);
+          const root = element?.getRootNode();
+          const surfaceSize =
+            root instanceof ShadowRoot
+              ? root.host.getBoundingClientRect()
+              : undefined;
+          if (!element || !surfaceSize?.width || !surfaceSize.height) continue;
+          const box = selectedBox(element);
+          const deltaX = referenceCenter.x - (box.x + box.width / 2);
+          const deltaY = referenceCenter.y - (box.y + box.height / 2);
+          if (Math.hypot(deltaX, deltaY) < 0.01) continue;
+          const base = parsePlayableTranslate(element.style.translate, {
+            width: surfaceSize.width,
+            height: surfaceSize.height,
+          });
+          if (!base) continue;
+          const translate = {
+            x: roundOffset(base.x + (deltaX / surfaceSize.width) * 100),
+            y: roundOffset(base.y + (deltaY / surfaceSize.height) * 100),
+          };
+          const inPlace =
+            element.hasAttribute(PLAYABLE_SOURCE_ATTRIBUTE) &&
+            !overridesTranslate(element);
+          element.style.translate = inPlace
+            ? playableTranslateValue(translate) ?? ""
+            : element.style.translate;
+          handlers.onMove({ pick, translate, inPlace });
+        }
+        placeSelected();
+      },
       refresh: placeSelected,
       delete: (pick) => {
         const key = selectionKey(pick, pick.part);
@@ -1845,6 +2292,17 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     const picking = this.#picking;
     this.#picking = undefined;
     picking?.stop();
+  }
+
+  setPickingLocks(picks: readonly PlayablePickResult[]): void {
+    this.#picking?.setLockedPicks(picks);
+  }
+
+  alignPickedToCenter(
+    reference: PlayablePickResult,
+    targets: readonly PlayablePickResult[],
+  ): void {
+    this.#picking?.alignToCenter(reference, targets);
   }
 
   deletePicked(pick: PlayablePickResult): void {
@@ -2008,6 +2466,13 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       URL.revokeObjectURL(progressPreviewUrl);
       this.#motionAssetUrls.delete(progressPreviewUrl);
     }
+    const progressImagePreviewUrl = element
+      .querySelector<HTMLImageElement>("[data-putenggame-motion-bar]")
+      ?.dataset.previewAssetUrl;
+    if (progressImagePreviewUrl) {
+      URL.revokeObjectURL(progressImagePreviewUrl);
+      this.#motionAssetUrls.delete(progressImagePreviewUrl);
+    }
     progressPreview?.remove();
     this.#motionCleanups.get(element)?.();
     if (command.buttonText !== undefined) {
@@ -2060,6 +2525,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         command.config?.barAssetOffsetY === undefined
           ? undefined
           : String(command.config.barAssetOffsetY),
+      [PLAYABLE_MOTION_ATTRIBUTES.barLayer]: command.config?.barLayer,
       [PLAYABLE_MOTION_ATTRIBUTES.swipeAsset]:
         command.config?.swipeAssetId,
       [PLAYABLE_MOTION_ATTRIBUTES.swipeStyle]: command.config?.swipeStyle,
@@ -2067,6 +2533,24 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         command.config?.swipeBehavior,
       [PLAYABLE_MOTION_ATTRIBUTES.ringFill]: command.config?.ringFill,
       [PLAYABLE_MOTION_ATTRIBUTES.ringRotation]: command.config?.ringRotation,
+      [PLAYABLE_MOTION_ATTRIBUTES.pressEffect]: command.config?.pressEffect,
+      [PLAYABLE_MOTION_ATTRIBUTES.effectColor]: command.config?.effectColor,
+      [PLAYABLE_MOTION_ATTRIBUTES.effectAnchorX]:
+        command.config?.effectAnchorX === undefined
+          ? undefined
+          : String(command.config.effectAnchorX),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectAnchorY]:
+        command.config?.effectAnchorY === undefined
+          ? undefined
+          : String(command.config.effectAnchorY),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectOffsetX]:
+        command.config?.effectOffsetX === undefined
+          ? undefined
+          : String(command.config.effectOffsetX),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectOffsetY]:
+        command.config?.effectOffsetY === undefined
+          ? undefined
+          : String(command.config.effectOffsetY),
       [PLAYABLE_MOTION_ATTRIBUTES.feedback]: command.config?.feedback,
       [PLAYABLE_MOTION_ATTRIBUTES.buttonShape]:
         command.config?.buttonShape,
@@ -2160,6 +2644,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     layer: HTMLElement,
     surface: CompiledPlayableSurface,
     context: Omit<PlayableNodeContext, "root">,
+    onBackdropVideoEnded?: () => void,
   ): Promise<PlayableMountedSurface> {
     const host = this.#document.createElement("div");
     host.dataset.playableSurface = surface.id;
@@ -2171,10 +2656,41 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
 [data-playable-timing-hidden] {
   visibility: hidden !important;
   pointer-events: none !important;
+}
+.playable-settings-subtitle {
+  position: absolute;
+  z-index: 20;
+  right: 8cqw;
+  bottom: 5cqw;
+  left: 8cqw;
+  margin: 0;
+  padding: 0.8cqw 1.4cqw;
+  border-radius: 0.35cqw;
+  background: rgb(0 0 0 / 58%);
+  color: #fff;
+  font: 600 calc(var(--text-line, 2.2cqw) * var(--subtitle-scale, 1)) / 1.45 system-ui, sans-serif;
+  text-align: center;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
 }`;
     const template = this.#document.createElement("template");
     template.innerHTML = surface.html;
     root.append(style, template.content.cloneNode(true));
+    let backdropVideo: HTMLVideoElement | undefined;
+    const attachBackdropVideoEnded = () => {
+      const next = root.querySelector<HTMLVideoElement>(
+        '[data-media="backdrop"] video',
+      );
+      if (next === backdropVideo) return;
+      backdropVideo?.removeEventListener("ended", onBackdropVideoEnded!);
+      backdropVideo = next ?? undefined;
+      if (backdropVideo && onBackdropVideoEnded)
+        backdropVideo.addEventListener("ended", onBackdropVideoEnded);
+    };
+    const backdropObserver = onBackdropVideoEnded
+      ? new MutationObserver(attachBackdropVideoEnded)
+      : undefined;
+    backdropObserver?.observe(root, { childList: true, subtree: true });
     for (const media of root.querySelectorAll<
       HTMLImageElement | HTMLVideoElement
     >("[data-putenggame-asset]")) {
@@ -2200,9 +2716,21 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         throw new Error(
           `Playable surface "${surface.id}" does not export a mount function.`,
         );
+      const playerSettings =
+        context.settings ?? createPlayableSettingsService();
+      const transcription = context.transcription ?? {
+        available: false,
+        async transcribe() {
+          throw new Error(
+            "No subtitle transcription provider is configured.",
+          );
+        },
+      };
       const nodeContext: PlayableNodeContext = {
         ...context,
         root,
+        settings: playerSettings,
+        transcription,
         navigation: {
           ...context.navigation,
           fail: (signal) => {
@@ -2232,6 +2760,12 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           this.#resumeSurface(host, root, stage);
       };
       const stage = this.#stage(root);
+      const onMotionTimingUpdate = () => this.#updateTimedVisibility();
+      root.addEventListener(
+        PLAYABLE_MOTION_TIMING_UPDATE_EVENT,
+        onMotionTimingUpdate,
+        true,
+      );
       for (const type of ["pointerdown", "keydown", "click"])
         root.addEventListener(type, unlockOnInput, true);
       if (stage?.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.noInputMode) === "wait")
@@ -2240,6 +2774,68 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         stage.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.continueWithoutInput, "true");
       const cleanup = await module.mount(nodeContext);
       this.#motionContextsBySurface.set(surface.id, nodeContext);
+      const subtitle = this.#document.createElement("p");
+      subtitle.className = "playable-settings-subtitle";
+      subtitle.dataset.playerSubtitle = "true";
+      subtitle.setAttribute("aria-live", "polite");
+      subtitle.hidden = true;
+      if (stage) stage.append(subtitle);
+      const settingsVideo = root.querySelector<HTMLVideoElement>(
+        '[data-media="backdrop"] video',
+      );
+      const updatePlayerSettings = () => {
+        const settings = playerSettings.get();
+        for (const hint of root.querySelectorAll<HTMLElement>(
+          "[data-playable-hint], .continue-hint",
+        ))
+          hint.hidden = !settings.messageHints;
+        host.style.filter =
+          settings.brightness === 100
+            ? ""
+            : `brightness(${settings.brightness}%)`;
+        subtitle.style.setProperty(
+          "--subtitle-scale",
+          String(settings.subtitleFontSize / 100),
+        );
+        if (settingsVideo) {
+          settingsVideo.volume = settings.videoVolume;
+          settingsVideo.muted = settings.videoVolume === 0;
+        }
+        for (const media of root.querySelectorAll<
+          HTMLAudioElement | HTMLVideoElement
+        >("[data-playable-audio]")) {
+          const role = media.dataset.playableAudio;
+          if (role === "music") {
+            media.volume = settings.musicVolume;
+            media.muted =
+              !settings.musicEnabled || settings.musicVolume === 0;
+          } else if (role === "ui") {
+            media.volume = settings.uiSoundVolume;
+            media.muted =
+              !settings.uiSoundEnabled || settings.uiSoundVolume === 0;
+          }
+        }
+        const backdropAssetId = root
+          .querySelector<HTMLElement>('[data-media="backdrop"]')
+          ?.getAttribute("data-asset");
+        const time = settingsVideo?.currentTime ?? 0;
+        const cue = settings.subtitlesEnabled
+          ? settings.subtitleCues.find(
+              (item) =>
+                (!item.assetId || item.assetId === backdropAssetId) &&
+                time >= item.startSeconds &&
+                time < item.endSeconds,
+            )
+          : undefined;
+        subtitle.textContent = cue?.text ?? "";
+        subtitle.hidden = !cue?.text;
+      };
+      const unsubscribeSettings = playerSettings.subscribe(
+        updatePlayerSettings,
+      );
+      settingsVideo?.addEventListener("timeupdate", updatePlayerSettings);
+      settingsVideo?.addEventListener("seeked", updatePlayerSettings);
+      updatePlayerSettings();
       const buttonPresetElements = [
         ...root.querySelectorAll<HTMLElement>(
           "[data-putenggame-button-preset]",
@@ -2250,26 +2846,40 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           element,
           this.#bindButtonPreset(element, nodeContext),
         );
-      const motionCleanups: (() => void)[] = [];
       for (const element of root.querySelectorAll<HTMLElement>(
         `[${PLAYABLE_MOTION_ATTRIBUTES.kind}], [${PLAYABLE_MOTION_ATTRIBUTES.asset}], [${PLAYABLE_MOTION_ATTRIBUTES.pressedAsset}]`,
       )) {
         this.#motionContexts.set(element, nodeContext);
         const cleanup = mountPlayableMotionElement(element, nodeContext);
         this.#motionCleanups.set(element, cleanup);
-        motionCleanups.push(cleanup);
       }
       if (stage?.hasAttribute("data-putenggame-awaiting-input"))
         this.#pauseSurface(host, root);
       this.#observeMedia(root);
+      attachBackdropVideoEnded();
       return {
         cleanup: async () => {
+          backdropObserver?.disconnect();
+          if (backdropVideo && onBackdropVideoEnded)
+            backdropVideo.removeEventListener("ended", onBackdropVideoEnded);
           for (const type of ["pointerdown", "keydown", "click"])
             root.removeEventListener(type, unlockOnInput, true);
-          motionCleanups.forEach((cleanup) => cleanup());
+          root.removeEventListener(
+            PLAYABLE_MOTION_TIMING_UPDATE_EVENT,
+            onMotionTimingUpdate,
+            true,
+          );
+          unsubscribeSettings();
+          settingsVideo?.removeEventListener(
+            "timeupdate",
+            updatePlayerSettings,
+          );
+          settingsVideo?.removeEventListener("seeked", updatePlayerSettings);
+          subtitle.remove();
           for (const element of root.querySelectorAll<HTMLElement>(
             `[${PLAYABLE_MOTION_ATTRIBUTES.kind}], [${PLAYABLE_MOTION_ATTRIBUTES.asset}], [${PLAYABLE_MOTION_ATTRIBUTES.pressedAsset}]`,
           )) {
+            this.#motionCleanups.get(element)?.();
             this.#motionContexts.delete(element);
             this.#motionCleanups.delete(element);
           }
@@ -2335,7 +2945,6 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         }),
       );
     }
-    for (const video of root.querySelectorAll("video")) video.pause();
     const paused = this.#pausedAnimations.get(host) ?? [];
     for (const animation of root.getAnimations()) {
       if (animation.playState !== "running") continue;
@@ -2389,6 +2998,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     element: HTMLElement,
     context: PlayableNodeContext,
   ): () => void {
+    element.style.setProperty("transform-origin", "50% 50%", "important");
     const click = () => {
       if (
         element.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.buttonAction) ===
@@ -2555,7 +3165,9 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
         }
         const hidden =
           currentTime < appearAt ||
-          (disappearAt !== undefined && currentTime >= disappearAt) ||
+          (disappearAt !== undefined &&
+            currentTime >= disappearAt &&
+            !element.hasAttribute(PLAYABLE_MOTION_HOLDING_ATTRIBUTE)) ||
           (disappearAt !== undefined && disappearAt <= appearAt);
         element.toggleAttribute("data-playable-timing-hidden", hidden);
       }
@@ -2579,11 +3191,42 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       this.#mediaListener?.({ currentTime: 0, duration: 0, paused: true });
       return;
     }
+    const backdrop = video.closest<HTMLElement>('[data-media="backdrop"]');
     this.#mediaListener?.({
       currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
       duration: Number.isFinite(video.duration) ? video.duration : 0,
       paused: video.paused,
+      ...(backdrop?.dataset.asset ? { backdropAssetId: backdrop.dataset.asset } : {}),
     });
+  }
+}
+
+function buttonImageDataUrl(
+  button: HTMLButtonElement,
+  selector?: string,
+): string | undefined {
+  const image = selector
+    ? button.querySelector<HTMLImageElement>(selector)
+    : button.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-asset-image] img",
+      ) ??
+      [...button.querySelectorAll<HTMLImageElement>("img")].find(
+        (candidate) =>
+          !candidate.closest("[data-putenggame-button-pressed-image]"),
+      );
+  if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return;
+  try {
+    const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = button.ownerDocument.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/png");
+    return dataUrl.length <= 524288 ? dataUrl : undefined;
+  } catch {
+    return;
   }
 }
 
@@ -3080,17 +3723,59 @@ function hasSourceChild(
   );
 }
 
+function elementForPick(
+  projectRoot: HTMLElement,
+  pick: PlayablePickResult,
+): HTMLElement | undefined {
+  const surface = Array.from(
+    projectRoot.querySelectorAll<HTMLElement>("[data-playable-surface]"),
+  ).find((candidate) => candidate.dataset.playableSurface === pick.nodeId);
+  if (!surface?.shadowRoot) return;
+  try {
+    const element = surface.shadowRoot.querySelector<HTMLElement>(pick.cssPath);
+    return element && element.tagName.toLowerCase() === pick.tag
+      ? element
+      : undefined;
+  } catch {
+    return;
+  }
+}
+
 function pickForElement(element: HTMLElement): PlayablePickResult | undefined {
   const pick = describePlayablePick(elementPath(element));
-  const fontFamily = element.ownerDocument.defaultView
-    ?.getComputedStyle(element)
-    .fontFamily.split(",")[0]
+  const computed = element.ownerDocument.defaultView?.getComputedStyle(element);
+  const fontFamily = computed?.fontFamily
+    .split(",")[0]
     ?.trim()
     .replace(/^['"]|['"]$/g, "");
+  const [scaleX, scaleY] = parseScaleAxes(
+    element.style.scale || computed?.scale || "1",
+  );
+  const assetScales = element.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset)
+    ? playableButtonAssetScales(element)
+    : { x: 100, y: 100 };
+  const transformScale =
+    (scaleX / (assetScales.x / 100) +
+      scaleY / (assetScales.y / 100)) /
+    2;
+  const origin =
+    element.hasAttribute("data-putenggame-button-preset")
+      ? { x: 50, y: 50 }
+      : parseTransformOrigin(
+          computed?.transformOrigin ?? "50% 50%",
+          element.offsetWidth,
+          element.offsetHeight,
+        );
   return pick
     ? {
         ...pick,
         box: selectedBox(element),
+        transformScale,
+        transformRotation: parsePlayableRotation(
+          element.style.rotate || computed?.rotate || "none",
+        ),
+        transformOriginX: origin.x,
+        transformOriginY: origin.y,
         ...(fontFamily ? { fontFamily } : {}),
       }
     : undefined;
@@ -3281,6 +3966,7 @@ function overridesTranslate(element: Element): boolean {
 
 function overridesTransform(element: Element): boolean {
   return element.getAnimations().some((animation) => {
+    if (animation.id === PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID) return false;
     const effect = animation.effect;
     if (
       "transitionProperty" in animation ||
@@ -3364,6 +4050,8 @@ function parseOptionalTimingSeconds(value: string): number | undefined {
 }
 
 const BLOCKED_PICK_EVENTS = [
+  "pointerenter",
+  "pointerleave",
   "mousedown",
   "mouseup",
   "dblclick",

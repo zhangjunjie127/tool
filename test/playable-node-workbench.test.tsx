@@ -3,7 +3,8 @@ import path from "node:path";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { translateText } from "../src/renderer/i18n.js";
+import { t, translateText } from "../src/renderer/i18n.js";
+import { interactionTimingEditsAreUnchanged } from "../src/shared/playable-move.js";
 import type {
   NodePlayerDefinition,
   PlayableInteractionSelection,
@@ -44,8 +45,15 @@ vi.doMock(path.resolve("src/renderer/browser-library-folders.ts"), async (origin
   browserLibraryFolderNames: vi.fn(async () => ({})),
 }));
 
-const { MediaMenu, PreviewToolbar, defaultPickerCategory, useMediaChooser, usePlayablePreviewRuntime } =
-  await import("../src/renderer/playable-node-workbench.js");
+const {
+  AlignmentGuides,
+  MediaMenu,
+  PreviewToolbar,
+  defaultPickerCategory,
+  useMediaChooser,
+  usePlayablePreviewRuntime,
+  withPlayablePreviewRefreshSkip,
+} = await import("../src/renderer/playable-node-workbench.js");
 const { LibraryAssetPicker, WorkbenchPreview, uploadLibraryFiles } =
   await import("../src/renderer/node-workbench.js");
 const { LibrarySourceFoldersControl } =
@@ -239,7 +247,12 @@ function Probe({
   revision: number;
   skip: { current: number };
 }) {
-  const runtime = usePlayablePreviewRuntime("project", revision, skip);
+  const runtime = usePlayablePreviewRuntime(
+    "project",
+    definition.graph.entryNodeId,
+    revision,
+    skip,
+  );
   return <output>{runtime.definition?.graph.title ?? "loading"}</output>;
 }
 
@@ -264,6 +277,77 @@ afterEach(async () => {
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("drags alignment guides in viewport coordinates and supports keyboard nudging", async () => {
+  const onChange = vi.fn();
+  const onSelectGuide = vi.fn();
+  const guide = { id: "guide-1", axis: "horizontal" as const, position: 0.5 };
+  await act(async () =>
+    root.render(
+      <AlignmentGuides
+        viewport={{ width: 1280, height: 720 }}
+        guides={[guide]}
+        onChange={onChange}
+        onSelectGuide={onSelectGuide}
+      />,
+    ),
+  );
+  const svg = container.querySelector("svg")!;
+  vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({
+    left: 10,
+    top: 20,
+    right: 210,
+    bottom: 120,
+    width: 200,
+    height: 100,
+  } as DOMRect);
+  const handle = container.querySelector('[role="slider"]')!;
+  await act(async () => {
+    handle.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: 100,
+        clientY: 70,
+      }),
+    );
+  });
+  await act(async () => {
+    svg.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        pointerId: 1,
+        clientX: 100,
+        clientY: 45,
+      }),
+    );
+  });
+  expect(container.querySelector(".playable-alignment-guide-line")?.getAttribute("y1")).toBe("180");
+  await act(async () =>
+    svg.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        pointerId: 1,
+        clientX: 100,
+        clientY: 45,
+      }),
+    ),
+  );
+  expect(onChange).toHaveBeenLastCalledWith([
+    { ...guide, position: 0.25 },
+  ]);
+  expect(onSelectGuide).toHaveBeenCalledWith("guide-1");
+
+  await act(async () =>
+    handle.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    ),
+  );
+  expect(onChange).toHaveBeenLastCalledWith([
+    { ...guide, position: 0.51 },
+  ]);
 });
 
 it("refreshes local assets while the scene asset picker remains open", async () => {
@@ -391,6 +475,27 @@ it("shows only video and image local-folder settings in the scene picker", async
       ?.click(),
   );
   expect(onChoose).toHaveBeenCalledExactlyOnceWith("video");
+});
+
+it("refreshes selected local folders from the compact picker control", async () => {
+  const onRefresh = vi.fn(async () => {});
+  await act(async () =>
+    root.render(
+      <LibrarySourceFoldersControl
+        compact
+        folders={{ video: "C:/videos" }}
+        onChoose={vi.fn()}
+        onClear={vi.fn()}
+        onRefresh={onRefresh}
+      />,
+    ),
+  );
+  const refresh = container.querySelector<HTMLButtonElement>(".library-folder-refresh");
+  expect(refresh).not.toBeNull();
+  expect(refresh?.disabled).toBe(false);
+  await act(async () => refresh?.click());
+  expect(onRefresh).toHaveBeenCalledExactlyOnceWith();
+  expect(container.querySelector(".library-folder-trigger")).not.toBeNull();
 });
 
 it("hides the redundant filter in the inline scene picker and keeps it in Library dialogs", async () => {
@@ -538,6 +643,61 @@ it("skips each consecutive source-save revision without reloading the preview", 
   expect(getNodeRuntime).toHaveBeenCalledTimes(2);
 });
 
+it("consumes batched source-save skips without hiding the next external refresh", async () => {
+  const skip = { current: 0 };
+  await act(async () => root.render(<Probe revision={0} skip={skip} />));
+  expect(getNodeRuntime).toHaveBeenCalledTimes(1);
+
+  // Deleting multiple selected items saves each source edit, but React may
+  // render the accumulated revision changes only once.
+  skip.current = 2;
+  await act(async () => root.render(<Probe revision={2} skip={skip} />));
+  expect(getNodeRuntime).toHaveBeenCalledTimes(1);
+  expect(skip.current).toBe(0);
+
+  await act(async () => root.render(<Probe revision={3} skip={skip} />));
+  expect(getNodeRuntime).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the preview running across every save in one composite button edit", async () => {
+  const skip = { current: 0 };
+  await act(async () => root.render(<Probe revision={0} skip={skip} />));
+  expect(getNodeRuntime).toHaveBeenCalledTimes(1);
+
+  const writes = [
+    vi.fn(async () => true),
+    vi.fn(async () => true),
+    vi.fn(async () => true),
+  ];
+  for (const write of writes)
+    await withPlayablePreviewRefreshSkip(skip, write, Boolean);
+  expect(writes.map((write) => write.mock.calls.length)).toEqual([1, 1, 1]);
+
+  expect(skip.current).toBe(3);
+  await act(async () => root.render(<Probe revision={3} skip={skip} />));
+  expect(getNodeRuntime).toHaveBeenCalledTimes(1);
+  expect(skip.current).toBe(0);
+});
+
+it("releases a preview-refresh skip when an element save fails", async () => {
+  const skip = { current: 0 };
+  await expect(
+    withPlayablePreviewRefreshSkip(skip, async () => false, Boolean),
+  ).resolves.toBe(false);
+  expect(skip.current).toBe(0);
+
+  await expect(
+    withPlayablePreviewRefreshSkip(
+      skip,
+      async () => {
+        throw new Error("save failed");
+      },
+      Boolean,
+    ),
+  ).rejects.toThrow("save failed");
+  expect(skip.current).toBe(0);
+});
+
 it("places the open asset picker beside the inspector instead of inside it", async () => {
   await act(async () =>
     root.render(
@@ -568,6 +728,277 @@ it("places the open asset picker beside the inspector instead of inside it", asy
   const inspector = container.querySelector(".playable-preview-inspector");
   expect(libraryColumn?.contains(picker)).toBe(true);
   expect(inspector?.contains(picker)).toBe(false);
+});
+
+it("keeps the scene tools in a visible vertical list with accessible controls", async () => {
+  const reference = {
+    nodeId: "start",
+    source: "nodes/start/index.html:1:1",
+    cssPath: "button#reference",
+    tag: "button",
+    text: "Reference",
+    box: { x: 10, y: 20, width: 100, height: 40 },
+  };
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={1}
+        selectedPicks={[reference]}
+        motionSelection={reference}
+        referencePicks={[reference]}
+        referencePickKey="reference"
+        motionSignals={[]}
+        mediaState={{ currentTime: 0, duration: 0, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  const toolButtons = container.querySelectorAll(
+    ".playable-preview-tool-buttons button",
+  );
+  expect(toolButtons).toHaveLength(4);
+  expect(
+    [...toolButtons].every(
+      (button) => button.getAttribute("aria-label") && !button.textContent?.trim(),
+    ),
+  ).toBe(true);
+  const groups = container.querySelectorAll<HTMLElement>(
+    ".playable-preview-tool-group",
+  );
+  expect(groups).toHaveLength(2);
+  expect(container.querySelectorAll(".playable-preview-tool-group details")).toHaveLength(0);
+  expect(
+    container.querySelectorAll(".playable-preview-guide-tools button"),
+  ).toHaveLength(4);
+  const horizontalGuideIcon = container.querySelector(
+    '.playable-preview-guide-tools button[aria-label="添加横向辅助线"] svg',
+  );
+  const verticalGuideIcon = container.querySelector(
+    '.playable-preview-guide-tools button[aria-label="添加纵向辅助线"] svg',
+  );
+  expect(horizontalGuideIcon?.querySelectorAll("line")).toHaveLength(3);
+  expect(verticalGuideIcon?.querySelectorAll("line")).toHaveLength(3);
+  expect(horizontalGuideIcon?.querySelector("line")?.getAttribute("y1")).toBe(
+    horizontalGuideIcon?.querySelector("line")?.getAttribute("y2"),
+  );
+  expect(verticalGuideIcon?.querySelector("line")?.getAttribute("x1")).toBe(
+    verticalGuideIcon?.querySelector("line")?.getAttribute("x2"),
+  );
+  expect(
+    container.querySelector(
+      '.playable-preview-alignment-tools select[aria-label="参考按钮"]',
+    ),
+  ).not.toBeNull();
+  expect(
+    container.querySelector(
+      '.playable-preview-alignment-tools button[aria-label="选中按钮中心对齐"]',
+    ),
+  ).not.toBeNull();
+  expect(
+    container.querySelector(
+      '.playable-preview-alignment-tools button[aria-label="取消参考锁定"]',
+    ),
+  ).not.toBeNull();
+});
+
+it("switches preview tools and toggles video playback before the preview is ready", async () => {
+  const onTool = vi.fn();
+  const onMediaCommand = vi.fn();
+  const renderToolbar = async (paused: boolean) =>
+    act(async () =>
+      root.render(
+        <PreviewToolbar
+          tool="select"
+          disabled
+          strokes={0}
+          picks={0}
+          motionSignals={[]}
+          mediaState={{ currentTime: 0, duration: 30, paused }}
+          onMediaCommand={onMediaCommand}
+          fonts={[]}
+          onTextStyle={vi.fn()}
+          onInteractionTiming={vi.fn()}
+          onApplyMotion={vi.fn(async () => {})}
+          onTool={onTool}
+          onUndoStroke={vi.fn()}
+          onClearStrokes={vi.fn()}
+        />,
+      ),
+    );
+  await renderToolbar(true);
+
+  expect(container.querySelector(".playable-preview-tool-buttons kbd")).toBeNull();
+  expect(container.querySelector(".playable-preview-shortcut-hint")).toBeNull();
+
+  const focusedButton = document.createElement("button");
+  document.body.append(focusedButton);
+  focusedButton.focus();
+  const focusedSpaceEvent = new KeyboardEvent("keydown", {
+    key: " ",
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => focusedButton.dispatchEvent(focusedSpaceEvent));
+  expect(onMediaCommand).toHaveBeenLastCalledWith({ command: "play" });
+  expect(focusedSpaceEvent.defaultPrevented).toBe(true);
+  await renderToolbar(false);
+  const focusedPauseEvent = new KeyboardEvent("keydown", {
+    key: " ",
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => focusedButton.dispatchEvent(focusedPauseEvent));
+  expect(onMediaCommand).toHaveBeenLastCalledWith({ command: "pause" });
+  expect(focusedPauseEvent.defaultPrevented).toBe(true);
+  focusedButton.remove();
+
+  for (const [key, tool] of [
+    ["s", "select"],
+    ["t", "text"],
+    ["m", "move"],
+    ["d", "draw"],
+  ] as const) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => window.dispatchEvent(event));
+    expect(onTool).toHaveBeenLastCalledWith(tool);
+    expect(event.defaultPrevented).toBe(true);
+  }
+
+  const input = document.createElement("input");
+  document.body.append(input);
+  const typingEvent = new KeyboardEvent("keydown", {
+    key: "t",
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => input.dispatchEvent(typingEvent));
+  expect(onTool).toHaveBeenCalledTimes(6);
+  expect(typingEvent.defaultPrevented).toBe(false);
+  input.remove();
+
+  const playEvent = new KeyboardEvent("keydown", {
+    key: " ",
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => window.dispatchEvent(playEvent));
+  expect(onTool).toHaveBeenLastCalledWith("play");
+  expect(onMediaCommand).toHaveBeenLastCalledWith({ command: "pause" });
+  expect(playEvent.defaultPrevented).toBe(true);
+});
+
+it("routes undo and redo to brush strokes before scene history", async () => {
+  const onUndoStroke = vi.fn();
+  const onRedoStroke = vi.fn();
+  const onHistoryCommand = vi.fn();
+  const renderToolbar = (strokes: number, redoStrokes: number) =>
+    act(async () =>
+      root.render(
+        <PreviewToolbar
+          tool="draw"
+          disabled={false}
+          strokes={strokes}
+          redoStrokes={redoStrokes}
+          picks={0}
+          motionSignals={[]}
+          mediaState={{ currentTime: 0, duration: 0, paused: true }}
+          onMediaCommand={vi.fn()}
+          fonts={[]}
+          onTextStyle={vi.fn()}
+          onInteractionTiming={vi.fn()}
+          onApplyMotion={vi.fn(async () => {})}
+          onTool={vi.fn()}
+          onUndoStroke={onUndoStroke}
+          onRedoStroke={onRedoStroke}
+          onClearStrokes={vi.fn()}
+          onHistoryCommand={onHistoryCommand}
+        />,
+      ),
+    );
+  await renderToolbar(1, 0);
+
+  const undoStroke = new KeyboardEvent("keydown", {
+    key: "z",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => window.dispatchEvent(undoStroke));
+  expect(undoStroke.defaultPrevented).toBe(true);
+  expect(onUndoStroke).toHaveBeenCalledOnce();
+  expect(onHistoryCommand).not.toHaveBeenCalled();
+
+  await renderToolbar(0, 1);
+  const redoStroke = new KeyboardEvent("keydown", {
+    key: "z",
+    ctrlKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => window.dispatchEvent(redoStroke));
+  expect(redoStroke.defaultPrevented).toBe(true);
+  expect(onRedoStroke).toHaveBeenCalledOnce();
+
+  await renderToolbar(0, 0);
+  const undoScene = new KeyboardEvent("keydown", {
+    key: "z",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => window.dispatchEvent(undoScene));
+  expect(onHistoryCommand).toHaveBeenCalledWith("undo");
+});
+
+it("offers library replacement for a selected game settings button", async () => {
+  const onChooseSettingsButtonIcon = vi.fn();
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        redoStrokes={0}
+        picks={0}
+        motionSignals={[]}
+        settingsButtonSelected
+        onChooseSettingsButtonIcon={onChooseSettingsButtonIcon}
+        mediaState={{ currentTime: 0, duration: 0, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onRedoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  const chooseIcon = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${t("playableWorkbench.chooseSettingsButtonIcon")}"]`,
+  );
+  expect(chooseIcon).not.toBeNull();
+  await act(async () => chooseIcon?.click());
+  expect(onChooseSettingsButtonIcon).toHaveBeenCalledOnce();
 });
 
 it("groups selected text style controls in a separate settings panel", async () => {
@@ -745,6 +1176,74 @@ it("keeps a disappearance-time draft editable until the full value is committed"
   expect(onInteractionTiming).toHaveBeenCalledWith("both", 12.5, 20);
 });
 
+it("does not submit unchanged timing fields when they lose focus", async () => {
+  const onInteractionTiming = vi.fn();
+  const selection: PlayableInteractionSelection = {
+    pick: {
+      nodeId: "start",
+      source: "nodes/start/index.html:1:1",
+      cssPath: "div",
+      tag: "div",
+      text: "Choice",
+      box: { x: 0, y: 0, width: 100, height: 40 },
+    },
+    delaySeconds: 10,
+    inPlace: true,
+  };
+
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={1}
+        interactionSelection={selection}
+        motionSelection={selection.pick}
+        motionSignals={[]}
+        mediaState={{ currentTime: 0, duration: 30, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={onInteractionTiming}
+        onApplyMotion={vi.fn(async () => {})}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  for (const input of container.querySelectorAll<HTMLInputElement>(
+    ".playable-preview-motion-timing input",
+  ))
+    await act(async () =>
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })),
+    );
+
+  expect(onInteractionTiming).not.toHaveBeenCalled();
+});
+
+it("treats unchanged appearance times as a successful no-op", () => {
+  const current = [
+    { delaySeconds: 0 },
+    { delaySeconds: 10, endSeconds: 12 },
+  ];
+
+  expect(
+    interactionTimingEditsAreUnchanged(current, [
+      { delaySeconds: 0 },
+      { delaySeconds: 10, endSeconds: 12 },
+    ]),
+  ).toBe(true);
+  expect(
+    interactionTimingEditsAreUnchanged(current, [
+      { delaySeconds: 0 },
+      { delaySeconds: 10, endSeconds: 13 },
+    ]),
+  ).toBe(false);
+});
+
 it("offers motion presets and applies the chosen interaction mode", async () => {
   const onApplyMotion = vi.fn(async () => {});
   const selection = {
@@ -785,8 +1284,8 @@ it("offers motion presets and applies the chosen interaction mode", async () => 
 
   expect(container.querySelector(".playable-preview-motion-library")).not.toBeNull();
   expect(container.textContent).toContain("倒计时按键");
-  expect(container.textContent).toContain("圆环倒计时按键");
-  expect(container.textContent).toContain("进度条按键");
+  expect(container.textContent).not.toContain("圆环倒计时按键");
+  expect(container.textContent).not.toContain("进度条按键");
   expect(container.textContent).toContain("长按蓄力按键");
   expect(container.textContent).toContain("点击按键");
   expect(container.textContent).not.toContain("Hover and press feedback");
@@ -795,8 +1294,23 @@ it("offers motion presets and applies the chosen interaction mode", async () => 
       'select[aria-label="按键预设"] option[value="builtin:button-feedback"]',
     ),
   ).not.toBeNull();
+  expect(
+    container.querySelector(
+      'select[aria-label="按键预设"] option[value="builtin:button-feedback-prompt:rectangle"]',
+    )?.textContent,
+  ).toBe("提示点击按键（长方形）");
+  expect(
+    container.querySelector(
+      'select[aria-label="按键预设"] option[value="builtin:button-feedback-prompt:circle"]',
+    )?.textContent,
+  ).toBe("提示点击按键（圆形）");
   expect(container.querySelector('[aria-label="Animation type"]')).toBeNull();
   expect(container.querySelector('[aria-label="Button feedback"]')).toBeNull();
+  expect(
+    container.querySelector(
+      'select[aria-label="按键预设"] option[value="builtin:swipe-button:circle:disappear"]',
+    )?.textContent,
+  ).toBe("滑动消失");
 
   const choose = async (selector: string, value: string) => {
     const control = container.querySelector<HTMLSelectElement | HTMLInputElement>(
@@ -825,9 +1339,26 @@ it("offers motion presets and applies the chosen interaction mode", async () => 
       kind: "hold-charge",
       mode: "interactive",
       duration: 4,
-      feedback: "hover-press",
+      feedback: "bounce-hover-press",
       signal: "success",
       timeoutSignal: "timeout",
+    }),
+    true,
+  );
+
+  await choose(
+    'select[aria-label="按键预设"]',
+    "builtin:swipe-button:circle:disappear",
+  );
+  await act(async () => apply.click());
+  expect(onApplyMotion).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "swipe-button",
+      buttonShape: "circle",
+      swipeStyle: "floating",
+      disappearAfterSwipe: true,
+      interaction: "swipe-left",
+      signal: "success",
     }),
     true,
   );
@@ -835,9 +1366,11 @@ it("offers motion presets and applies the chosen interaction mode", async () => 
 
 it("keeps scene settings and button presets visible outside the Select tool", async () => {
   const onChoose = vi.fn();
+  const onChooseSettingsButtonIcon = vi.fn();
   const onBackdropLoopChange = vi.fn();
   const onPictureInPictureVideoLoopChange = vi.fn();
   const onNoInputModeChange = vi.fn();
+  const onVideoEndAutoAdvanceChange = vi.fn();
   await act(async () =>
     root.render(
       <PreviewToolbar
@@ -866,13 +1399,17 @@ it("keeps scene settings and button presets visible outside the Select tool", as
             backdropLoop={false}
             pictureInPictureVideoLoop
             noInputMode={undefined}
+            canEnableVideoEndAutoAdvance={false}
+            videoEndAutoAdvance={false}
             onChoose={onChoose}
+            onChooseSettingsButtonIcon={onChooseSettingsButtonIcon}
             onRemoveBackdrop={vi.fn()}
             onBackdropLoopChange={onBackdropLoopChange}
             onPictureInPictureVideoLoopChange={
               onPictureInPictureVideoLoopChange
             }
             onNoInputModeChange={onNoInputModeChange}
+            onVideoEndAutoAdvanceChange={onVideoEndAutoAdvanceChange}
           />
         }
       />,
@@ -884,6 +1421,12 @@ it("keeps scene settings and button presets visible outside the Select tool", as
   expect(container.querySelector(".playable-preview-inspector > .playable-preview-panel-title")).toBeNull();
   expect(container.querySelector(".playable-preview-media")?.getAttribute("aria-label")).toBe("场景设置");
   expect(container.querySelector(".playable-preview-media")?.textContent).toContain("场景设置");
+  const chooseSettingsButtonIcon = [
+    ...container.querySelectorAll<HTMLButtonElement>(".playable-preview-media button"),
+  ].find((button) => button.textContent?.includes("从素材库选择设置按钮图标"));
+  expect(chooseSettingsButtonIcon).toBeDefined();
+  await act(async () => chooseSettingsButtonIcon?.click());
+  expect(onChooseSettingsButtonIcon).toHaveBeenCalledOnce();
   expect(
     [...container.querySelectorAll(".playable-preview-secondary-text")].map(
       (item) => item.textContent,
@@ -891,9 +1434,27 @@ it("keeps scene settings and button presets visible outside the Select tool", as
   ).toEqual(["（背景视频）", "（画中画）", "（秒）"]);
   expect(container.querySelector('[aria-label="互动方式"]')?.textContent).toContain("无需操作播放");
   expect(container.querySelector('[aria-label="互动方式"]')?.textContent).toContain("等待操作播放");
+  const videoEndAutoAdvance = container.querySelector<HTMLInputElement>(
+    'input[type="checkbox"]',
+  );
+  expect(
+    videoEndAutoAdvance?.parentElement?.classList.contains(
+      "playable-video-end-auto-advance",
+    ),
+  ).toBe(true);
+  expect(videoEndAutoAdvance?.disabled).toBe(false);
+  expect(videoEndAutoAdvance?.parentElement?.textContent).toContain(
+    "视频播完后自动跳转",
+  );
+  await act(async () =>
+    container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(),
+  );
+  expect(onVideoEndAutoAdvanceChange).toHaveBeenCalledWith(true);
   expect(container.querySelector(".playable-preview-motion-library")?.getAttribute("aria-label")).toBe(translateText("Button settings", "zh-CN"));
   expect(container.querySelector(".playable-preview-motion-library")?.textContent).toContain("按键设置");
   expect(container.querySelector(".playable-preview-tool-buttons")).not.toBeNull();
+  expect(container.querySelector(".playable-preview-tool-buttons kbd")).toBeNull();
+  expect(container.querySelector(".playable-preview-shortcut-hint")).toBeNull();
   expect(container.textContent).not.toContain("添加参考视频/图片");
   const clickLabel = async (label: string) => {
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")]
@@ -1172,10 +1733,31 @@ it("stages a button feedback preset until it is applied to the selection", async
   ).toBeNull();
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(preset, "builtin:button-feedback-prompt:circle");
+    preset.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        ".playable-preview-motion-apply-button",
+      )
+      ?.click(),
+  );
+  expect(onApplyMotion).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "button-feedback",
+      mode: "visual",
+      buttonShape: "circle",
+      feedback: "idle-pulse-hover-press",
+    }),
+    true,
+  );
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
       .set!.call(preset, "builtin:button-feedback-bounce");
     preset.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  expect(onApplyMotion).toHaveBeenCalledTimes(1);
+  expect(onApplyMotion).toHaveBeenCalledTimes(2);
   await act(async () =>
     container
       .querySelector<HTMLButtonElement>(
@@ -1259,32 +1841,66 @@ it("lets button base and progress bar images be selected independently", async (
   expect(onChooseMotionBase).toHaveBeenCalledOnce();
   expect(onChooseMotionBar).toHaveBeenCalledOnce();
   expect(onChooseButtonPressed).toHaveBeenCalledOnce();
-  const preset = container.querySelector<HTMLSelectElement>(
-    'select[aria-label="按键预设"]',
-  )!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
-      .set!.call(preset, "builtin:progress-bar");
-    preset.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  expect(
+    container.querySelector(
+      'select[aria-label="按键预设"] option[value="builtin:progress-bar"]',
+    ),
+  ).toBeNull();
   expect(onAddButtonPreset).not.toHaveBeenCalled();
+});
+
+it("passes the edited progress image placement to its replacement picker", async () => {
+  const onChooseMotionBar = vi.fn();
   await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={1}
+        motionSelection={{
+          nodeId: "start",
+          source: "nodes/start/index.html:1:1",
+          cssPath: "button.choice",
+          tag: "button",
+          text: "",
+          box: { x: 0, y: 0, width: 120, height: 48 },
+          motion: {
+            kind: "hold-charge",
+            mode: "interactive",
+            duration: 4,
+            buttonShape: "circle",
+            barAssetId: "bar-image",
+            barAssetScale: 163,
+            barAssetOffsetX: 14,
+            barAssetOffsetY: -9,
+          },
+        }}
+        motionSignals={[]}
+        mediaState={{ currentTime: 0, duration: 30, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onChooseMotionBar={onChooseMotionBar}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  await act(async () => {
     [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.includes("确定添加"))
-      ?.click(),
-  );
-  expect(onAddButtonPreset).toHaveBeenCalledWith(
-    expect.objectContaining({
-      kind: "progress-bar",
-      barAssetId: "bar-image",
-    }),
-    "base-image",
-    false,
-    undefined,
-    "pressed-image",
-    "进度条",
-    undefined,
-  );
+      .find(
+        (button) =>
+          button.getAttribute("aria-label") ===
+          translateText("Replace progress bar image", "zh-CN"),
+      )
+      ?.click();
+  });
+  expect(onChooseMotionBar).toHaveBeenCalledWith(163, 14, -9, true, "top");
 });
 
 it("edits a selected button's label without overriding its preset shape", async () => {
@@ -1394,6 +2010,22 @@ it("edits a selected button's label without overriding its preset shape", async 
     route.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(onWriteButtonSignal).not.toHaveBeenCalled();
+  const pressEffect = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="按下特效"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(pressEffect, "green-particle-burst");
+    pressEffect.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const effectColor = container.querySelector<HTMLInputElement>(
+    'input[type="color"][aria-label="特效颜色"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+      .set!.call(effectColor, "#fe4120");
+    effectColor.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   const applyButton = container.querySelector<HTMLButtonElement>(
     ".playable-preview-motion-apply-button",
   )!;
@@ -1403,7 +2035,11 @@ it("edits a selected button's label without overriding its preset shape", async 
   expect(onEditButtonFont).toHaveBeenCalledWith(selection, "Microsoft YaHei");
   expect(onWriteButtonSignal).toHaveBeenCalledWith(selection, "retry");
   expect(onApplyMotion).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "button-feedback" }),
+    expect.objectContaining({
+      kind: "button-feedback",
+      pressEffect: "green-particle-burst",
+      effectColor: "#fe4120",
+    }),
     true,
     "Start",
   );
@@ -1538,6 +2174,13 @@ it("resizes or removes the selected progress image without removing its motion",
       />,
     ),
   );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="进度条移至底层"]',
+      )
+      ?.click(),
+  );
   const size = container.querySelector<HTMLInputElement>(
     '[aria-label="进度图片大小"]',
   )!;
@@ -1559,6 +2202,7 @@ it("resizes or removes the selected progress image without removing its motion",
       kind: "progress-bar",
       barAssetId: "progress-image",
       barAssetScale: 180,
+      barLayer: "bottom",
     }),
     true,
   );
@@ -1780,6 +2424,7 @@ it("creates shared outcomes and uses them for a new QTE preset when selected", a
   expect(onAddButtonPreset).toHaveBeenCalledWith(
     expect.objectContaining({
       kind: "hold-charge",
+      feedback: "bounce-hover-press",
       signal: "answer-correct",
       timeoutSignal: "answer-incorrect",
     }),
@@ -1788,6 +2433,7 @@ it("creates shared outcomes and uses them for a new QTE preset when selected", a
     "answer-correct",
     undefined,
     "长按蓄力",
+    undefined,
     undefined,
   );
 });
@@ -1927,9 +2573,19 @@ it("keeps button presets available with no selection and creates a full button",
       option.textContent?.includes("倒计时按键（圆形）"),
     ),
   ).toBe(true);
+  expect(
+    builtInOptions.some((option) =>
+      option.value.startsWith("builtin:progress-ring"),
+    ),
+  ).toBe(false);
+  expect(
+    builtInOptions.some((option) =>
+      option.value.startsWith("builtin:progress-bar"),
+    ),
+  ).toBe(false);
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
-      .set!.call(preset, "builtin:progress-ring");
+      .set!.call(preset, "builtin:countdown:circle");
     preset.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(onAddButtonPreset).not.toHaveBeenCalled();
@@ -1940,25 +2596,23 @@ it("keeps button presets available with no selection and creates a full button",
   );
   expect(onAddButtonPreset).toHaveBeenCalledWith(
     expect.objectContaining({
-      kind: "progress-ring",
-      buttonShape: "rectangle",
-      ringFill: "deplete",
-      ringRotation: "clockwise",
+      kind: "countdown",
+      buttonShape: "circle",
       signal: "success",
     }),
     undefined,
     false,
     undefined,
     undefined,
-    "圆环倒计时",
+    "倒计时",
+    undefined,
     undefined,
   );
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
-      .set!.call(preset, "builtin:button-feedback-bounce");
+      .set!.call(preset, "builtin:button-feedback-prompt:circle");
     preset.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  expect(onAddButtonPreset).toHaveBeenCalledOnce();
   await act(async () =>
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("确定添加"))
@@ -1969,13 +2623,43 @@ it("keeps button presets available with no selection and creates a full button",
       kind: "button-feedback",
       buttonShape: "circle",
       mode: "visual",
-      feedback: "bounce-hover-press",
+      feedback: "idle-pulse-hover-press",
     }),
     undefined,
     false,
     undefined,
     undefined,
     "新按钮",
+    undefined,
+    undefined,
+  );
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(preset, "builtin:button-feedback-bounce");
+    preset.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(onAddButtonPreset).toHaveBeenCalledTimes(2);
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("确定添加"))
+      ?.click(),
+  );
+  expect(onAddButtonPreset).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "button-feedback",
+      buttonShape: "circle",
+      mode: "interactive",
+      feedback: "bounce-hover-press",
+      interaction: "multi-click",
+      requiredCount: 3,
+      duration: 0.1,
+    }),
+    undefined,
+    false,
+    undefined,
+    undefined,
+    "新按钮",
+    undefined,
     undefined,
   );
   await act(async () => {
@@ -2003,8 +2687,65 @@ it("keeps button presets available with no selection and creates a full button",
     undefined,
     "",
     undefined,
+    undefined,
   );
   expect(onApplyMotion).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["rectangle", "builtin:countdown"],
+  ["circle", "builtin:countdown:circle"],
+] as const)("adds a %s countdown button with press feedback", async (shape, value) => {
+  const onAddButtonPreset = vi.fn(async () => {});
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={0}
+        motionSignals={[{ id: "success", label: "Continue" }]}
+        mediaState={{ currentTime: 0, duration: 30, paused: true }}
+        onMediaCommand={vi.fn()}
+        onDeleteSelected={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onAddButtonPreset={onAddButtonPreset}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+  const preset = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="按键预设"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(preset, value);
+    preset.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("确定添加"))
+      ?.click(),
+  );
+  expect(onAddButtonPreset).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "countdown",
+      buttonShape: shape,
+      feedback: "hover-press",
+    }),
+    undefined,
+    false,
+    undefined,
+    undefined,
+    "倒计时",
+    undefined,
+    undefined,
+  );
 });
 
 it("sets the text and font on a new button preset", async () => {
@@ -2035,13 +2776,13 @@ it("sets the text and font on a new button preset", async () => {
   )!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
-      .set!.call(preset, "builtin:progress-bar");
+      .set!.call(preset, "builtin:countdown");
     preset.dispatchEvent(new Event("change", { bubbles: true }));
   });
   const text = container.querySelector<HTMLInputElement>(
     '[aria-label="按键文字"]',
   )!;
-  expect(text.value).toBe("进度条");
+  expect(text.value).toBe("倒计时");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
       .set!.call(text, "开始");
@@ -2062,13 +2803,74 @@ it("sets the text and font on a new button preset", async () => {
       ?.click(),
   );
   expect(onAddButtonPreset).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "progress-bar" }),
+    expect.objectContaining({ kind: "countdown" }),
     undefined,
     false,
     undefined,
     undefined,
     "开始",
     "Microsoft YaHei",
+    undefined,
+  );
+});
+
+it("allows clearing and editing the default text before adding a button", async () => {
+  const onAddButtonPreset = vi.fn(async () => {});
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={0}
+        motionSignals={[{ id: "next", label: "Continue" }]}
+        mediaState={{ currentTime: 0, duration: 0, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onAddButtonPreset={onAddButtonPreset}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+  const preset = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="按键预设"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(preset, "builtin:countdown");
+    preset.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const text = container.querySelector<HTMLInputElement>('[aria-label="按键文字"]')!;
+  const setText = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+        .set!.call(text, value);
+      text.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await setText("自定义按钮");
+  expect(text.value).toBe("自定义按钮");
+  await setText("");
+  expect(text.value).toBe("");
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("确定添加"))
+      ?.click(),
+  );
+  expect(onAddButtonPreset).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "countdown" }),
+    undefined,
+    false,
+    undefined,
+    undefined,
+    "",
+    undefined,
+    undefined,
   );
 });
 
@@ -2133,10 +2935,11 @@ it("configures all parts of the swipe button before adding it", async () => {
     undefined,
     "滑动按钮",
     undefined,
+    undefined,
   );
 });
 
-it("previews and commits replacement-button image scaling", async () => {
+it("removes button background-image sizing controls and keeps element scaling", async () => {
   const pick = {
     nodeId: "start",
     source: "nodes/start/index.html:1:1",
@@ -2144,12 +2947,10 @@ it("previews and commits replacement-button image scaling", async () => {
     tag: "button",
     text: "Continue",
     buttonAssetId: "button-image",
-    buttonAssetScaleX: 100,
+    buttonAssetScaleX: 345,
     buttonAssetScaleY: 100,
     box: { x: 0, y: 0, width: 180, height: 48 },
   };
-  const onPreviewButtonAssetScale = vi.fn();
-  const onCommitButtonAssetScale = vi.fn(async () => true);
   await act(async () =>
     root.render(
       <PreviewToolbar
@@ -2166,8 +2967,6 @@ it("previews and commits replacement-button image scaling", async () => {
         onTextStyle={vi.fn()}
         onInteractionTiming={vi.fn()}
         onApplyMotion={vi.fn(async () => {})}
-        onPreviewButtonAssetScale={onPreviewButtonAssetScale}
-        onCommitButtonAssetScale={onCommitButtonAssetScale}
         onTool={vi.fn()}
         onUndoStroke={vi.fn()}
         onClearStrokes={vi.fn()}
@@ -2175,49 +2974,199 @@ it("previews and commits replacement-button image scaling", async () => {
     ),
   );
 
-  await act(async () =>
-    container
-      .querySelector<HTMLButtonElement>(
-        '[aria-label="调整按钮背景图大小"]',
-      )!
-      .click(),
-  );
-  expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-  await act(async () =>
-    container.querySelector<HTMLButtonElement>('[aria-label="独立缩放"]')!.click(),
-  );
-  const slider = container.querySelector<HTMLInputElement>(
-    '[aria-label="宽度缩放"]',
-  )!;
-  expect(container.querySelector("output")?.textContent).toBe("100%");
-  expect(slider.min).toBe("10");
-  expect(slider.max).toBe("500");
-  expect(slider.step).toBe("1");
+  expect(
+    container.querySelector('[aria-label="调整按钮背景图大小"]'),
+  ).toBeNull();
+  expect(
+    container.querySelector('[aria-label="按钮背景图大小"]'),
+  ).toBeNull();
+  expect(container.querySelector(".playable-preview-element-scale")).not.toBeNull();
+});
 
+it("keeps the selected element's proportional scale visible and commits it", async () => {
+  const pick = {
+    nodeId: "start",
+    source: "nodes/start/index.html:1:1",
+    cssPath: "button",
+    tag: "button",
+    text: "Continue",
+    transformScale: 1.25,
+    transformRotation: 12,
+    transformOriginX: 50,
+    transformOriginY: 50,
+    box: { x: 0, y: 0, width: 180, height: 48 },
+  };
+  const onPreviewElementScale = vi.fn();
+  const onCommitElementScale = vi.fn(async () => true);
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={1}
+        motionSelection={pick}
+        motionSignals={[]}
+        mediaState={{ currentTime: 0, duration: 30, paused: true }}
+        onMediaCommand={vi.fn()}
+        onDeleteSelected={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onPreviewElementScale={onPreviewElementScale}
+        onCommitElementScale={onCommitElementScale}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  const slider = container.querySelector<HTMLInputElement>(
+    'input[aria-label="元素整体缩放"]',
+  )!;
+  expect(slider.value).toBe("125");
+  expect(container.querySelector(".playable-preview-element-scale")).not.toBeNull();
   await act(async () => {
     Object.defineProperty(slider, "value", {
       configurable: true,
-      get: () => "345",
+      get: () => "175",
     });
     slider.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  expect(slider.parentElement?.querySelector("output")?.textContent).toBe("345%");
-  expect(onPreviewButtonAssetScale).toHaveBeenCalledWith(pick, 345, 100);
+  expect(onPreviewElementScale).toHaveBeenCalledWith(pick, 1.75);
 
   await act(async () =>
     slider.dispatchEvent(new PointerEvent("pointerup", { bubbles: true })),
   );
-  expect(onCommitButtonAssetScale).not.toHaveBeenCalled();
+  expect(onCommitElementScale).toHaveBeenCalledWith(pick, 1.75);
+
+  const scaleInput = container.querySelector<HTMLInputElement>(
+    'input[type="number"][aria-label="元素整体缩放"]',
+  )!;
+  expect(scaleInput.value).toBe("175");
+  onPreviewElementScale.mockClear();
+  onCommitElementScale.mockClear();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(scaleInput, "220");
+    scaleInput.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(onPreviewElementScale).toHaveBeenCalledWith(pick, 2.2);
+  expect(
+    container.querySelector<HTMLInputElement>(
+      'input[type="range"][aria-label="元素整体缩放"]',
+    )?.getAttribute("aria-valuetext"),
+  ).toBe("220%");
+  await act(async () => {
+    scaleInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  expect(onCommitElementScale).toHaveBeenCalledWith(pick, 2.2);
+});
+
+it("adds a button with a library press effect at the configured attachment point", async () => {
+  const onAddButtonPreset = vi.fn(async () => {});
+  await act(async () =>
+    root.render(
+      <PreviewToolbar
+        tool="select"
+        disabled={false}
+        strokes={0}
+        picks={0}
+        motionSignals={[{ id: "next", label: "Continue" }]}
+        mediaState={{ currentTime: 0, duration: 30, paused: true }}
+        onMediaCommand={vi.fn()}
+        fonts={[]}
+        onTextStyle={vi.fn()}
+        onInteractionTiming={vi.fn()}
+        onApplyMotion={vi.fn(async () => {})}
+        onAddButtonPreset={onAddButtonPreset}
+        onTool={vi.fn()}
+        onUndoStroke={vi.fn()}
+        onClearStrokes={vi.fn()}
+      />,
+    ),
+  );
+
+  const preset = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="按键预设"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(preset, "builtin:button-feedback:circle");
+    preset.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const effect = container.querySelector<HTMLSelectElement>(
+    'select[aria-label="按下特效"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(effect, "green-particle-burst");
+    effect.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  const setAnchor = async (label: string, value: string) => {
+    const input = container.querySelector<HTMLInputElement>(
+      `input[type="range"][aria-label="${label}"]`,
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+        .set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await setAnchor("挂点 X (%)", "24");
+  await setAnchor("挂点 Y (%)", "73");
+  const color = container.querySelector<HTMLInputElement>(
+    'input[type="color"][aria-label="特效颜色"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+      .set!.call(color, "#3478f6");
+    color.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(color.value).toBe("#3478f6");
+  expect(
+    container.querySelector<HTMLInputElement>(
+      'input[aria-label="挂点 X (%)"]',
+    )?.value,
+  ).toBe("24");
+  const setOffset = async (label: string, value: string) => {
+    const input = container.querySelector<HTMLInputElement>(
+      `input[type="number"][aria-label="${label}"]`,
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+        .set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await setOffset("偏移 X (px)", "12");
+  await setOffset("偏移 Y (px)", "-8");
 
   await act(async () =>
-    container.querySelector<HTMLButtonElement>('[aria-label="等比缩放"]')!.click(),
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("确定添加"))
+      ?.click(),
   );
-  expect(onPreviewButtonAssetScale).toHaveBeenLastCalledWith(pick, 345, 345);
-  expect(onCommitButtonAssetScale).not.toHaveBeenCalled();
-
-  const applyButton = container.querySelector<HTMLButtonElement>(
-    ".playable-preview-motion-apply-button",
-  )!;
-  await act(async () => applyButton.click());
-  expect(onCommitButtonAssetScale).toHaveBeenCalledWith(pick, 345, 345);
+  expect(onAddButtonPreset).toHaveBeenCalledWith(
+    expect.objectContaining({
+      pressEffect: "green-particle-burst",
+      effectColor: "#3478f6",
+      effectAnchorX: 24,
+      effectAnchorY: 73,
+      effectOffsetX: 12,
+      effectOffsetY: -8,
+    }),
+    undefined,
+    false,
+    undefined,
+    undefined,
+    "新按钮",
+    undefined,
+    undefined,
+  );
 });

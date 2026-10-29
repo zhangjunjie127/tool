@@ -2,7 +2,7 @@
 
 A conversation can run on a coding agent CLI that is already installed on the
 computer: Claude Code, Codex, or OpenCode. The CLI runs the agent loop with its
-own sign-in and model. OhMyGame keeps the conversation, checkpoints and Undo,
+own sign-in and model. puteng game keeps the conversation, checkpoints and Undo,
 its canvas, media, game and plugin tools, and the approval decisions.
 
 The [integration specification](agent-runtimes.md) records the architecture,
@@ -10,7 +10,7 @@ accepted tradeoffs, and validation limits.
 
 ## Using one
 
-**Settings → Agents** lists who can work in a conversation. OhMyGame's own
+**Settings → Agents** lists who can work in a conversation. puteng game's own
 agent comes first: it uses the models set up in Providers & Models, and its row
 links there. The coding agent CLIs follow, under **Coding agent CLIs on this
 computer**; **Rescan** checks for them again. Each row shows whether the CLI
@@ -61,7 +61,7 @@ has no quota of its own.
 
 ![Codex conversation with a denied read, a cancelled turn, and Medium effort selected](assets/coding-agent-native-effort.png)
 
-## What OhMyGame keeps
+## What puteng game keeps
 
 A coding agent session (`NativeCodingSession`) implements the same
 `CodingSession` interface as Pi, so `AgentManager` runs it unchanged: queues,
@@ -101,13 +101,13 @@ permission grants. No second conversation manager or event database is needed.
 
 ## How each agent is driven
 
-| Agent       | Transport                                                        | OhMyGame tools                                          | Approvals                                            |
+| Agent       | Transport                                                        | puteng game tools                                          | Approvals                                            |
 | ----------- | ---------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------- |
 | Claude Code | `claude -p` with stream-json in and out; one process per session | In-process MCP server answered over the same pipe       | PreToolUse hook plus `can_use_tool` control requests |
 | Codex       | `codex app-server` JSON-RPC; one thread per conversation         | The thread's dynamic tools, answered over the same pipe | App server approval requests                         |
 | OpenCode    | `opencode serve` on loopback with its own password               | Remote MCP on the daemon with a turn token              | `permission.asked` events, answered on the server    |
 
-Each stdin stays open for the session. A CLI that no message has used for ten minutes is stopped; the next message starts a new process that resumes the same native session. Codex conversations with the same executable, environment and staged Skills share one app server, routed by thread; it stops with its last conversation. OpenCode keeps a server per conversation because its MCP servers, and so OhMyGame's tools, are registered for the whole instance. Native queue prioritization means
+Each stdin stays open for the session. A CLI that no message has used for ten minutes is stopped; the next message starts a new process that resumes the same native session. Codex conversations with the same executable, environment and staged Skills share one app server, routed by thread; it stops with its last conversation. OpenCode keeps a server per conversation because its MCP servers, and so puteng game's tools, are registered for the whole instance. Native queue prioritization means
 **Next**: after the current turn, before ordinary follow-ups. Mid-turn native
 injection is excluded because concurrent file writes cannot provide an
 independent checkpoint before delivery. Processes run in their
@@ -124,11 +124,11 @@ verified orphans while preserving another live daemon's folders. Configuration
 and Skills are removed only after the CLI stops. Unverifiable identities and
 subprocesses that escape their group cannot be reclaimed this way.
 
-OhMyGame's tools are the handlers Pi uses (`createAgentTools`), offered through
+puteng game's tools are the handlers Pi uses (`createAgentTools`), offered through
 `ToolBridge`. Plugin MCP servers reach the agent through the same `mcp` tool
 Pi uses, run in a model-less session in the daemon, so plugin settings,
 switches and credentials stay in the daemon. Skills (plugin Skills and
-OhMyGame's own) are copied into a private folder for the session and handed to
+puteng game's own) are copied into a private folder for the session and handed to
 the CLI: a session plugin for Claude Code, `skills/extraRoots/set` for Codex,
 `skills.paths` for OpenCode. Staging copies regular files and omits symbolic
 links, so it cannot copy an external credential through a Skill's link. The
@@ -150,7 +150,7 @@ Each agent's detail page has a **Permissions** setting:
 
 - **Standard** (default): the rules below. Commands run in the CLI's OS
   sandbox where it has one.
-- **Full access**: no sandbox and no questions, as with OhMyGame's own agent.
+- **Full access**: no sandbox and no questions, as with puteng game's own agent.
   Claude Code runs without its sandbox settings, Codex uses its own
   `:danger-full-access` profile, and OpenCode's requests are all allowed.
   Requests that name a protected root, such as a CLI sign-in folder, are
@@ -161,11 +161,11 @@ of the agent's idle open conversations. A running turn keeps its setting and
 is released when its run closes. The next run restarts the CLI with the new
 settings and resumes its session, including when settings change during startup.
 
-In the project folder an agent works without asking, as OhMyGame's own agent
+In the project folder an agent works without asking, as puteng game's own agent
 does. `judgeApproval` decides each request first:
 
 - **Deny** anything that reaches a CLI sign-in folder (`~/.claude`,
-  `~/.codex`, OpenCode's folders), `~/.ssh` and similar, OhMyGame's data folder,
+  `~/.codex`, OpenCode's folders), `~/.ssh` and similar, puteng game's data folder,
   or another project. Paths resolve symlinks, including missing descendants,
   and include custom CLI credential homes. A command reaches a folder when it names it or a folder
   that holds it, quoted or not.
@@ -190,17 +190,17 @@ the same way. Planning turns are read-only on every path: they accept file reads
 and the simple read commands the policy allows, and refuse everything else with
 feedback naming what is allowed, so the agent adjusts instead of stopping; a
 bare OpenCode rejection would end its loop. Native agents are told that
-OhMyGame's tools, including `update_plan`, come from its `ohmygame` tool server
+puteng game's tools, including `update_plan`, come from its `ohmygame` tool server
 under their CLI's MCP names. Claude's `ExitPlanMode` is
-declined with a pointer to `update_plan`, because OhMyGame reviews plans itself.
-Codex registers every OhMyGame tool when its thread starts, since a thread that
+declined with a pointer to `update_plan`, because puteng game reviews plans itself.
+Codex registers every puteng game tool when its thread starts, since a thread that
 begins in planning continues after the plan is approved; tools the current mode
 does not allow are refused when called.
 
 Claude Code runs with background tasks and scheduled prompts disabled
 (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `CLAUDE_CODE_DISABLE_CRON`): a
 background subagent or shell would report after the turn's result, with no turn
-to receive it. OhMyGame's tools are marked always loaded so Claude's tool search
+to receive it. puteng game's tools are marked always loaded so Claude's tool search
 does not hide them. Planning uses Claude's default permission mode instead of
 its plan mode, which would write a plan file and call `ExitPlanMode`.
 
@@ -258,7 +258,7 @@ is rebuilt from the same allowlist, without CLI authentication tokens.
 Claude Code's sandbox is turned on through flag settings, which apply whether
 or not the person's own configuration loads. Protected roots are unreadable,
 the workspace and the session's staged Skills stay readable, commands cannot
-opt out of the sandbox, approvals still go through OhMyGame, and the network
+opt out of the sandbox, approvals still go through puteng game, and the network
 stays available for installs. Package caches live in the session's temporary
 folder, which commands may write. Where the sandbox cannot start (Windows, or
 Linux without bubblewrap and socat), Claude Code runs commands without it and
@@ -284,7 +284,7 @@ By default each agent runs without the person's own configuration:
 
 - Claude Code: `--setting-sources ""` and `--strict-mcp-config`.
 - Codex: the workspace is its own project root (`project_root_markers = []`),
-  so only the workspace's `AGENTS.md` is read, as for OhMyGame's own agent; a
+  so only the workspace's `AGENTS.md` is read, as for puteng game's own agent; a
   parent folder's file describes whatever contains the game and is outside the
   permission profile. The person's MCP servers and notification hook are turned
   off for the thread; a failure to inspect their configuration stops startup. Codex still loads Skills, plugins and AGENTS.md from its own folder;
@@ -340,7 +340,7 @@ Being signed in and seeing a model does not guarantee account entitlement.
 The direct adapters preserve the installed executable and shared host services.
 The Claude Agent SDK was evaluated and not adopted: it bundles its own Claude
 Code binary (about 268 MB per platform) and each release targets one CLI
-release, while OhMyGame drives the CLI the person installed. See
+release, while puteng game drives the CLI the person installed. See
 [agent-runtimes.md](agent-runtimes.md#runtime-transports-and-compatibility).
 Claude's direct control protocol and Codex's experimental dynamic tools need
 compatibility tests when their CLIs change. A generic Basic CLI adapter is not
@@ -363,7 +363,7 @@ bun run test:agent-runtimes:live claude-code-cli YOUR_AVAILABLE_MODEL
 
 Choose a currently listed model with a working account. The script uses isolated
 app data and a disposable workspace, grants only scoped test requests, and saves
-evidence under ignored `.runtime/`. It checks writes, an OhMyGame tool call,
+evidence under ignored `.runtime/`. It checks writes, a puteng game tool call,
 continuation, daemon restart, compaction, editing a later message, checkpoint
 restore, denial of external dummy files, approval persistence, cancellation
 during an executing shell tool, running the toolchain (Node, `npm install` over

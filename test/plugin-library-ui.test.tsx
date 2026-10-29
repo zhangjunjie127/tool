@@ -12,7 +12,7 @@ const official: PluginDetail = {
   displayName: "Studio",
   description: "Make games",
   source: { type: "builtIn" },
-  marketplace: { id: "ohmygame", displayName: "OhMyGame" },
+  marketplace: { id: "ohmygame", displayName: "puteng game" },
   installed: true,
   enabled: true,
   skills: [

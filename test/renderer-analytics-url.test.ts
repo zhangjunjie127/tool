@@ -40,7 +40,7 @@ describe("AnalyticsUrlScrubber", () => {
   });
 
   it("matches a percent-encoded install path", () => {
-    const encoded = "/Applications/OhMyGame%202.app/Contents/Resources/app.asar/dist/renderer/index.html";
+    const encoded = "/Applications/puteng%20game.app/Contents/Resources/app.asar/dist/renderer/index.html";
     const event: AnalyticsEvent = {
       event: "$autocapture",
       properties: { $pathname: decodeURI(encoded), $session_entry_pathname: encoded, $session_entry_url: `file://${encoded}#/library` },

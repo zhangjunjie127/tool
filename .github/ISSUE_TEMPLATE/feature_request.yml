@@ -6,7 +6,7 @@ body:
     id: problem
     attributes:
       label: What are you trying to do
-      description: The game or workflow you have in mind, and where OhMyGame gets in the way today.
+      description: The game or workflow you have in mind, and where puteng game gets in the way today.
     validations:
       required: true
   - type: textarea

@@ -22,7 +22,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: OhMyGame version
+      label: puteng game version
       description: Shown in the app's settings, or the commit if you run from source.
     validations:
       required: true
@@ -42,7 +42,7 @@ body:
     id: model
     attributes:
       label: Model provider and model
-      description: For example, OpenRouter with a specific model, or an OhMyGame account. Never paste API keys.
+      description: For example, OpenRouter with a specific model, or a puteng game account. Never paste API keys.
   - type: textarea
     id: logs
     attributes:

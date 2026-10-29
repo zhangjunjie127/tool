@@ -170,10 +170,20 @@ export function mount(context) {
 `mount` may be async and may return a cleanup function (sync or async). The
 node is revealed after `mount` settles.
 
+The following context types use the shared settings contracts:
+
 ```ts
+import type {
+  PlayableSettingsService,
+  PlayableTranscriptionService,
+} from "./playable-settings.js";
+
 interface RuntimeContext {
   root: ShadowRoot;
-  assets: { url(id: string): string };
+  assets: {
+    url(id: string): string;
+    list?(): Array<{ id: string; type: "image" | "video" | "audio" }>;
+  };
   state: {
     get(): Readonly<JsonObject>;
     get(key: string): JsonValue;
@@ -188,6 +198,8 @@ interface RuntimeContext {
     reset(): Promise<void>;
     restart(): Promise<void>;
   };
+  settings?: PlayableSettingsService;
+  transcription?: PlayableTranscriptionService;
   story: { map(): StoryMap };
   lifecycle: { signal: AbortSignal };
 }
@@ -200,6 +212,40 @@ interface NodeContext extends RuntimeContext {
   };
 }
 ```
+
+`PlayableGameSettings` contains video, music and UI sound levels; brightness; display
+mode and resolution; subtitle visibility, size and timed cues; message hints;
+and language. Setting changes apply to the current session immediately.
+`save()` persists them in a host-owned slot separate from the story save and
+Project State. `reset()` changes the draft to defaults, and `discard()` restores
+the last saved settings. The sandbox does not use its own `localStorage`.
+
+The player owns one Game settings button for the whole graph, outside individual
+Scene content. It remains available while navigating between Scenes, and its
+optional image and normalized viewport position are stored on the graph as
+`settingsButton`. Authors can choose the image from the Library and drag the
+button in the Workbench preview; these edits do not restart the running Node.
+
+The Runtime applies brightness, subtitle cues, subtitle size, and backdrop
+video volume in each Scene. Audio elements can opt into the shared music or UI
+sound controls with `data-playable-audio="music"` or
+`data-playable-audio="ui"`. The Published Player applies fullscreen and
+resolution preferences; Workbench previews never request fullscreen.
+
+The context uses the exported `PlayableSettingsService`,
+`PlayableTranscriptionService`, `PlayableGameSettings`, and
+`PlayableSubtitleCue` contracts from `src/shared/playable-settings.ts`. The
+Runtime supplies settings and a transcription service to each mounted Node.
+`transcription.available` is false unless the host supplies a
+`PlayableTranscriptionProvider`; its `transcribe` method receives a declared
+video Asset ID, language, and an `AbortSignal`, and returns timed
+`PlayableSubtitleCue` values. No transcription service is bundled or called by
+default; the Game settings Template keeps generation disabled until one is
+configured. Authors can still add and edit timed cues manually.
+
+`messageHints` hides elements marked with `data-playable-hint` and the shared
+`.continue-hint` prompt. Mark authored hint text with `data-playable-hint` to
+make it respond to the player's preference.
 
 Every request is validated. An undeclared asset, unknown state key, or
 undeclared Signal produces a visible runtime error instead of silently doing
@@ -465,7 +511,7 @@ JavaScript module and stylesheet per node.
 - JavaScript and CSS are bundled, so `shared/` modules and the project's own
   `node_modules` work without a per-node build.
 - Every entry and import must resolve inside the workspace after following
-  symbolic links. Dependencies found in OhMyGame's installation or a parent
+  symbolic links. Dependencies found in puteng game's installation or a parent
   directory are rejected.
 - Imported images, fonts, shaders, and binary modules are embedded in the
   surface bundle. Project Assets used through `context.assets` stay governed
@@ -523,7 +569,8 @@ These fit the model but are not in v1:
 - executable conditions, priorities, and state effects on edges;
 - overlays and suspended node instances;
 - multiple simultaneous node regions;
-- automatic media-ended or timer transitions in the Runtime;
+- general timer transitions, and media-ended transitions beyond the opt-in
+  single-play, single-Exit background-video setting;
 - Subflows and a visual component tree;
 - multiple save slots and save management UI;
 - a typed state schema;

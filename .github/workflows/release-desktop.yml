@@ -80,7 +80,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Packaged npm could not run a project script" }
       - uses: actions/upload-artifact@v4
         with:
-          name: OhMyGame-Windows-x64
+          name: puteng-game-Windows-x64
           retention-days: 1
           if-no-files-found: error
           path: |
@@ -142,7 +142,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - uses: actions/upload-artifact@v4
         with:
-          name: OhMyGame-macOS-arm64
+          name: puteng-game-macOS-arm64
           retention-days: 1
           if-no-files-found: error
           path: |
@@ -170,7 +170,7 @@ jobs:
         run: node scripts/release-notes.mjs "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
       - uses: actions/download-artifact@v4
         with:
-          pattern: OhMyGame-*
+          pattern: puteng-game-*
           path: release-assets
           merge-multiple: true
       - name: Validate update publishing configuration
@@ -252,7 +252,7 @@ jobs:
               release-assets/*.dmg \
               release-assets/*.zip \
               --verify-tag \
-              --title "OhMyGame $GITHUB_REF_NAME" \
+              --title "puteng game $GITHUB_REF_NAME" \
               --prerelease \
               --notes-file "$RELEASE_NOTES_FILE"
           fi

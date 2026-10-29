@@ -16,6 +16,7 @@ import {
   type PlayableSurfaceHost,
 } from "../src/shared/playable-runtime.js";
 import type { PlayableSeen } from "../src/shared/playable-story-map.js";
+import { createPlayableSettingsService } from "../src/shared/playable-settings.js";
 import { createNodeGraphFixture } from "./playable-fixture.js";
 
 type NodeContext = Omit<PlayableNodeContext, "root">;
@@ -23,6 +24,7 @@ type NodeContext = Omit<PlayableNodeContext, "root">;
 class FakeSurfaceHost implements PlayableSurfaceHost {
   readonly events: string[] = [];
   readonly nodeContexts: Array<{ id: string; context: NodeContext }> = [];
+  readonly videoEndedCallbacks: Array<() => void> = [];
   onMountNode?: (
     surface: CompiledPlayableSurface,
     context: NodeContext,
@@ -33,9 +35,12 @@ class FakeSurfaceHost implements PlayableSurfaceHost {
   async mountNode(
     surface: CompiledPlayableSurface,
     context: NodeContext,
+    onBackdropVideoEnded?: () => void,
   ): Promise<PlayableMountedSurface> {
     this.events.push(`mount:${surface.id}`);
     this.nodeContexts.push({ id: surface.id, context });
+    if (onBackdropVideoEnded)
+      this.videoEndedCallbacks.push(onBackdropVideoEnded);
     await this.onMountNode?.(surface, context);
     return {
       cleanup: () => {
@@ -51,6 +56,148 @@ class FakeSurfaceHost implements PlayableSurfaceHost {
 }
 
 describe("Node Runtime", () => {
+  it("shares saved player preferences across nodes without adding them to story State", async () => {
+    let persistedBrightness = 0;
+    const settings = createPlayableSettingsService(undefined, async (value) => {
+      persistedBrightness = value.brightness;
+    });
+    const { runtime, host } = createRuntime({ settings });
+
+    await runtime.start();
+    const menu = nodeContext(host, "menu");
+    menu.settings!.set("brightness", 125);
+    await menu.navigation.emit("start");
+    const lobby = nodeContext(host, "lobby");
+
+    expect(lobby.settings!.get("brightness")).toBe(125);
+    await lobby.settings!.save();
+    expect(persistedBrightness).toBe(125);
+    expect(runtime.snapshot().state).toEqual({
+      hasKey: false,
+      clues: [],
+      profile: { name: "" },
+    });
+
+    await runtime.dispose();
+  });
+
+  it("exposes only declared video Assets to the optional subtitle provider", async () => {
+    const graph = createNodeGraphFixture();
+    graph.assets.opening = {
+      type: "video",
+      source: { kind: "workspace", path: "assets/opening.mp4" },
+    };
+    graph.nodes[0]!.assets.push("opening");
+    const requests: string[] = [];
+    const { runtime, host } = createRuntime({
+      graph,
+      transcriptionProvider: {
+        async transcribe({ assetId }) {
+          requests.push(assetId);
+          return [{ startSeconds: 0, endSeconds: 2, text: "Hello" }];
+        },
+      },
+    });
+
+    await runtime.start();
+    const transcription = nodeContext(host, "menu").transcription!;
+    expect(transcription.available).toBe(true);
+    await expect(transcription.transcribe("theme")).rejects.toThrow(
+      "declared video Asset",
+    );
+    await expect(transcription.transcribe("opening")).resolves.toEqual([
+      { startSeconds: 0, endSeconds: 2, text: "Hello" },
+    ]);
+    expect(requests).toEqual(["opening"]);
+
+    await runtime.dispose();
+  });
+
+  it("waits for the background video to end before taking a single configured Exit", async () => {
+    const graph = createNodeGraphFixture();
+    const menu = graph.nodes.find((node) => node.id === "menu")!;
+    menu.signals = [{ id: "start", label: "Start" }];
+    menu.videoEndAutoAdvance = true;
+    graph.edges = graph.edges.filter(
+      (edge) => edge.source.nodeId !== "menu" || edge.source.signal === "start",
+    );
+    const compiled = createCompiledGraph();
+    compiled.nodes.menu!.html =
+      '<main><div data-media="backdrop" data-asset="opening" data-type="video"></div></main>';
+    const { runtime, host } = createRuntime({ graph, compiled });
+
+    await runtime.start();
+    await nodeContext(host, "menu").navigation.emit("start");
+    await nodeContext(host, "menu").navigation.fail("start");
+
+    expect(runtime.snapshot()).toMatchObject({
+      currentNodeId: "menu",
+      recentSignals: [],
+    });
+    expect(host.events).toEqual(["mount:menu"]);
+
+    host.videoEndedCallbacks[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.snapshot()).toMatchObject({
+      currentNodeId: "lobby",
+      recentSignals: [
+        expect.objectContaining({
+          nodeId: "menu",
+          signal: "start",
+          targetNodeId: "lobby",
+        }),
+      ],
+    });
+    expect(host.events.filter((event) => event === "mount:lobby")).toHaveLength(1);
+    await runtime.dispose();
+  });
+
+  it("keeps immediate navigation when video-end auto-advance is not enabled", async () => {
+    const graph = createNodeGraphFixture();
+    const menu = graph.nodes.find((node) => node.id === "menu")!;
+    menu.signals = [{ id: "start", label: "Start" }];
+    graph.edges = graph.edges.filter(
+      (edge) => edge.source.nodeId !== "menu" || edge.source.signal === "start",
+    );
+    const compiled = createCompiledGraph();
+    compiled.nodes.menu!.html =
+      '<main><div data-media="backdrop" data-asset="opening" data-type="video"></div></main>';
+    const { runtime, host } = createRuntime({ graph, compiled });
+
+    await runtime.start();
+    await nodeContext(host, "menu").navigation.emit("start");
+
+    expect(runtime.snapshot().currentNodeId).toBe("lobby");
+    expect(host.videoEndedCallbacks).toHaveLength(0);
+    await runtime.dispose();
+  });
+
+  it("loads each Scene's declared Assets before mounting it", async () => {
+    const loaded: string[][] = [];
+    const { runtime, host } = createRuntime({
+      ensureAssets: async (ids) => {
+        loaded.push([...ids]);
+      },
+    });
+
+    await runtime.start();
+
+    expect(loaded).toEqual([["background"]]);
+    expect(host.events).toEqual(["mount:menu"]);
+
+    await nodeContext(host, "menu").navigation.emit("start");
+
+    expect(loaded).toEqual([["background"], ["theme"]]);
+    expect(host.events).toEqual([
+      "mount:menu",
+      "mount:lobby",
+      "cleanup:menu",
+      "destroy:menu",
+    ]);
+    await runtime.dispose();
+  });
+
   it("routes a failure through its declared Exit by default", async () => {
     const { runtime, host } = createRuntime();
     await runtime.start();
@@ -517,6 +664,26 @@ describe("Node Runtime", () => {
     });
   });
 
+  it("restarts the editor preview at the Entry Node and resets State", async () => {
+    const { runtime, host } = createRuntime({
+      policy: "report",
+      startNodeId: "archive",
+      previewState: { hasKey: true, clues: ["old"], profile: { name: "Player" } },
+    });
+    await runtime.start();
+
+    await nodeContext(host, "archive").session.restart();
+
+    expect(runtime.snapshot()).toMatchObject({
+      currentNodeId: "menu",
+      backStack: [],
+      state: createNodeGraphFixture().initialState,
+      reports: [],
+    });
+    expect(host.nodeContexts.map(({ id }) => id)).toEqual(["archive", "menu"]);
+    await runtime.dispose();
+  });
+
   it("reports listener and cleanup failures without breaking transitions", async () => {
     const errors: unknown[] = [];
     const host = new FakeSurfaceHost();
@@ -759,14 +926,18 @@ describe("NodeRuntime preview tooling", () => {
 function createRuntime(
   options: {
     graph?: NodeGraph;
+    compiled?: CompiledNodeGraph;
     host?: FakeSurfaceHost;
     saveStore?: PlayableSaveStore;
     seenStore?: PlayableSeenStore;
     assetUrls?: Record<string, string>;
+    ensureAssets?: NodeRuntimeOptions["ensureAssets"];
     onError?: (error: unknown) => void;
     policy?: NodeRuntimeOptions["policy"];
     startNodeId?: string;
     previewState?: NodeRuntimeOptions["previewState"];
+    settings?: NodeRuntimeOptions["settings"];
+    transcriptionProvider?: NodeRuntimeOptions["transcriptionProvider"];
   } = {},
 ): {
   runtime: NodeRuntime;
@@ -778,7 +949,7 @@ function createRuntime(
     host,
     runtime: new NodeRuntime({
       graph,
-      compiled: createCompiledGraph(),
+      compiled: options.compiled ?? createCompiledGraph(),
       graphSignature: "fixture-v1",
       surfaceHost: host,
       saveStore: options.saveStore ?? new MemoryPlayableSaveStore(),
@@ -787,11 +958,14 @@ function createRuntime(
         background: "asset://background",
         theme: "asset://theme",
       },
+      ensureAssets: options.ensureAssets,
       now: () => new Date("2026-09-28T00:00:00.000Z"),
       onError: options.onError,
       policy: options.policy,
       startNodeId: options.startNodeId,
       previewState: options.previewState,
+      settings: options.settings,
+      transcriptionProvider: options.transcriptionProvider,
     }),
   };
 }

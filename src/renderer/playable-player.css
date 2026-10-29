@@ -14,6 +14,41 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   color: #f2f3f5;
 }
 
+.playable-vr-control {
+  position: absolute;
+  z-index: 6;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.playable-vr-enter {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 5px;
+  background: rgb(12 14 18 / 82%);
+  color: #fff;
+  font: 12px system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.playable-vr-enter:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.playable-vr-renderer {
+  position: fixed;
+  z-index: 99999;
+  inset: 0;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
 .playable-player-context-menu {
   position: absolute;
   z-index: 5;
@@ -135,13 +170,40 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
 .published-player-controls.is-visible {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
   visibility: visible;
+}
+
+.published-player-controls button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.published-player-controls button:hover,
+.published-player-controls button:focus-visible {
+  background: rgb(255 255 255 / 16%);
+  outline: 2px solid transparent;
+}
+
+.published-player-controls time {
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .published-player-controls input[type="range"] {
   width: 100%;
   min-width: 0;
-  height: 20px;
+  height: 36px;
   margin: 0;
   accent-color: #e7edf6;
   cursor: pointer;
@@ -156,4 +218,329 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
 .playable-thumbnail-page {
   width: 100vw;
   height: 100vh;
+}
+
+.playable-player-settings-trigger {
+  position: absolute;
+  z-index: 7;
+  display: grid;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 7px;
+  background: rgb(16 20 20 / 82%);
+  color: #f2f5f4;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+
+.playable-player-settings-trigger img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.playable-player-settings-trigger.is-editable {
+  cursor: grab;
+}
+
+.playable-player-settings-trigger.is-editable:active {
+  cursor: grabbing;
+}
+
+.playable-player-settings-trigger:hover,
+.playable-player-settings-trigger:focus-visible {
+  border-color: #7bd3c1;
+  background: rgb(25 39 37 / 94%);
+  outline: 2px solid rgb(123 211 193 / 42%);
+  outline-offset: 2px;
+}
+
+.playable-player-settings-trigger.is-selected {
+  border-color: #9ae7d6;
+  background: rgb(25 54 48 / 96%);
+  outline: 2px solid rgb(123 211 193 / 75%);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgb(123 211 193 / 16%);
+}
+
+.playable-game-settings-backdrop {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  background: rgb(0 0 0 / 70%);
+  backdrop-filter: blur(7px);
+}
+
+.playable-game-settings-dialog {
+  display: flex;
+  width: min(680px, 100%);
+  max-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 8px;
+  background: #171b1a;
+  color: #f0f3f1;
+  box-shadow: 0 22px 70px rgb(0 0 0 / 52%);
+  font: 14px/1.45 Inter, system-ui, sans-serif;
+}
+
+.playable-game-settings-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+}
+
+.playable-game-settings-header h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+}
+
+.playable-game-settings-header p {
+  margin: 5px 0 0;
+  color: #aeb8b4;
+  font-size: 12px;
+}
+
+.playable-game-settings-icon-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.playable-game-settings-icon-button:hover,
+.playable-game-settings-icon-button:focus-visible {
+  border-color: #7bd3c1;
+  outline: none;
+}
+
+.playable-game-settings-content {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 30px;
+  overflow: auto;
+  padding: 18px 22px;
+}
+
+.playable-game-settings-content > section {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 11px;
+}
+
+.playable-game-settings-content > section:last-child {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 30px;
+}
+
+.playable-game-settings-content h3 {
+  grid-column: 1 / -1;
+  margin: 0 0 2px;
+  color: #87d7c5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.playable-game-settings-range,
+.playable-game-settings-toggle,
+.playable-game-settings-select {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 9px 12px;
+  color: #e1e6e3;
+  font-size: 12px;
+}
+
+.playable-game-settings-range {
+  grid-template-columns: minmax(92px, 1fr) minmax(88px, 1.2fr) 42px;
+}
+
+.playable-game-settings-range input {
+  width: 100%;
+  min-width: 0;
+  accent-color: #74cbb8;
+}
+
+.playable-game-settings-range output {
+  color: #aeb8b4;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.playable-game-settings-toggle {
+  min-height: 28px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.playable-game-settings-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #74cbb8;
+}
+
+.playable-game-settings-select {
+  grid-template-columns: minmax(90px, 1fr) minmax(110px, 1.15fr);
+}
+
+.playable-game-settings-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid rgb(255 255 255 / 17%);
+  border-radius: 5px;
+  background: #242a28;
+  color: #f0f3f1;
+  font: inherit;
+}
+
+.playable-game-settings-confirm {
+  margin: 0 22px 14px;
+  padding: 13px 14px;
+  border: 1px solid rgb(232 178 105 / 42%);
+  border-radius: 6px;
+  background: rgb(100 68 32 / 20%);
+}
+
+.playable-game-settings-confirm strong {
+  font-size: 13px;
+}
+
+.playable-game-settings-confirm p {
+  margin: 4px 0 10px;
+  color: #c2c7c4;
+  font-size: 12px;
+}
+
+.playable-game-settings-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.playable-game-settings-confirm button,
+.playable-game-settings-actions button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 5px;
+  background: #252b29;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.playable-game-settings-confirm button:hover,
+.playable-game-settings-actions button:hover {
+  border-color: rgb(255 255 255 / 35%);
+}
+
+.playable-game-settings-actions button:focus-visible,
+.playable-game-settings-confirm button:focus-visible {
+  outline: 2px solid #7bd3c1;
+  outline-offset: 2px;
+}
+
+.playable-game-settings-actions button:disabled,
+.playable-game-settings-confirm button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.playable-game-settings-actions {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(255 255 255 / 10%);
+}
+
+.playable-game-settings-actions .playable-game-settings-status {
+  min-width: 0;
+  color: #aeb8b4;
+  font-size: 11px;
+  text-align: right;
+}
+
+.playable-game-settings-actions .playable-game-settings-save {
+  border-color: #4c9d8b;
+  background: #256457;
+  color: #fff;
+}
+
+.playable-game-settings-actions .playable-game-settings-save:hover {
+  background: #2e7869;
+}
+
+@media (max-width: 560px) {
+  .playable-game-settings-dialog {
+    width: min(440px, 100%);
+  }
+
+  .playable-game-settings-header {
+    padding: 16px 16px 13px;
+  }
+
+  .playable-game-settings-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding: 15px 16px;
+  }
+
+  .playable-game-settings-content > section:last-child {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .playable-game-settings-actions {
+    grid-template-columns: 1fr 1fr;
+    padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .playable-game-settings-actions .playable-game-settings-status {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    text-align: left;
+  }
+
+  .playable-game-settings-actions .playable-game-settings-save {
+    grid-column: 1 / -1;
+  }
 }

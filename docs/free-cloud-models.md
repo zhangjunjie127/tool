@@ -1,6 +1,6 @@
 # Free cloud models
 
-Free connections belong to the OhMyGame account. They use the trusted Cloud API
+Free connections belong to the puteng game account. They use the trusted Cloud API
 configured by `CLOUD_API_URL`, independently of the user's provider credentials
 and the paid account wallet. Hyper3D is the first integration (`cloud-hyper3d`),
 with all ten Rodin tiers. Existing default models and provider preferences are kept.
@@ -33,7 +33,7 @@ allows a basic tier but disables Extreme High with a suggestion to choose a
 cheaper tier. The server checks the allowance again on submission.
 
 Within **Hyper3D** settings, **Your API key** accepts a user's own key and runs
-through the local daemon, without OhMyGame sign-in or free-cloud limits.
+through the local daemon, without puteng game sign-in or free-cloud limits.
 **Free account credits** uses the account's daily allocation. Both connections
 can be configured at the same time. One Hyper3D switch enables or disables both sources;
 the combined model list labels **Free account** and **Your API key**, with independent visibility and defaults.

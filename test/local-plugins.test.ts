@@ -235,7 +235,7 @@ describe("local plugins", () => {
 
     expect(await store.list()).toMatchObject({ plugins: [{ id: installed.id }], errors: [] });
     await writePluginManifest(source, { name: "future-plugin", version: "1.1.0", description: "Future", skills: "./skills/", minimumHostVersion: "999.0.0" });
-    await expect(store.install(source)).rejects.toThrow("requires OhMyGame 999.0.0");
+    await expect(store.install(source)).rejects.toThrow("requires puteng game 999.0.0");
   });
 
   it("marks edited plugins as authored so their old source cannot overwrite the edits", async () => {

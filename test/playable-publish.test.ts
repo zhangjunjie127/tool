@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -135,11 +135,103 @@ describe("Published Player", () => {
     expect(files.get("start-game.bat")?.toString()).toContain(
       "start-game-server.ps1",
     );
+    expect(files.get("start-game.bat")?.toString()).not.toContain("-Root");
+    expect(files.get("start-game-server.ps1")?.toString()).toContain(
+      "$Root = $PSScriptRoot",
+    );
     expect(files.get("start-game-server.ps1")?.toString()).toContain("HttpListener");
     expect(files.get("start-game-server.ps1")?.toString()).toContain("Start-Process $url");
+    expect(files.get("start-game-server.ps1")?.toString()).toContain("trap {");
+    expect(files.get("start-game-server.ps1")?.toString()).toContain(
+      "System.Windows.Forms.MessageBox",
+    );
+    expect(files.get("start-game-server.ps1")?.toString()).toContain(
+      '".mov" = "video/quicktime"',
+    );
+    expect(files.get("start-game-server.ps1")?.toString()).toContain(
+      "Could not open a local web server",
+    );
     expect(files.get("start-game.bat")?.toString()).not.toContain(
       "Keep the server window open",
     );
+  });
+
+  it("exports playable ZIPs larger than the cloud publishing limit", async () => {
+    const workspace = await temporary("putenggame-playable-publish-workspace-");
+    const player = await playerFixture();
+    const data = await temporary("putenggame-playable-publish-data-");
+    const graph = createNodeGraphFixture();
+    delete graph.assets.theme;
+    for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
+    await writePlayableFixtureWorkspace(workspace, graph);
+    const originalMedia = randomBytes(26 * 1024 * 1024);
+    await writeFile(path.join(player, "assets", "large-media.bin"), originalMedia);
+    const library = new AssetLibrary(data);
+    await library.load();
+
+    const archive = await new ArtifactBuilder(library, player).buildInteractiveStory(project(workspace));
+
+    expect(archive.length).toBeGreaterThan(25 * 1024 * 1024);
+  });
+
+  it("exports an editable project with Library assets made workspace-local", async () => {
+    const workspace = await temporary("putenggame-editable-project-");
+    const data = await temporary("putenggame-editable-data-");
+    const library = new AssetLibrary(data);
+    await library.load();
+    const asset = await library.add("library image.webp", Buffer.from("library-image"));
+    const graph = createNodeGraphFixture();
+    delete graph.assets.theme;
+    for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
+    graph.assets.background!.source = { kind: "library", assetId: asset.id };
+    await writePlayableFixtureWorkspace(workspace, graph);
+    await mkdir(path.join(workspace, ".putenggame", "thumbnails"), { recursive: true });
+    await writeFile(path.join(workspace, ".putenggame", "thumbnails", "private.webp"), "cache");
+
+    const files = await unzip(
+      await new ArtifactBuilder(library).buildInteractiveStoryProject(project(workspace)),
+    );
+    const exportedGraph = JSON.parse(files.get("graph.json")!.toString("utf8"));
+    const exportedAssetPath = exportedGraph.assets.background.source.path;
+
+    expect(exportedGraph.assets.background.source.kind).toBe("workspace");
+    expect(files.get(exportedAssetPath)?.toString()).toBe("library-image");
+    expect(files.has(".putenggame/thumbnails/private.webp")).toBe(false);
+    expect(files.get("EXPORT_README.md")?.toString()).toContain("assets/library/");
+  });
+
+  it("exports a PICO WebXR PWA bundle with install metadata and instructions", async () => {
+    const workspace = await temporary("putenggame-pico-web-workspace-");
+    const player = await playerFixture();
+    const data = await temporary("putenggame-pico-web-data-");
+    const graph = createNodeGraphFixture();
+    delete graph.assets.theme;
+    for (const node of graph.nodes) node.assets = node.assets.filter((id) => id !== "theme");
+    await writePlayableFixtureWorkspace(workspace, graph);
+    await writeFile(
+      path.join(player, "index.html"),
+      "<!doctype html><html><head><title>Interactive Story</title></head><body><div id=\"root\"></div></body></html>",
+    );
+    const library = new AssetLibrary(data);
+    await library.load();
+
+    const files = await unzip(
+      await new ArtifactBuilder(library, player).buildInteractiveStoryPicoWebApp(project(workspace)),
+    );
+    const manifest = JSON.parse(files.get("manifest.webmanifest")!.toString("utf8"));
+
+    expect(manifest).toMatchObject({
+      name: "Ash Club",
+      display: "standalone",
+      orientation: "landscape",
+      icons: [{ src: "./pico-app-icon.svg", sizes: "any" }],
+    });
+    expect(files.get("index.html")?.toString()).toContain("./manifest.webmanifest");
+    expect(files.get("index.html")?.toString()).toContain("serviceWorker.register");
+    expect(files.get("service-worker.js")?.toString()).toContain("addEventListener(\"fetch\"");
+    expect(files.get("service-worker.js")?.toString()).toContain("/assets/media/");
+    expect(files.get("PICO-INSTALL.md")?.toString()).toContain("not an Android APK");
+    expect(files.get("playable.json")).toBeDefined();
   });
 
   it("deduplicates identical Asset content while retaining stable IDs", async () => {

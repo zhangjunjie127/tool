@@ -98,6 +98,7 @@ export function NodeThumbnailPage({
       saveKey={`ohmygame:playable:thumbnail:${projectId}`}
       storage={storage}
       preview={preview}
+      showGameSettings={false}
       onSnapshot={onSnapshot}
       onDiagnostic={ignoreDiagnostic}
     /> : null}

@@ -41,7 +41,7 @@ interface CodexTurn {
 
 /**
  * Codex through its app server: one thread per conversation, one turn per
- * message. OhMyGame's tools are the thread's dynamic tools, answered over the
+ * message. puteng game's tools are the thread's dynamic tools, answered over the
  * same pipe; commands run in Codex's own workspace sandbox, and what it asks
  * to do beyond it comes back as an approval request.
  */
@@ -286,11 +286,11 @@ export class CodexDriver implements NativeDriver {
   }): void {
     if (response.activePermissionProfile?.id !== this.#writeProfile)
       throw new Error(
-        "Codex did not activate OhMyGame's filesystem permissions. Update Codex to a version supporting named permission profiles, then check again in Settings.",
+        "Codex did not activate puteng game's filesystem permissions. Update Codex to a version supporting named permission profiles, then check again in Settings.",
       );
   }
 
-  /** Overrides that keep the person's own Codex MCP servers and notification hook out of OhMyGame's runs. */
+  /** Overrides that keep the person's own Codex MCP servers and notification hook out of puteng game's runs. */
   async #config(server: CodexAppServer): Promise<Record<string, unknown>> {
     // An explicit root deny prevents even scoped grants. Unlisted paths are
     // restricted by default; only protected roots get an explicit deny.
@@ -299,7 +299,7 @@ export class CodexDriver implements NativeDriver {
     await mkdir(temporary, { recursive: true, mode: 0o700 });
     filesystem[canonicalPath(temporary)] = "write";
     const workspace = canonicalPath(this.context.workspacePath);
-    // The person's toolchains run, as for OhMyGame's own agent; protected roots below stay denied.
+    // The person's toolchains run, as for puteng game's own agent; protected roots below stay denied.
     for (const root of toolchainRoots(this.context.env.PATH ?? ""))
       filesystem[canonicalPath(root)] ??= "read";
     // Private staged Skills remain readable; the rest of app data stays denied.
@@ -337,7 +337,7 @@ export class CodexDriver implements NativeDriver {
       // startup files the profile denies; the PATH given here already holds
       // the login shell's folders.
       allow_login_shell: false,
-      // Only the workspace's own AGENTS.md counts, as for OhMyGame's own agent:
+      // Only the workspace's own AGENTS.md counts, as for puteng game's own agent:
       // a parent folder's instructions describe whatever happens to contain
       // the game, and its files are outside the permission profile.
       project_root_markers: [],

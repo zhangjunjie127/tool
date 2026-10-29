@@ -15,6 +15,7 @@ import { CanvasFormatOptions } from "./canvas-format-options.js";
 import { ChevronDown, Download, LoaderCircle } from "./icons.js";
 import { ProjectSettingsDialogFrame } from "./project-settings-dialog.js";
 import { t, translateText } from "./i18n.js";
+import type { InteractiveStoryExportFormat } from "./api.js";
 
 const variablesHelp = translateText(
   "What the game remembers between Scenes. Ask the AI to add or change these values.",
@@ -39,7 +40,7 @@ export function PlayableProjectSettingsDialog({
     viewport: Viewport,
     effects: PlayableBackdropEffects,
   ) => Promise<void>;
-  onExport: () => Promise<void>;
+  onExport: (format: InteractiveStoryExportFormat) => Promise<void>;
   onClose: () => void;
 }) {
   const [selection, setSelection] = useState<CanvasFormatPresetId | undefined>(
@@ -48,6 +49,8 @@ export function PlayableProjectSettingsDialog({
   const [effects, setEffects] = useState(backdropEffects);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [exportFormat, setExportFormat] =
+    useState<InteractiveStoryExportFormat>("playable");
   const viewport = selection
     ? canvasFormatPreset(selection).viewport
     : graph.viewport;
@@ -77,7 +80,7 @@ export function PlayableProjectSettingsDialog({
   async function exportProject(): Promise<void> {
     setError(undefined);
     try {
-      await onExport();
+      await onExport(exportFormat);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -179,6 +182,38 @@ export function PlayableProjectSettingsDialog({
         </details>
         <fieldset className="project-settings-section">
           <legend>{translateText("Export")}</legend>
+          <div
+            className="project-settings-export-formats"
+            role="radiogroup"
+            aria-label={t("storySettings.exportFormat")}
+          >
+            {([
+              ["playable", "storySettings.exportPlayable", "storySettings.exportPlayableHint"],
+              ["editable", "storySettings.exportEditable", "storySettings.exportEditableHint"],
+              ["pico-web", "storySettings.exportPico", "storySettings.exportPicoHint"],
+              ["pico-apk", "storySettings.exportPicoApk", "storySettings.exportPicoApkHint"],
+            ] as const).map(([format, title, description]) => (
+              <label className="project-settings-export-format" key={format}>
+                <input
+                  type="radio"
+                  name="playable-export-format"
+                  value={format}
+                  checked={exportFormat === format}
+                  disabled={saving || exporting}
+                  onChange={() => setExportFormat(format)}
+                />
+                <span>
+                  <strong>{t(title)}</strong>
+                  <small>{t(description)}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+          {exportFormat === "pico-web" || exportFormat === "pico-apk" ? (
+            <p className="project-settings-hint project-settings-export-notice">
+              {t(exportFormat === "pico-web" ? "storySettings.exportPicoRequirement" : "storySettings.exportPicoApkRequirement")}
+            </p>
+          ) : null}
           {changed ? (
             <p className="project-settings-hint">
               {translateText("Save project setting changes before exporting.")}
@@ -195,7 +230,7 @@ export function PlayableProjectSettingsDialog({
             ) : (
               <Download size={14} />
             )}
-            {t(exporting ? "storySettings.exporting" : "storySettings.exportGame")}
+            {t(exporting ? "storySettings.exporting" : "storySettings.exportSelected")}
           </button>
         </fieldset>
         {error ? (

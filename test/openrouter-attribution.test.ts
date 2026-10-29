@@ -3,12 +3,12 @@ import { isOpenRouterModel, openRouterAttributionExtension, withOpenRouterAttrib
 
 const OHMYGAME = {
   "HTTP-Referer": "https://ohmygame.ai/",
-  "X-OpenRouter-Title": "OhMyGame",
+  "X-OpenRouter-Title": "puteng game",
   "X-OpenRouter-Categories": "game,native-app-builder",
 };
 
 describe("OpenRouter attribution", () => {
-  it("adds OhMyGame attribution headers", () => {
+  it("adds puteng game attribution headers", () => {
     expect(withOpenRouterAttribution({ authorization: "Bearer sk-or" })).toEqual({ authorization: "Bearer sk-or", ...OHMYGAME });
   });
 

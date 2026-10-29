@@ -36,7 +36,7 @@ export function OnboardingDemo() {
           y="32"
           dominantBaseline="central"
         >
-          OhMyGame
+          puteng game
         </text>
       </svg>
     </div>

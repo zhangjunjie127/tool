@@ -209,7 +209,7 @@ export interface AuthProbe {
   billing: AgentRuntimeBilling;
 }
 
-/** Asks the CLI who it is signed in as. OhMyGame never reads a CLI's credential files. */
+/** Asks the CLI who it is signed in as. puteng game never reads a CLI's credential files. */
 export async function probeAuth(
   binaryPath: string,
   id: AgentRuntimeId,
@@ -261,7 +261,7 @@ export async function probeAuth(
   return { status: "unknown", billing: "provider" };
 }
 
-/** The models a CLI offers, as OhMyGame's model picker lists them. */
+/** The models a CLI offers, as puteng game's model picker lists them. */
 export async function probeModels(
   binaryPath: string,
   id: AgentRuntimeId,

@@ -135,7 +135,7 @@ async function compileSurface(
         options,
       ),
     ]);
-    assertNoExternalImports(buildResult.metafile);
+    assertNoExternalImports(buildResult.metafile, workspaceRoot, surfaceId);
     const explicitCss = outputText(buildResult, "style.css");
     const importedCss = outputText(buildResult, "script.css", false);
     const javascript = outputText(buildResult, "script.js");
@@ -272,13 +272,25 @@ function workspaceBoundaryPlugin(
   return boundary;
 }
 
-function assertNoExternalImports(metafile: Metafile): void {
+function assertNoExternalImports(
+  metafile: Metafile,
+  workspaceRoot: string,
+  surfaceId: string,
+): void {
   // Input metadata retains imports removed from the output by tree shaking.
   for (const input of Object.values(metafile.inputs)) {
     for (const imported of input.imports) {
       if (!imported.external) continue;
       const requestedPath = imported.original ?? imported.path;
       if (requestedPath.startsWith("data:") || requestedPath.startsWith("#")) continue;
+      if (!requestedPath.startsWith("//") && path.isAbsolute(requestedPath)) {
+        assertInsideWorkspace(
+          workspaceRoot,
+          path.resolve(requestedPath),
+          surfaceId,
+          requestedPath,
+        );
+      }
       throw new Error(`External import "${requestedPath}" is not allowed in Playable surfaces.`);
     }
   }

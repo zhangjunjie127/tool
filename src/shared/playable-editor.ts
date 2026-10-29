@@ -121,14 +121,14 @@ export function removeOrphanedPlayableButtonSignals(
   const orphaned = node.signals
     .filter(
       (signal) =>
-        /^button-\d+(?:-failure(?:-\d+)?)?$/.test(signal.id) &&
+        /^button-(?:\d+(?:-failure(?:-\d+)?)?|failure(?:-\d+)?)$/.test(signal.id) &&
         !presentSignals.has(signal.id),
     )
     .map((signal) => signal.id);
   const declared = new Set(node.signals.map((signal) => signal.id));
   const missing = [...presentSignals].filter(
     (signalId) =>
-      /^button-\d+(?:-failure(?:-\d+)?)?$/.test(signalId) &&
+      /^button-(?:\d+(?:-failure(?:-\d+)?)?|failure(?:-\d+)?)$/.test(signalId) &&
       !declared.has(signalId),
   );
   if (!orphaned.length && !missing.length) return graph;
@@ -205,14 +205,26 @@ export function addPlayableNodeAsset(
   nodeId: string,
   asset: { name: string } & PlayableAssetDefinition,
 ): { graph: NodeGraph; assetId: string } {
-  const next = structuredClone(graph);
+  const declared = addPlayableGraphAsset(graph, asset);
+  const next = declared.graph;
   const node = next.nodes.find((candidate) => candidate.id === nodeId);
-  const sameSource = (definition: PlayableAssetDefinition) => JSON.stringify(definition.source) === JSON.stringify(asset.source);
-  const existing = Object.entries(next.assets).find(([, definition]) => sameSource(definition))?.[0];
-  const assetId = existing ?? playableAssetId(asset.name, new Set(Object.keys(next.assets)));
-  if (!node) return { graph, assetId };
+  if (!node) return { graph, assetId: declared.assetId };
+  if (!node.assets.includes(declared.assetId)) node.assets.push(declared.assetId);
+  return { graph: next, assetId: declared.assetId };
+}
+
+/** Declares a graph-wide Asset without adding it to a particular Scene. */
+export function addPlayableGraphAsset(
+  graph: NodeGraph,
+  asset: { name: string } & PlayableAssetDefinition,
+): { graph: NodeGraph; assetId: string } {
+  const next = structuredClone(graph);
+  const existing = Object.entries(next.assets).find(([, definition]) =>
+    JSON.stringify(definition.source) === JSON.stringify(asset.source),
+  )?.[0];
+  const assetId =
+    existing ?? playableAssetId(asset.name, new Set(Object.keys(next.assets)));
   if (!existing) next.assets[assetId] = { type: asset.type, source: asset.source };
-  if (!node.assets.includes(assetId)) node.assets.push(assetId);
   return { graph: next, assetId };
 }
 
@@ -251,9 +263,29 @@ export function removePlayableNodeAsset(graph: NodeGraph, nodeId: string, assetI
  * the running preview.
  */
 export function playableRuntimeKey(definition: NodePlayerDefinition): string {
-  const { title: _title, nodes, ...graph } = definition.graph;
+  const {
+    title: _title,
+    nodes,
+    settingsButton,
+    assets,
+    ...graph
+  } = definition.graph;
+  const sceneAssets = Object.fromEntries(
+    Object.entries(assets).filter(
+      ([assetId]) =>
+        assetId !== settingsButton?.iconAssetId ||
+        nodes.some((node) => node.assets.includes(assetId)),
+    ),
+  );
   return JSON.stringify({
-    graph: { ...graph, nodes: nodes.map(({ title: _nodeTitle, signals, ...node }) => ({ ...node, signals: signals.map((signal) => signal.id) })) },
+    graph: {
+      ...graph,
+      assets: sceneAssets,
+      nodes: nodes.map(({ title: _nodeTitle, signals, ...node }) => ({
+        ...node,
+        signals: signals.map((signal) => signal.id),
+      })),
+    },
     compiled: definition.compiled,
   });
 }

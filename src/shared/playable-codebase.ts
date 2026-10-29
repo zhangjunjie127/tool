@@ -2,10 +2,19 @@ import { Check } from "typebox/value";
 import { EDITOR_LAYOUT_SCHEMA } from "./editor-layout-schema.js";
 import type { NodeGraph } from "./playable-nodes.js";
 
+export interface PlayableAlignmentGuide {
+  id: string;
+  axis: "horizontal" | "vertical";
+  /** A fraction of the Scene viewport, from 0 to 1. */
+  position: number;
+}
+
 export interface NodeEditorLayout {
   version: 1;
   /** Canvas positions by Node ID. */
   nodes: Record<string, { x: number; y: number }>;
+  /** Workbench alignment guides by Node ID, in normalized viewport coordinates. */
+  sceneGuides?: Record<string, PlayableAlignmentGuide[]>;
   viewport: { x: number; y: number; zoom: number };
   view: "canvas" | "code";
 }
@@ -73,8 +82,21 @@ export function fitPlayableLayout(
   graph: NodeGraph,
   layout: NodeEditorLayout,
 ): NodeEditorLayout {
-  if (playableLayoutMatchesGraph(graph, layout)) return layout;
+  const graphIds = new Set(graph.nodes.map((node) => node.id));
+  const guideEntries = Object.entries(layout.sceneGuides ?? {}).filter(
+    ([id]) => graphIds.has(id),
+  );
+  const guides = guideEntries.length
+    ? Object.fromEntries(guideEntries)
+    : undefined;
+  if (
+    playableLayoutMatchesGraph(graph, layout) &&
+    sameJson(guides, layout.sceneGuides)
+  )
+    return layout;
   const fitted: NodeEditorLayout = { ...layout, nodes: {} };
+  if (guides) fitted.sceneGuides = guides;
+  else delete fitted.sceneGuides;
   for (const node of graph.nodes) {
     const position = layout.nodes[node.id];
     if (position) fitted.nodes[node.id] = position;
@@ -117,6 +139,7 @@ export function rebasePlayableCodebase(
   if (localGraphChanged && !samePlayableGraph(remote.graph, base.graph) && !samePlayableGraph(local.graph, remote.graph)) return undefined;
   const graph = localGraphChanged ? local.graph : remote.graph;
   const nodes: NodeEditorLayout["nodes"] = {};
+  const sceneGuides: NonNullable<NodeEditorLayout["sceneGuides"]> = {};
   for (const node of graph.nodes) {
     const before = base.editorLayout.nodes[node.id];
     const ours = local.editorLayout.nodes[node.id];
@@ -124,12 +147,19 @@ export function rebasePlayableCodebase(
     const moved = ours && (!before || ours.x !== before.x || ours.y !== before.y);
     const position = moved ? ours : theirs ?? ours;
     if (position) nodes[node.id] = position;
+    const beforeGuides = base.editorLayout.sceneGuides?.[node.id];
+    const ourGuides = local.editorLayout.sceneGuides?.[node.id];
+    const theirGuides = remote.editorLayout.sceneGuides?.[node.id];
+    const guidesChanged = !sameJson(ourGuides, beforeGuides);
+    const nextGuides = guidesChanged ? ourGuides : theirGuides ?? ourGuides;
+    if (nextGuides?.length) sceneGuides[node.id] = nextGuides;
   }
   return {
     graph,
     editorLayout: fitPlayableLayout(graph, {
       ...remote.editorLayout,
       nodes,
+      sceneGuides,
       viewport: sameJson(local.editorLayout.viewport, base.editorLayout.viewport) ? remote.editorLayout.viewport : local.editorLayout.viewport,
       view: local.editorLayout.view === base.editorLayout.view ? remote.editorLayout.view : local.editorLayout.view,
     }),

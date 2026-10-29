@@ -90,11 +90,14 @@ import type {
   PlayableTextStyleEdit,
   PlayableTransformEdit,
 } from "../shared/playable-player-protocol.js";
+
 import {
   parsePlayableSourceLocation,
+  playableSourceLocationByCssPath,
   insertPlayableElementCopies,
   insertPlayableText,
   removePlayableElement,
+  removePlayableElementByCssPath,
   removePlayableTextPart,
   replacePlayableElementText,
 } from "../shared/playable-text-edit.js";
@@ -109,6 +112,7 @@ import {
   setPlayablePictureInPictureVideoLoop,
 } from "../shared/playable-backdrop.js";
 import {
+  addPlayableGraphAsset,
   addPlayableNodeAsset,
   deletePlayableButtonSignals,
   deletePlayableSignal,
@@ -120,6 +124,7 @@ import {
   type PlayableProjectValidationIssue,
   type PlayableThumbnailManifest,
 } from "../shared/playable-editor.js";
+import { normalizePlayableSettingsButtonPosition } from "../shared/playable-settings-button.js";
 import {
   addPlayableNode,
   ApiError,
@@ -132,6 +137,7 @@ import {
   listPlayableThumbnails,
   updateNodeCodebase,
   updatePlayableBackdropEffects,
+  type InteractiveStoryExportFormat,
 } from "./api.js";
 import { PublishDialog, type PublishDetails } from "./publish-dialog.js";
 import { WorkspaceCodeView } from "./coding-workspace.js";
@@ -198,6 +204,24 @@ const SAVE_ATTEMPTS = 3;
 const PROJECT_CHANGED = translateText(
   "The project changed while you were editing, so its latest version was loaded. Make your last change again.",
 );
+
+function sourceLocationForPick(
+  html: string,
+  pick: PlayablePickResult,
+): ReturnType<typeof parsePlayableSourceLocation> {
+  const original = pick.source
+    ? parsePlayableSourceLocation(pick.source)
+    : undefined;
+  if (!original) return undefined;
+  if (!new RegExp(`^${pick.tag}#[a-z][\\w-]*$`, "i").test(pick.cssPath))
+    return original;
+  const current = playableSourceLocationByCssPath(
+    html,
+    pick.cssPath,
+    pick.tag,
+  );
+  return current ? { ...original, ...current } : undefined;
+}
 
 /** A step to undo or redo: the codebase, and the source files as they were, when the step wrote any. */
 interface HistoryEntry {
@@ -1020,6 +1044,7 @@ export function PlayableEditorWorkspace({
         return;
       const step = undoShortcut(event);
       if (!step) return;
+      if (openedNodeId) return;
       event.preventDefault();
       void (step === "redo" ? redoEditorChange() : undoEditorChange())?.catch(
         () => {},
@@ -1304,6 +1329,50 @@ export function PlayableEditorWorkspace({
     await save({ graph, editorLayout: current.editorLayout });
   }
 
+  async function writeSettingsButtonIcon(
+    asset: PlayableAssetRequest,
+  ): Promise<boolean> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current || asset.type !== "image") return false;
+    const declared = addPlayableGraphAsset(current.graph, asset);
+    const position = normalizePlayableSettingsButtonPosition(
+      current.graph.settingsButton,
+      current.graph.viewport,
+    );
+    const graph = declared.graph;
+    const previousAssetId = graph.settingsButton?.iconAssetId;
+    graph.settingsButton = { ...position, iconAssetId: declared.assetId };
+    if (
+      previousAssetId &&
+      previousAssetId !== declared.assetId &&
+      !graph.nodes.some((node) => node.assets.includes(previousAssetId))
+    )
+      delete graph.assets[previousAssetId];
+    await writeGraph(graph, t("playableWorkbench.historySetSettingsButtonIcon"));
+    return true;
+  }
+
+  async function writeSettingsButtonPosition(position: {
+    x: number;
+    y: number;
+  }): Promise<boolean> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current) return false;
+    const normalized = normalizePlayableSettingsButtonPosition(
+      position,
+      current.graph.viewport,
+    );
+    const graph = {
+      ...current.graph,
+      settingsButton: {
+        ...current.graph.settingsButton,
+        ...normalized,
+      },
+    };
+    await writeGraph(graph, t("playableWorkbench.historyMoveSettingsButton"));
+    return true;
+  }
+
   /**
    * Adopts a graph and writes source files with it as one undoable step.
    * `before` holds what the files held, for undo to put back.
@@ -1530,12 +1599,24 @@ export function PlayableEditorWorkspace({
       const file = await getWorkspaceFile(projectId, sourceFile);
       const original = file.truncated ? undefined : file.content;
       if (original === undefined) return false;
+      const located = group.map(({ edit }) => {
+        const location = sourceLocationForPick(original, edit.pick);
+        return location?.file === sourceFile
+          ? { edit, location }
+          : undefined;
+      });
+      if (located.some((item) => !item)) return false;
       let html = original;
-      for (const { edit, location } of [...group].sort(
-        (first, second) =>
-          second.location.line - first.location.line ||
-          second.location.column - first.location.column,
-      )) {
+      for (const { edit, location } of located
+        .filter(
+          (item): item is NonNullable<(typeof located)[number]> =>
+            item !== undefined,
+        )
+        .sort(
+          (first, second) =>
+            second.location.line - first.location.line ||
+            second.location.column - first.location.column,
+        )) {
         const updated = setPlayableElementTiming(
           html,
           location,
@@ -1608,11 +1689,32 @@ export function PlayableEditorWorkspace({
         config?.barAssetOffsetY === undefined
           ? undefined
           : String(config.barAssetOffsetY),
+      [PLAYABLE_MOTION_ATTRIBUTES.barLayer]: config?.barLayer,
       [PLAYABLE_MOTION_ATTRIBUTES.swipeAsset]: config?.swipeAssetId,
       [PLAYABLE_MOTION_ATTRIBUTES.swipeStyle]: config?.swipeStyle,
       [PLAYABLE_MOTION_ATTRIBUTES.swipeBehavior]: config?.swipeBehavior,
+      [PLAYABLE_MOTION_ATTRIBUTES.disappearAfterSwipe]:
+        config?.disappearAfterSwipe ? "true" : undefined,
       [PLAYABLE_MOTION_ATTRIBUTES.ringFill]: config?.ringFill,
       [PLAYABLE_MOTION_ATTRIBUTES.ringRotation]: config?.ringRotation,
+      [PLAYABLE_MOTION_ATTRIBUTES.pressEffect]: config?.pressEffect,
+      [PLAYABLE_MOTION_ATTRIBUTES.effectColor]: config?.effectColor,
+      [PLAYABLE_MOTION_ATTRIBUTES.effectAnchorX]:
+        config?.effectAnchorX === undefined
+          ? undefined
+          : String(config.effectAnchorX),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectAnchorY]:
+        config?.effectAnchorY === undefined
+          ? undefined
+          : String(config.effectAnchorY),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectOffsetX]:
+        config?.effectOffsetX === undefined
+          ? undefined
+          : String(config.effectOffsetX),
+      [PLAYABLE_MOTION_ATTRIBUTES.effectOffsetY]:
+        config?.effectOffsetY === undefined
+          ? undefined
+          : String(config.effectOffsetY),
       [PLAYABLE_MOTION_ATTRIBUTES.feedback]: config?.feedback,
       [PLAYABLE_MOTION_ATTRIBUTES.buttonShape]: config?.buttonShape,
       [PLAYABLE_MOTION_ATTRIBUTES.asset]: assetId ?? pick.buttonAssetId,
@@ -2189,18 +2291,26 @@ export function PlayableEditorWorkspace({
    */
   async function writeMove(move: PlayableMove): Promise<boolean> {
     const graph = codebase?.graph;
-    const location = move.pick.source
+    const previewLocation = move.pick.source
       ? parsePlayableSourceLocation(move.pick.source)
       : undefined;
     const node = graph?.nodes.find(
       (candidate) => candidate.id === move.pick.nodeId,
     );
-    if (!graph || !location || !node || node.source.html !== location.file)
+    if (
+      !graph ||
+      !previewLocation ||
+      !node ||
+      node.source.html !== previewLocation.file
+    )
       return false;
-    const file = await getWorkspaceFile(projectId, location.file);
+    const file = await getWorkspaceFile(projectId, previewLocation.file);
     const before = file.truncated ? undefined : file.content;
+    const location = before
+      ? sourceLocationForPick(before, move.pick)
+      : undefined;
     const html =
-      before === undefined
+      before === undefined || location === undefined
         ? undefined
         : move.part === "button-label"
           ? move.pick.tag !== "button" || !move.pick.buttonAssetId
@@ -2219,8 +2329,8 @@ export function PlayableEditorWorkspace({
     if (html !== before)
       await writeSources(
         graph,
-        { [location.file]: html },
-        { [location.file]: before },
+        { [previewLocation.file]: html },
+        { [previewLocation.file]: before },
         move.part === "button-label"
           ? t("playableWorkbench.historyMoveButtonText")
           : t("playableWorkbench.historyMoveElement"),
@@ -2248,17 +2358,21 @@ export function PlayableEditorWorkspace({
     const file = await getWorkspaceFile(projectId, location.file);
     const before = file.truncated ? undefined : file.content;
     if (before === undefined) return false;
+    const currentLocation = sourceLocationForPick(before, edit.pick);
+    if (!currentLocation) return false;
     const html = setPlayableElementTransform(
       before,
-      location,
+      currentLocation,
       edit.pick.tag,
-      edit.transform,
+      edit.pick.tag.toLowerCase() === "button"
+        ? { ...edit.transform, originX: 50, originY: 50 }
+        : edit.transform,
     );
     if (html === undefined) return false;
     await writeSources(
       graph,
-      { [location.file]: html },
-      { [location.file]: before },
+      { [currentLocation.file]: html },
+      { [currentLocation.file]: before },
       t("playableWorkbench.historyTransformElement"),
     );
     return true;
@@ -2285,6 +2399,10 @@ export function PlayableEditorWorkspace({
     const file = await getWorkspaceFile(projectId, location.file);
     const before = file.truncated ? undefined : file.content;
     if (before === undefined) return false;
+    const stableIdSelector = new RegExp(
+      `^${edit.pick.tag}#[a-z][\\w-]*$`,
+      "i",
+    ).test(edit.pick.cssPath);
     const html =
       edit.part === "button-label"
         ? removePlayableTextPart(
@@ -2294,7 +2412,13 @@ export function PlayableEditorWorkspace({
             edit.pick.text,
             edit.pick.sourceText,
           )
-        : removePlayableElement(before, location, edit.pick.tag);
+        : stableIdSelector
+          ? removePlayableElementByCssPath(
+              before,
+              edit.pick.cssPath,
+              edit.pick.tag,
+            )
+          : removePlayableElement(before, location, edit.pick.tag);
     if (html === undefined) return false;
     const next =
       edit.part !== "button-label" &&
@@ -2435,6 +2559,26 @@ export function PlayableEditorWorkspace({
         t("playableWorkbench.historySetNoInputBehavior"),
       );
     setNoInputMode(mode);
+    return true;
+  }
+
+  async function writeVideoEndAutoAdvance(
+    nodeId: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    const graph = latestCodebase.current?.graph ?? codebase?.graph;
+    const node = graph?.nodes.find((candidate) => candidate.id === nodeId);
+    if (!graph || !node) return false;
+    if (node.videoEndAutoAdvance === enabled) return true;
+    const next = structuredClone(graph);
+    const updated = next.nodes.find((candidate) => candidate.id === nodeId);
+    if (!updated) return false;
+    if (enabled) updated.videoEndAutoAdvance = true;
+    else delete updated.videoEndAutoAdvance;
+    await writeGraph(
+      next,
+      t("playableWorkbench.historySetVideoEndAutoAdvance"),
+    );
     return true;
   }
 
@@ -2686,16 +2830,16 @@ export function PlayableEditorWorkspace({
     }
   }
 
-  async function exportGame(): Promise<void> {
+  async function exportGame(format: InteractiveStoryExportFormat): Promise<void> {
     if (!codebase || building) return;
     setBuilding(true);
     try {
       await save(codebase);
-      const artifact = await buildInteractiveStory(projectId);
+      const artifact = await buildInteractiveStory(projectId, format);
       const url = URL.createObjectURL(artifact);
       const link = window.document.createElement("a");
       link.href = url;
-      link.download = `${project.name}.zip`;
+      link.download = `${project.name}-${format}.${format === "pico-apk" ? "apk" : "zip"}`;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } finally {
@@ -3159,6 +3303,19 @@ export function PlayableEditorWorkspace({
           projectId={projectId}
           node={openedNode}
           graph={codebase.graph}
+          guides={codebase.editorLayout.sceneGuides?.[openedNode.id] ?? []}
+          onGuidesChange={(guides) =>
+            setEditorLayout((current) => {
+              const sceneGuides = { ...current.sceneGuides };
+              if (guides.length) sceneGuides[openedNode.id] = guides;
+              else delete sceneGuides[openedNode.id];
+              const { sceneGuides: _previousGuides, ...layout } = current;
+              return {
+                ...layout,
+                ...(Object.keys(sceneGuides).length ? { sceneGuides } : {}),
+              };
+            })
+          }
           history={historyItems}
           onRestoreHistory={restoreHistoryAt}
           issues={issues}
@@ -3172,9 +3329,9 @@ export function PlayableEditorWorkspace({
           onWriteTextCreate={writeTextCreate}
           onWriteElementCopies={writeElementCopies}
           onHistoryCommand={(command) => {
-            const change =
-              command === "undo" ? undoEditorChange() : redoEditorChange();
-            void change?.catch(() => {});
+            return command === "undo"
+              ? undoEditorChange()
+              : redoEditorChange();
           }}
           elementClipboardCommand={elementClipboardCommand}
           onElementClipboardCommandApplied={(sequence) =>
@@ -3236,6 +3393,8 @@ export function PlayableEditorWorkspace({
             await writeGraph(graph);
             return assetId;
           }}
+          onSetSettingsButtonIcon={writeSettingsButtonIcon}
+          onWriteSettingsButtonPosition={writeSettingsButtonPosition}
           onSetBackdrop={(asset) => writeBackdrop(openedNode.id, asset)}
           onRemoveBackdrop={() => removeBackdrop(openedNode.id)}
           onWriteBackdropLoop={(loop) => writeBackdropLoop(openedNode.id, loop)}
@@ -3246,10 +3405,14 @@ export function PlayableEditorWorkspace({
           onWriteNoInputMode={(mode) =>
             writeNoInputMode(openedNode.id, mode)
           }
+          onWriteVideoEndAutoAdvance={(enabled) =>
+            writeVideoEndAutoAdvance(openedNode.id, enabled)
+          }
           {...(backdrop ? { backdrop } : {})}
           {...(backdropType ? { backdropType } : {})}
           backdropLoop={backdropLoop}
           noInputMode={noInputMode}
+          videoEndAutoAdvance={openedNode.videoEndAutoAdvance === true}
           backdropEffects={backdropEffects}
           onPlayFromHere={(start) => void startPlaytest(start)}
           onChatContextChange={onChatContextChange}

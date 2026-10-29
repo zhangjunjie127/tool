@@ -19,6 +19,7 @@ import {
   isPlayableHostMessage,
   type PlayableElementCopy,
 } from "../src/shared/playable-player-protocol.js";
+import { PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID } from "../src/shared/playable-motion.js";
 import { DocumentPlayableSurfaceHost } from "../src/shared/playable-sandbox.js";
 import { translateSandboxTextNodes } from "../src/renderer/playable-sandbox-language.js";
 
@@ -480,9 +481,377 @@ describe("pick protocol messages", () => {
     ).toBe(true);
     expect(isPlayableHostMessage({ ...init, preview: "report" })).toBe(false);
   });
+
+  it("accepts reference locks and button center-alignment commands", () => {
+    const button = {
+      nodeId: "choice",
+      cssPath: "button#reference",
+      tag: "button",
+    };
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:pick-locks",
+        instanceId: "a",
+        picks: [button],
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:align-elements",
+        instanceId: "a",
+        reference: button,
+        targets: [{ ...button, cssPath: "button#target" }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("DocumentPlayableSurfaceHost click selection", () => {
+  it("does not move a locked reference button", async () => {
+    const window = new Window();
+    Object.defineProperty(window, "top", { value: {} });
+    Object.defineProperty(window, "origin", { value: "null" });
+    Object.assign(globalThis, {
+      MutationObserver: window.MutationObserver,
+      HTMLElement: window.HTMLElement,
+      Element: window.Element,
+      ShadowRoot: window.ShadowRoot,
+      Event: window.Event,
+      getComputedStyle: window.getComputedStyle.bind(window),
+    });
+    const document = window.document as unknown as Document;
+    const host = new DocumentPlayableSurfaceHost(document, async () => ({
+      mount: async () => undefined,
+    }));
+    await host.mountNode(
+      {
+        id: "choice",
+        html: '<button id="reference" data-putenggame-source="nodes/choice/index.html:1:1">Reference</button>',
+        css: "",
+        javascript: "",
+        inputs: [],
+      },
+      {} as never,
+    );
+    const root = document.querySelector<HTMLElement>(
+      '[data-playable-sandbox="true"]',
+    )!;
+    const surface = document.querySelector<HTMLElement>(
+      '[data-playable-surface="choice"]',
+    )!;
+    const button = surface.shadowRoot!.querySelector<HTMLButtonElement>(
+      "#reference",
+    )!;
+    const onMove = vi.fn();
+    host.startPicking("move", {
+      onPick: () => undefined,
+      onTextSelect: () => undefined,
+      onInteractionSelect: () => undefined,
+      onTextEdit: () => undefined,
+      onTextCreate: () => undefined,
+      onMove,
+      onTransform: () => undefined,
+      onDelete: () => undefined,
+      onPasteElements: async () => undefined,
+      onCancel: () => undefined,
+    });
+    host.setPickingLocks([
+      {
+        nodeId: "choice",
+        cssPath: "button#reference",
+        tag: "button",
+        source: "nodes/choice/index.html:1:1",
+        text: "Reference",
+        box: { x: 0, y: 0, width: 100, height: 40 },
+      },
+    ]);
+    const down = new Event("pointerdown", { bubbles: true, composed: true });
+    Object.assign(down, { button: 0, pointerId: 3, clientX: 10, clientY: 10 });
+    button.dispatchEvent(down);
+    const move = new Event("pointermove", { bubbles: true, composed: true });
+    Object.assign(move, { pointerId: 3, clientX: 60, clientY: 50 });
+    root.dispatchEvent(move);
+    const up = new Event("pointerup", { bubbles: true, composed: true });
+    Object.assign(up, { button: 0, pointerId: 3, clientX: 60, clientY: 50 });
+    root.dispatchEvent(up);
+    expect(onMove).not.toHaveBeenCalled();
+    expect(button.style.translate).toBe("");
+    host.destroy();
+    window.close();
+  });
+
+  it("hides resize handles for a selected locked reference button", async () => {
+    const window = new Window();
+    Object.defineProperty(window, "top", { value: {} });
+    Object.defineProperty(window, "origin", { value: "null" });
+    Object.assign(globalThis, {
+      MutationObserver: window.MutationObserver,
+      HTMLElement: window.HTMLElement,
+      Element: window.Element,
+      ShadowRoot: window.ShadowRoot,
+      Event: window.Event,
+      getComputedStyle: window.getComputedStyle.bind(window),
+    });
+    const document = window.document as unknown as Document;
+    const host = new DocumentPlayableSurfaceHost(document, async () => ({
+      mount: async () => undefined,
+    }));
+    await host.mountNode(
+      {
+        id: "choice",
+        html: '<button id="reference" data-putenggame-source="nodes/choice/index.html:1:1">Reference</button>',
+        css: "",
+        javascript: "",
+        inputs: [],
+      },
+      {} as never,
+    );
+    const root = document.querySelector<HTMLElement>(
+      '[data-playable-sandbox="true"]',
+    )!;
+    const surface = document.querySelector<HTMLElement>(
+      '[data-playable-surface="choice"]',
+    )!;
+    const button = surface.shadowRoot!.querySelector<HTMLButtonElement>(
+      "#reference",
+    )!;
+    Object.defineProperty(root, "getBoundingClientRect", {
+      value: () => ({ x: 0, y: 0, width: 640, height: 360 }),
+    });
+    Object.defineProperty(button, "getBoundingClientRect", {
+      value: () => ({ x: 10, y: 20, width: 120, height: 40 }),
+    });
+    const onTransform = vi.fn();
+    host.startPicking("select", {
+      onPick: () => undefined,
+      onTextSelect: () => undefined,
+      onInteractionSelect: () => undefined,
+      onTextEdit: () => undefined,
+      onTextCreate: () => undefined,
+      onMove: () => undefined,
+      onTransform,
+      onDelete: () => undefined,
+      onPasteElements: async () => undefined,
+      onCancel: () => undefined,
+    });
+    const down = new Event("pointerdown", { bubbles: true, composed: true });
+    Object.assign(down, {
+      button: 0,
+      pointerId: 4,
+      clientX: 20,
+      clientY: 30,
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+    });
+    button.dispatchEvent(down);
+    const up = new Event("pointerup", { bubbles: true, composed: true });
+    Object.assign(up, { button: 0, pointerId: 4, clientX: 20, clientY: 30 });
+    root.dispatchEvent(up);
+    root.dispatchEvent(new Event("click", { bubbles: true, composed: true }));
+    host.setPickingLocks([
+      {
+        nodeId: "choice",
+        cssPath: "button#reference",
+        tag: "button",
+        source: "nodes/choice/index.html:1:1",
+        text: "Reference",
+        box: { x: 10, y: 20, width: 120, height: 40 },
+      },
+    ]);
+    expect(
+      root.querySelector<HTMLElement>(
+        '[data-playable-transform-handle="se"]',
+      )?.style.display,
+    ).toBe("none");
+    expect(onTransform).not.toHaveBeenCalled();
+    host.destroy();
+    window.close();
+  });
+
+  it("aligns selected target button centers to a locked reference and persists moves", async () => {
+    const window = new Window();
+    Object.defineProperty(window, "top", { value: {} });
+    Object.defineProperty(window, "origin", { value: "null" });
+    Object.assign(globalThis, {
+      MutationObserver: window.MutationObserver,
+      HTMLElement: window.HTMLElement,
+      Element: window.Element,
+      ShadowRoot: window.ShadowRoot,
+      Event: window.Event,
+      getComputedStyle: window.getComputedStyle.bind(window),
+    });
+    const document = window.document as unknown as Document;
+    const host = new DocumentPlayableSurfaceHost(document, async () => ({
+      mount: async () => undefined,
+    }));
+    await host.mountNode(
+      {
+        id: "choice",
+        html: [
+          '<main><button id="reference" data-putenggame-source="nodes/choice/index.html:1:1">Reference</button>',
+          '<button id="target" data-putenggame-source="nodes/choice/index.html:2:1">Target</button></main>',
+        ].join(""),
+        css: "",
+        javascript: "",
+        inputs: [],
+      },
+      {} as never,
+    );
+    const surface = document.querySelector<HTMLElement>(
+      '[data-playable-surface="choice"]',
+    )!;
+    const reference = surface.shadowRoot!.querySelector<HTMLButtonElement>(
+      "#reference",
+    )!;
+    const target = surface.shadowRoot!.querySelector<HTMLButtonElement>(
+      "#target",
+    )!;
+    Object.defineProperty(surface, "getBoundingClientRect", {
+      value: () => ({ x: 0, y: 0, width: 1000, height: 500 }),
+    });
+    Object.defineProperty(reference, "getBoundingClientRect", {
+      value: () => ({ x: 300, y: 180, width: 100, height: 40 }),
+    });
+    Object.defineProperty(target, "getBoundingClientRect", {
+      value: () => ({ x: 100, y: 80, width: 100, height: 40 }),
+    });
+    const onMove = vi.fn();
+    host.startPicking("select", {
+      onPick: () => undefined,
+      onTextSelect: () => undefined,
+      onInteractionSelect: () => undefined,
+      onTextEdit: () => undefined,
+      onTextCreate: () => undefined,
+      onMove,
+      onTransform: () => undefined,
+      onDelete: () => undefined,
+      onPasteElements: async () => undefined,
+      onCancel: () => undefined,
+    });
+    const referencePick = {
+      nodeId: "choice",
+      cssPath: "button#reference",
+      source: "nodes/choice/index.html:1:1",
+      tag: "button",
+      text: "Reference",
+      box: { x: 300, y: 180, width: 100, height: 40 },
+    };
+    const targetPick = {
+      nodeId: "choice",
+      cssPath: "button#target",
+      source: "nodes/choice/index.html:2:1",
+      tag: "button",
+      text: "Target",
+      box: { x: 100, y: 80, width: 100, height: 40 },
+    };
+    host.setPickingLocks([referencePick]);
+    host.alignPickedToCenter(referencePick, [targetPick]);
+    expect(target.style.translate).toBe("20cqw 20cqh");
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pick: targetPick,
+        translate: { x: 20, y: 20 },
+        inPlace: true,
+      }),
+    );
+    host.destroy();
+    window.close();
+  });
+
+  it.each(["select", "move"] as const)(
+    "keeps button feedback playing and blocks hover while using the %s tool",
+    async (tool) => {
+      const window = new Window();
+      Object.defineProperty(window, "top", { value: {} });
+      Object.defineProperty(window, "origin", { value: "null" });
+      Object.assign(globalThis, {
+        MutationObserver: window.MutationObserver,
+        HTMLElement: window.HTMLElement,
+        Element: window.Element,
+        ShadowRoot: window.ShadowRoot,
+        Event: window.Event,
+        getComputedStyle: window.getComputedStyle.bind(window),
+      });
+      const document = window.document as unknown as Document;
+      const host = new DocumentPlayableSurfaceHost(document, async () => ({
+        mount: async () => undefined,
+      }));
+      await host.mountNode(
+        {
+          id: "choice",
+          html: '<button data-putenggame-source="nodes/choice/index.html:1:1">Choice</button>',
+          css: "",
+          javascript: "",
+          inputs: [],
+        },
+        {} as never,
+      );
+      const surface = document.querySelector<HTMLElement>(
+        '[data-playable-surface="choice"]',
+      )!;
+      const button =
+        surface.shadowRoot!.querySelector<HTMLButtonElement>("button")!;
+      let playState: Animation["playState"] = "running";
+      let currentTime: number | null = 640;
+      const animation = {
+        id: PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID,
+        get playState() {
+          return playState;
+        },
+        get currentTime() {
+          return currentTime;
+        },
+        set currentTime(value: number | null) {
+          currentTime = value;
+        },
+        pause: vi.fn(() => {
+          playState = "paused";
+        }),
+        play: vi.fn(() => {
+          playState = "running";
+        }),
+      } as unknown as Animation;
+      Object.defineProperty(button, "getAnimations", {
+        value: () => [animation],
+      });
+      const pointerEntered = vi.fn();
+      button.addEventListener("pointerenter", pointerEntered);
+
+      host.startPicking(tool, {
+        onPick: () => undefined,
+        onTextSelect: () => undefined,
+        onInteractionSelect: () => undefined,
+        onTextEdit: () => undefined,
+        onTextCreate: () => undefined,
+        onMove: () => undefined,
+        onTransform: () => undefined,
+        onDelete: () => undefined,
+        onPasteElements: async () => undefined,
+        onCancel: () => undefined,
+      });
+
+      expect(animation.pause).not.toHaveBeenCalled();
+      expect(animation.currentTime).toBe(640);
+      expect(animation.playState).toBe("running");
+      button.dispatchEvent(
+        new window.Event("pointerenter", { composed: true }) as unknown as Event,
+      );
+      expect(pointerEntered).not.toHaveBeenCalled();
+
+      host.stopPicking();
+      expect(animation.play).not.toHaveBeenCalled();
+      expect(animation.playState).toBe("running");
+      button.dispatchEvent(
+        new window.Event("pointerenter", { composed: true }) as unknown as Event,
+      );
+      expect(pointerEntered).toHaveBeenCalledOnce();
+
+      host.destroy();
+      window.close();
+    },
+  );
+
   it("waits without advancing failure navigation until a configured control is operated", async () => {
     const window = new Window();
     Object.defineProperty(window, "top", { value: {} });
@@ -1578,6 +1947,8 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
       surface.shadowRoot!.querySelector<HTMLVideoElement>("#backdrop")!;
     const foreground =
       surface.shadowRoot!.querySelector<HTMLVideoElement>("#foreground")!;
+    const play = vi.spyOn(backdrop, "play").mockResolvedValue();
+    const pause = vi.spyOn(backdrop, "pause").mockImplementation(() => {});
     Object.defineProperty(backdrop, "currentTime", {
       configurable: true,
       writable: true,
@@ -1592,9 +1963,13 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
       [];
     host.setMediaStateListener((state) => states.push(state));
 
+    host.controlMedia({ command: "play" });
+    host.controlMedia({ command: "pause" });
     host.controlMedia({ command: "seek", time: 5 });
     foreground.dispatchEvent(new window.Event("timeupdate") as unknown as Event);
 
+    expect(play).toHaveBeenCalledOnce();
+    expect(pause).toHaveBeenCalledOnce();
     expect(backdrop.currentTime).toBe(5);
     expect(foreground.currentTime).toBe(7);
     expect(states.at(-1)?.currentTime).toBe(5);
@@ -1905,7 +2280,7 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     await host.mountNode(
       {
         id: "choice",
-        html: '<main><button id="choice-a" data-signal="option-a" data-putenggame-source="nodes/choice/index.html:1:7"><span data-putenggame-source="nodes/choice/index.html:1:74">Choose</span></button></main>',
+        html: '<main><button id="choice-a" data-signal="option-a" data-putenggame-source="nodes/choice/index.html:1:7"><span data-putenggame-source="nodes/choice/index.html:1:74">Choose</span></button><p id="move-target" data-putenggame-source="nodes/choice/index.html:2:1">Move</p></main>',
         css: "",
         javascript: "",
         inputs: [],
@@ -1920,6 +2295,46 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     )!;
     const button =
       surface.shadowRoot!.querySelector<HTMLButtonElement>("button")!;
+    host.updateMotion({
+      sequence: 1,
+      target: {
+        kind: "element",
+        pick: {
+          nodeId: "choice",
+          source: "nodes/choice/index.html:1:7",
+          cssPath: "button#choice-a",
+          tag: "button",
+          text: "Choose",
+          box: { x: 0, y: 0, width: 120, height: 48 },
+        },
+      },
+      config: {
+        kind: "hold-charge",
+        mode: "visual",
+        duration: 3,
+        buttonShape: "circle",
+        barAssetId: "charge-image",
+        barAssetScale: 140,
+        barAssetOffsetX: 8,
+        barAssetOffsetY: -4,
+      },
+      assetId: "button-image",
+      assetScaleX: 135,
+      assetScaleY: 120,
+      asset: {
+        contentType: "image/png",
+        bytes: new Uint8Array([1]).buffer,
+      },
+      pressedAssetId: "pressed-image",
+      pressedAsset: {
+        contentType: "image/png",
+        bytes: new Uint8Array([2]).buffer,
+      },
+      barAsset: {
+        contentType: "image/png",
+        bytes: new Uint8Array([3]).buffer,
+      },
+    });
     Object.defineProperty(root, "getBoundingClientRect", {
       value: () => ({ x: 0, y: 0, width: 640, height: 360 }),
     });
@@ -1975,22 +2390,105 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     const buttons = surface.shadowRoot!.querySelectorAll("button");
     expect(buttons).toHaveLength(2);
     expect(onPasteElements).toHaveBeenCalledOnce();
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).not.toContain(
+      "data-putenggame-button-asset-image",
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).not.toContain(
+      "data-putenggame-button-label",
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).not.toContain(
+      "data-putenggame-motion-ui",
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-button-asset="button-image"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-button-pressed-asset="pressed-image"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-motion-bar-asset="charge-image"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-button-asset-scale-x="135"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-button-asset-scale-y="120"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).not.toMatch(
+      /\bscale\s*:/,
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-motion-bar-asset-scale="140"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-motion-bar-asset-x="8"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-motion-bar-asset-y="-4"',
+    );
+    expect(onPasteElements.mock.calls[0]![0][0]!.html).toContain(
+      'data-putenggame-motion="hold-charge"',
+    );
     expect(onPasteElements.mock.calls[0]![0][0]!.previewHtml).toContain(
       'id="putenggame-copy-',
     );
+    expect(
+      onPasteElements.mock.calls[0]![0][0]!.previewHtml,
+    ).not.toContain("data-putenggame-button-asset-image");
+    expect(
+      onPasteElements.mock.calls[0]![0][0]!.previewHtml,
+    ).not.toContain("data-putenggame-motion-ui");
     expect(buttons[1]!.id).toMatch(/^putenggame-copy-/);
     expect(buttons[1]!.getAttribute("data-signal")).toBe("option-a");
     expect(buttons[1]!.getAttribute("data-putenggame-source")).toBe(
       "nodes/choice/index.html:2:1",
     );
     expect(buttons[1]!.style.translate).not.toContain("calc(");
+    expect(buttons[1]!.style.scale).toBe(buttons[0]!.style.scale);
     expect(
-      buttons[1]!.querySelector("span")!.getAttribute("data-putenggame-source"),
-    ).toBe("nodes/choice/index.html:3:1");
+      buttons[0]!.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-asset-image] img",
+      )?.src,
+    ).toMatch(/^blob:/);
+    expect(
+      buttons[1]!.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-asset-image] img",
+      )?.src,
+    ).toBe(
+      buttons[0]!.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-asset-image] img",
+      )?.src,
+    );
+    expect(
+      buttons[1]!.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-pressed-image] img",
+      )?.src,
+    ).toBe(
+      buttons[0]!.querySelector<HTMLImageElement>(
+        "[data-putenggame-button-pressed-image] img",
+      )?.src,
+    );
+    expect(
+      buttons[1]
+        ?.querySelector("[data-putenggame-motion-bar]")
+        ?.getAttribute("href"),
+    ).toBe(
+      buttons[0]
+        ?.querySelector("[data-putenggame-motion-bar]")
+        ?.getAttribute("href"),
+    );
+    expect(
+      buttons[1]!.querySelector(
+        '[data-putenggame-source="nodes/choice/index.html:3:1"]',
+      ),
+    ).not.toBeNull();
 
-    buttons[1]!.style.translate =
+    buttons[0]!.style.translate =
       "calc(2cqw + 0px) calc(2cqh + 0px)";
     const onMove = vi.fn();
+    const moveTarget = surface.shadowRoot!.querySelector<HTMLElement>(
+      "#move-target",
+    )!;
     host.startPicking("move", {
       onPick: () => undefined,
       onTextSelect: () => undefined,
@@ -2010,7 +2508,7 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
       clientX: 20,
       clientY: 30,
     });
-    buttons[1]!.dispatchEvent(moveDown);
+    moveTarget.dispatchEvent(moveDown);
     const move = new Event("pointermove", { bubbles: true, composed: true });
     Object.assign(move, { pointerId: 2, clientX: 40, clientY: 50 });
     root.dispatchEvent(move);
@@ -2021,9 +2519,9 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     expect(onMove).toHaveBeenCalledOnce();
     expect(onMove.mock.calls[0]![0]).toMatchObject({
       inPlace: true,
-      translate: { x: 5.13, y: 7.56 },
+      translate: { x: 3.13, y: 5.56 },
     });
-    expect(buttons[1]!.style.translate).not.toContain("calc(");
+    expect(moveTarget.style.translate).not.toContain("calc(");
 
     host.destroy();
     window.close();
@@ -2135,7 +2633,7 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
 
     expect(picks).toEqual([
       "main > button",
-      "main > p",
+      "main > p:nth-of-type(1)",
       "main > img",
       "main > video",
       "main > div:nth-of-type(2)",
@@ -2182,6 +2680,8 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     Object.defineProperty(root, "getBoundingClientRect", {
       value: () => ({ x: 0, y: 0, width: 720, height: 1280 }),
     });
+    Object.defineProperty(root, "clientWidth", { value: 1440 });
+    Object.defineProperty(root, "clientHeight", { value: 2560 });
     Object.defineProperty(button, "getBoundingClientRect", {
       value: () => box,
     });
@@ -2219,7 +2719,10 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     const outline = root.querySelector<HTMLElement>(
       '[data-playable-pick-outline="true"]',
     )!;
-    expect(outline.style.width).toBe("100px");
+    expect(outline.style.left).toBe("200px");
+    expect(outline.style.top).toBe("240px");
+    expect(outline.style.width).toBe("200px");
+    expect(outline.style.height).toBe("80px");
     box = { x: 50, y: 100, width: 200, height: 40 };
     host.controlMedia({
       command: "button-asset-scale",
@@ -2231,9 +2734,129 @@ describe("DocumentPlayableSurfaceHost click selection", () => {
     });
 
     expect(button.style.scale).toBe("2 1");
-    expect(outline.style.left).toBe("50px");
-    expect(outline.style.width).toBe("200px");
+    expect(outline.style.left).toBe("100px");
+    expect(outline.style.width).toBe("400px");
 
+    host.controlMedia({
+      command: "element-scale-preview",
+      nodeId: "choice",
+      cssPath: "main > button",
+      source: "nodes/choice/index.html:1:7",
+      scale: 1.5,
+    });
+    expect(button.style.scale).toBe("3 1.5");
+
+    host.destroy();
+    window.close();
+  });
+
+  it("keeps an idle prompt button resizable while its hint animation is running", async () => {
+    const window = new Window();
+    Object.defineProperty(window, "top", { value: {} });
+    Object.defineProperty(window, "origin", { value: "null" });
+    Object.assign(globalThis, {
+      MutationObserver: window.MutationObserver,
+      HTMLElement: window.HTMLElement,
+      Element: window.Element,
+      ShadowRoot: window.ShadowRoot,
+      KeyframeEffect: window.KeyframeEffect,
+      Event: window.Event,
+      getComputedStyle: window.getComputedStyle.bind(window),
+    });
+    const document = window.document as unknown as Document;
+    const host = new DocumentPlayableSurfaceHost(document, async () => ({
+      mount: async () => undefined,
+    }));
+    await host.mountNode(
+      {
+        id: "choice",
+        html: [
+          "<main>",
+          '<button style="width: 100px; height: 40px; transform: translate(-50%, -50%); scale: 2; transform-origin: 0% 0% !important" data-putenggame-source="nodes/choice/index.html:1:1" data-putenggame-button-preset data-putenggame-motion="button-feedback" data-putenggame-motion-mode="visual" data-putenggame-motion-duration="0.1" data-putenggame-motion-feedback="idle-pulse-hover-press">Tap</button>',
+          "</main>",
+        ].join(""),
+        css: "",
+        javascript: "",
+        inputs: [],
+      },
+      {} as never,
+    );
+    const root = document.querySelector<HTMLElement>(
+      '[data-playable-sandbox="true"]',
+    )!;
+    const surface = document.querySelector<HTMLElement>(
+      '[data-playable-surface="choice"]',
+    )!;
+    const button =
+      surface.shadowRoot!.querySelector<HTMLButtonElement>("button")!;
+    expect(button.style.transformOrigin).toBe("50% 50%");
+    Object.defineProperty(root, "getBoundingClientRect", {
+      value: () => ({ x: 0, y: 0, width: 640, height: 360 }),
+    });
+    Object.defineProperty(button, "getBoundingClientRect", {
+      value: () => ({
+        x: 100,
+        y: 100,
+        left: 100,
+        top: 100,
+        right: 200,
+        bottom: 140,
+        width: 100,
+        height: 40,
+      }),
+    });
+    Object.defineProperty(button, "offsetWidth", { value: 100 });
+    Object.defineProperty(button, "offsetHeight", { value: 40 });
+    const onTransform = vi.fn();
+    host.startPicking("select", {
+      onPick: () => undefined,
+      onTextSelect: () => undefined,
+      onInteractionSelect: () => undefined,
+      onTextEdit: () => undefined,
+      onTextCreate: () => undefined,
+      onMove: () => undefined,
+      onTransform,
+      onDelete: () => undefined,
+      onPasteElements: async () => undefined,
+      onCancel: () => undefined,
+    });
+
+    const pointer = (
+      target: EventTarget,
+      type: string,
+      values: Record<string, number | boolean> = {},
+    ) => {
+      const event = new Event(type, { bubbles: true, composed: true });
+      Object.assign(event, {
+        button: 0,
+        pointerId: 1,
+        clientX: 120,
+        clientY: 120,
+        shiftKey: false,
+        metaKey: false,
+        ctrlKey: false,
+        ...values,
+      });
+      target.dispatchEvent(event);
+    };
+    pointer(button, "pointerdown");
+    pointer(root, "pointerup");
+    pointer(button, "click");
+    const handle = root.querySelector<HTMLElement>(
+      '[data-playable-transform-handle="se"]',
+    )!;
+    pointer(handle, "pointerdown", { clientX: 200, clientY: 140 });
+    pointer(root, "pointermove", { clientX: 250, clientY: 160 });
+    pointer(root, "pointerup", { clientX: 250, clientY: 160 });
+
+    expect(onTransform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inPlace: true,
+        transform: expect.objectContaining({ originX: 50, originY: 50 }),
+      }),
+    );
+    expect(button.style.scale).not.toBe("");
+    expect(button.getAnimations().length).toBeGreaterThan(0);
     host.destroy();
     window.close();
   });

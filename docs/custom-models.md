@@ -27,7 +27,7 @@ by the endpoint. Remove those models explicitly if you no longer want them.
 ## Azure provider upgrade
 
 Pi 1.2 uses provider ID `azure` in place of `azure-openai-responses`.
-At startup, OhMyGame migrates saved credentials, custom model definitions,
+At startup, puteng game migrates saved credentials, custom model definitions,
 Pi model preferences, and provider visibility settings. Existing `azure`
 entries take precedence. JSONC comments and UTF-8 BOMs are preserved.
 If a file is invalid, it is left untouched and the error is logged; other
@@ -139,7 +139,7 @@ stable. The connection uses `https://openapi.tripo3d.ai/v3`; custom relays can u
 their own Base URL and headers with the same protocol. Rigging and animation
 continue to use the built-in Meshy connection.
 
-The built-in **Hyper3D** provider uses your own API key and requires no OhMyGame
+The built-in **Hyper3D** provider uses your own API key and requires no puteng game
 login. The same **Hyper3D** settings page also offers **Free account credits**.
 The generation picker labels this account connection **Hyper3D · Free**; its
 daily credits and model settings are managed separately from your API key.

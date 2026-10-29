@@ -49,7 +49,9 @@ The workspace keeps the current Interactive Story layout:
   project-list filters, search, and sorting. Opening a project link directly
   uses **Projects** as the return destination. **Playtest** opens the real
   Runtime; the chat toggle and **Publish** follow it.
-- **Export game** downloads a build that players can play anywhere.
+- **Export game** downloads a build that players can play in a browser. The
+  playable web ZIP includes `start-game.bat` for Windows: double-click it to
+  start a local server and open the game in the default browser.
   **Export project** downloads the editable project: its source files without
   `node_modules/` or hidden folders such as `.data/` and `.ohmygame/`, with
   each Library asset copied to `assets/library/` and `graph.json` pointing at
@@ -58,6 +60,19 @@ The workspace keeps the current Interactive Story layout:
   or macOS preserves distinct Library assets.
   Choosing the unzipped folder in **New project** opens the same
   project on another computer.
+- The export options also include a PICO WebXR/PWA ZIP. Host the extracted
+  website over HTTPS, then open it in PICO Browser. Install it as an app if the
+  headset offers that option; otherwise launch it in the browser. It is not an
+  Android APK; videos are loaded on demand and are not cached for offline playback.
+- **PICO install package (APK)** embeds the playable website and its media in a
+  debug-signed Android package. Install it on the headset and launch it to start
+  PICO Browser against a loopback server inside the app; media is served on
+  demand with byte-range support. This requires an Android SDK Platform 34,
+  Build Tools 36.0.0, Gradle 8.2.1, and Java 17 or newer to export. It is a
+  PICO Browser/WebXR launcher, not a native Unity/OpenXR application. Browser
+  availability and WebXR playback still need to be verified on the target headset.
+  In VR, controller or gaze rays hover interactive elements; selecting an
+  element activates its connected Exit.
 
 ### Source files
 
@@ -204,6 +219,22 @@ always returns to **Play**.
   cqh, so it holds at any screen size, and Undo takes it back. Otherwise (an
   element a script creates, or one whose own animation sets `translate`)
   the move is sent to the Agent.
+- **Game settings** is one player-facing entry shared by every Scene. Choose
+  its icon from **Media**, then drag it in the Scene preview to set its
+  game-wide position. Moving or changing the icon does not restart the preview
+  or its background video.
+- **Button settings** can replace a charge button's progress image without
+  removing its timing or hold behavior. The image replaces the built-in rail,
+  and its layer can be moved above or below the button label. Button presets
+  can also select a press effect from the built-in effect library and place its
+  attachment point with horizontal and vertical percentages, and choose its
+  color. The effect plays on button press in both the editor preview and the
+  game. Optional X/Y pixel offsets fine-tune its position without changing the
+  button's layout or hit area.
+- **Guides** adds persistent horizontal or vertical alignment lines over the
+  preview. Add as many as needed, drag a line to position it, select one to
+  remove it, or clear all guides. Guide positions are saved per Scene in the
+  editor layout and are not part of the exported game.
 - **Draw** draws freehand over the preview. The drawing is sent with the next
   chat message, on a screenshot of the preview.
 
@@ -457,7 +488,7 @@ an asset side panel on the Flow canvas can be reconsidered then.
 
 ### Templates
 
-v1 ships seven Templates (Presets). Each contains starter source that
+v1 ships nine Templates (Presets). Each contains starter source that
 already uses the Project Style, its expected Signals, a one-line summary
 for the author, and a brief that tells the Agent what the author usually
 wants next. The brief is not shown to the author. Each Template's picture in
@@ -474,6 +505,8 @@ sample story partly played, since a new one has nothing seen to show.
 | Hotspot   | A picture with pulsing spots, one Signal per spot      | `door`, `window`       |
 | Ending    | Stamped ending title, closing lines, and Play again    | none                   |
 | Story map | The branches seen so far, locked ones, endings found   | none (Back)            |
+| Affection | Relationship meters and threshold-based choices        | `closer`, `distant`, `reassure`, `guarded` |
+| Game settings | Reusable player options, timed subtitles, and Back/Reset/Save | none (Back) |
 
 Starter Signals are ordinary declared Signals; the author or Agent renames
 and adds them freely. The set follows the old editor's story nodes: Open UI
@@ -482,7 +515,7 @@ Condition, and Update State are not Templates because the Start badge, Scene
 code, and Exit conditions cover them. Other screens, such as an archive or a
 small game, start from Blank plus a description.
 
-Templates live in OhMyGame, not in projects. Creating a Scene copies the
+Templates live in puteng game, not in projects. Creating a Scene copies the
 Template's source into `nodes/<id>/`; later Template changes do not affect
 existing Scenes.
 
@@ -553,15 +586,12 @@ the Published Player.
 
 ### Video and image Scenes
 
-"Advance when the video ends" is Scene content, not a Runtime feature. The
-Project Style includes a small `playScene()` component that shows the
-Scene's background and emits a given Signal when the video ends or the
-player clicks. Blank uses it. Authors who want something
-else (a choice over the last frame, a loop until input) change the Scene like
-any other.
-
-This keeps the Runtime free of media-ended and timer transitions while the
-most common interactive-film case needs no code.
+"Advance when the video ends" is normally Scene content. The Project Style
+includes a small `playScene()` component that shows the Scene's background
+and emits a given Signal when a single-play video ends. Clicking a single-play
+video cannot skip it. Looping videos, images, and empty backgrounds can be
+clicked to continue; clicks on controls do not trigger the Scene-level action.
+Blank uses it.
 
 Every Scene has one background: a `.backdrop` element
 (`data-media="backdrop"`) whose `data-asset` and `data-type` say what it
@@ -571,6 +601,14 @@ background from the editor writes those two attributes in the Scene's HTML,
 the same way text edits are written. `showBackdrop()` plays it the same way
 everywhere: a video plays once with sound and stops on its last frame, an
 image stays still. Exits decide when to move on.
+
+For a Scene with one connected story Exit, **Automatically continue when the
+video ends** is an optional Scene setting. When enabled with a single-play
+background video, player input cannot trigger the Exit; the Runtime takes that
+sole Exit when the video ends. It is off by default and does not change other
+Scenes. The setting is unavailable for looping videos, navigation-only Exits,
+or Scenes with multiple connected Exits. Without this setting, existing
+button-driven navigation remains unchanged.
 
 ### Multi-node Agent changes
 

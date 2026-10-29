@@ -19,7 +19,7 @@ Match verification to the change and available runtime. Build success establishe
 
 Read the project's existing scripts, test setup, and engine conventions. Prefer its established build and logic checks.
 
-For a configured OhMyGame Web preview, prefer `game_use`. Reuse its session, send real input, inspect runtime errors and failed asset loads, capture representative rendered states, and close the session in the same turn even after failure. OhMyGame owns the preview server; do not leave another development server running.
+For a configured puteng game Web preview, prefer `game_use`. Reuse its session, send real input, inspect runtime errors and failed asset loads, capture representative rendered states, and close the session in the same turn even after failure. puteng game owns the preview server; do not leave another development server running.
 
 For native engines, use available runtime tools, an engine Connection that actually supports launch or interaction, or project-owned automation. An editor MCP connection alone is not gameplay verification. Do not wrap a native game in a Web project merely to obtain screenshots. Do not install a new browser or automation framework solely for routine verification.
 

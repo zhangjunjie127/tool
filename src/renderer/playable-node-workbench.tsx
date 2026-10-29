@@ -6,13 +6,16 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type RefObject,
 } from "react";
 import {
   ArrowRight,
+  ArrowUp,
   Brush,
-  Check,
   Film,
+  GuideHorizontal,
+  GuideVertical,
+  Lock,
+  LockOpen,
   Image,
   ImageOff,
   InfoCircle,
@@ -24,8 +27,9 @@ import {
   Move,
   Pause,
   Play,
+  Redo2,
   RotateCcw,
-  SlidersHorizontal,
+  ArrowDownToLine,
   Trash2,
   Type,
   Undo2,
@@ -37,6 +41,7 @@ import {
   type PlayableAssetDefinition,
   type PlayableNode,
 } from "../shared/playable-nodes.js";
+import type { PlayableAlignmentGuide } from "../shared/playable-codebase.js";
 import { playableNodeById } from "../shared/playable-graph.js";
 import type {
   PlayableAppearanceTimingCommand,
@@ -50,6 +55,7 @@ import type {
   PlayableMediaCommand,
   PlayableMediaState,
   PlayableMotionCommand,
+  PlayablePreviewShortcut,
   PlayableMove,
   PlayablePreviewOptions,
   PlayableTextCreate,
@@ -111,21 +117,22 @@ import {
   type PlayableMediaAttachment,
   type PlayableStroke,
 } from "./playable-chat.js";
-import { isTextEntry } from "./editor-canvas.js";
+import { isTextEntry, undoShortcut } from "./editor-canvas.js";
 import { PlayableAffectionDialog } from "./playable-affection-dialog.js";
 import {
   readPlayableAffectionConfig,
   type PlayableAffectionConfig,
 } from "../shared/playable-affection.js";
 import {
-  PLAYABLE_BUTTON_ASSET_SCALE_MAX,
-  PLAYABLE_BUTTON_ASSET_SCALE_MIN,
+  PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR,
+  PLAYABLE_BUTTON_PRESS_EFFECTS,
+  type PlayableButtonPressEffect,
   type PlayableMotionConfig,
   type PlayableMotionKind,
 } from "../shared/playable-motion.js";
+import { interactionTimingEditsAreUnchanged } from "../shared/playable-move.js";
 import { parsePlayableSourceLocation } from "../shared/playable-text-edit.js";
 import { readLanguage, t, translateText } from "./i18n.js";
-import type { MediaFilter } from "./asset-browser.js";
 
 const ASSET_UPLOAD_ACCEPT = ".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm";
 const PICKER_CATEGORIES: readonly {
@@ -153,31 +160,6 @@ const FALLBACK_SYSTEM_FONTS = [
   "sans-serif",
 ];
 const TEXT_SIZES = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72, 96];
-
-function sameMotionExceptBarAsset(
-  first: PlayableMotionConfig,
-  second: PlayableMotionConfig,
-): boolean {
-  return (
-    first.kind === second.kind &&
-    first.mode === second.mode &&
-    first.duration === second.duration &&
-    first.buttonShape === second.buttonShape &&
-    first.interaction === second.interaction &&
-    first.requiredCount === second.requiredCount &&
-    first.timeoutDuration === second.timeoutDuration &&
-    first.signal === second.signal &&
-    first.timeoutSignal === second.timeoutSignal &&
-    first.ringAssetId === second.ringAssetId &&
-    first.ringAssetScale === second.ringAssetScale &&
-    first.swipeAssetId === second.swipeAssetId &&
-    first.swipeStyle === second.swipeStyle &&
-    first.swipeBehavior === second.swipeBehavior &&
-    first.ringFill === second.ringFill &&
-    first.ringRotation === second.ringRotation &&
-    first.feedback === second.feedback
-  );
-}
 
 function formatHistoryTime(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString(readLanguage(), {
@@ -207,6 +189,7 @@ export interface PlayableHistoryItem {
 export interface PreviewRuntime {
   definition?: NodePlayerDefinition;
   assets?: Record<string, Blob>;
+  loadAssets?: (assetIds: readonly string[]) => Promise<Record<string, Blob>>;
   error?: string;
 }
 
@@ -239,6 +222,8 @@ export function PlayableNodeWorkbench({
   projectId,
   node,
   graph,
+  guides,
+  onGuidesChange,
   history,
   onRestoreHistory,
   issues,
@@ -271,16 +256,20 @@ export function PlayableNodeWorkbench({
   onWriteDelete,
   onWriteAffection,
   onAddAsset,
+  onSetSettingsButtonIcon,
+  onWriteSettingsButtonPosition,
   onSetBackdrop,
   onRemoveBackdrop,
   onWriteBackdropLoop,
   pictureInPictureVideoLoop,
   onWritePictureInPictureVideoLoop,
   onWriteNoInputMode,
+  onWriteVideoEndAutoAdvance,
   backdrop,
   backdropType,
   backdropLoop,
   noInputMode,
+  videoEndAutoAdvance,
   backdropEffects,
   onPlayFromHere,
   onChatContextChange,
@@ -288,6 +277,8 @@ export function PlayableNodeWorkbench({
   projectId: string;
   node: PlayableNode;
   graph: NodeGraph;
+  guides: readonly PlayableAlignmentGuide[];
+  onGuidesChange: (guides: PlayableAlignmentGuide[]) => void;
   history: readonly PlayableHistoryItem[];
   onRestoreHistory: (index: number) => Promise<void>;
   issues: readonly PlayableProjectValidationIssue[];
@@ -306,7 +297,9 @@ export function PlayableNodeWorkbench({
   onWriteElementCopies: (
     copies: PlayableElementCopy[],
   ) => Promise<Record<string, string> | undefined>;
-  onHistoryCommand?: (command: PlayableHistoryCommand) => void;
+  onHistoryCommand?: (
+    command: PlayableHistoryCommand,
+  ) => Promise<void> | undefined;
   elementClipboardCommand?: PlayableElementClipboardCommand;
   onElementClipboardCommandApplied?: (sequence: number) => void;
   /** Writes a font property back to the selected text element. */
@@ -376,6 +369,8 @@ export function PlayableNodeWorkbench({
   onWriteAffection: (config: PlayableAffectionConfig) => Promise<void>;
   /** Declares an asset on the Scene and resolves with its ID once saved. */
   onAddAsset: (asset: PlayableAssetRequest) => Promise<string>;
+  onSetSettingsButtonIcon: (asset: PlayableAssetRequest) => Promise<boolean>;
+  onWriteSettingsButtonPosition: (position: { x: number; y: number }) => Promise<boolean>;
   /**
    * Shows the asset as the Scene's background, as a step the editor's Undo
    * takes back; resolves false when the background cannot be set in place.
@@ -393,11 +388,13 @@ export function PlayableNodeWorkbench({
   onWriteNoInputMode: (
     mode: PlayableNoInputMode | undefined,
   ) => Promise<boolean>;
+  onWriteVideoEndAutoAdvance: (enabled: boolean) => Promise<boolean>;
   /** Whether the Scene's background shows anything yet; unset when the editor cannot set it. */
   backdrop?: "missing" | "set";
   backdropType?: "image" | "video";
   backdropLoop: boolean;
   noInputMode: PlayableNoInputMode | undefined;
+  videoEndAutoAdvance: boolean;
   backdropEffects: PlayableBackdropEffects;
   /** Opens a Playtest that starts at this Scene. */
   onPlayFromHere?: (start: PlaytestStart) => void;
@@ -420,6 +417,7 @@ export function PlayableNodeWorkbench({
   }, []);
   const runtime = usePlayablePreviewRuntime(
     projectId,
+    node.id,
     revision,
     skipNextRuntimeRefresh,
   );
@@ -463,6 +461,17 @@ export function PlayableNodeWorkbench({
     id: string;
     transfer: { contentType: string; bytes: ArrayBuffer };
   }>();
+  const motionBarPlacement = useRef<
+    | {
+        cssPath: string;
+        scale: number;
+        offsetX: number;
+        offsetY: number;
+        circular: boolean;
+        barLayer: "bottom" | "top";
+      }
+    | undefined
+  >(undefined);
   const [motionSwipeAsset, setMotionSwipeAsset] = useState<{
     id: string;
     transfer: { contentType: string; bytes: ArrayBuffer };
@@ -488,13 +497,53 @@ export function PlayableNodeWorkbench({
     { message: string; at: string }[]
   >([]);
   const [tool, setTool] = useState<PreviewTool>("play");
+  const [settingsButtonSelected, setSettingsButtonSelected] = useState(false);
+  const [selectedGuideId, setSelectedGuideId] = useState<string>();
+  const [referencePicks, setReferencePicks] = useState<PlayablePickResult[]>([]);
+  const [referencePickKey, setReferencePickKey] = useState<string>();
+  const [alignCommand, setAlignCommand] = useState<{
+    sequence: number;
+    reference: PlayablePickResult;
+    targets: PlayablePickResult[];
+  }>();
+  const alignSequence = useRef(0);
+  const moveWriteQueue = useRef(Promise.resolve());
   const [textSelection, setTextSelection] = useState<PlayableTextSelection>();
   const [interactionSelections, setInteractionSelections] = useState<
     PlayableInteractionSelection[]
   >([]);
   const interactionSelection = interactionSelections.at(-1);
   const [picks, setPicks] = useState<PlayablePickResult[]>([]);
-  const [strokes, setStrokes] = useState<PlayableStroke[]>([]);
+  const [strokeHistory, setStrokeHistory] = useState<{
+    strokes: PlayableStroke[];
+    redo: PlayableStroke[];
+  }>({ strokes: [], redo: [] });
+  const strokes = strokeHistory.strokes;
+  const redoStrokes = strokeHistory.redo;
+  const undoStroke = useCallback(() => {
+    setStrokeHistory((current) => {
+      const stroke = current.strokes.at(-1);
+      if (!stroke) return current;
+      return {
+        strokes: current.strokes.slice(0, -1),
+        redo: [...current.redo, stroke],
+      };
+    });
+  }, []);
+  const redoStroke = useCallback(() => {
+    setStrokeHistory((current) => {
+      const stroke = current.redo.at(-1);
+      if (!stroke) return current;
+      return {
+        strokes: [...current.strokes, stroke],
+        redo: current.redo.slice(0, -1),
+      };
+    });
+  }, []);
+  const clearStrokes = useCallback(
+    () => setStrokeHistory({ strokes: [], redo: [] }),
+    [],
+  );
   const [media, setMedia] = useState<PlayableMediaAttachment[]>([]);
   const [mediaState, setMediaState] = useState<PlayableMediaState>({
     currentTime: 0,
@@ -502,6 +551,7 @@ export function PlayableNodeWorkbench({
     paused: true,
   });
   const [mediaCommand, setMediaCommand] = useState<PlayableMediaCommand>();
+  const [vrEyeReference, setVrEyeReference] = useState<"full" | "left" | "right">("full");
   const backdropUpdateSequence = useRef(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRestoring, setHistoryRestoring] = useState(false);
@@ -519,13 +569,16 @@ export function PlayableNodeWorkbench({
 
   useEffect(() => {
     setTool("play");
+    setSettingsButtonSelected(false);
+    setSelectedGuideId(undefined);
     setTextSelection(undefined);
     setInteractionSelections([]);
     setPicks([]);
-    setStrokes([]);
+    setStrokeHistory({ strokes: [], redo: [] });
     setMedia([]);
     setMediaState({ currentTime: 0, duration: 0, paused: true });
     setMediaCommand(undefined);
+    setVrEyeReference("full");
     setMotionCommand(undefined);
     setMotionRingAsset(undefined);
     setMotionBarAsset(undefined);
@@ -545,9 +598,15 @@ export function PlayableNodeWorkbench({
   }, [picks.at(-1)?.cssPath]);
 
   useEffect(() => {
+    setReferencePicks([]);
+    setReferencePickKey(undefined);
+  }, [node.id]);
+
+  useEffect(() => {
     if (tool !== "text") setTextSelection(undefined);
     if (tool !== "select") setInteractionSelections([]);
     if (tool !== "select") setPicks([]);
+    if (tool !== "select") setSettingsButtonSelected(false);
   }, [tool]);
 
   // Esc puts the pointer back to playing. The preview frame reports its own Esc.
@@ -597,7 +656,7 @@ export function PlayableNodeWorkbench({
       setPicks([]);
       setInteractionSelections([]);
     },
-    onClearDrawing: () => setStrokes([]),
+    onClearDrawing: clearStrokes,
     onRemoveMedia: (assetId) =>
       setMedia((current) => current.filter((item) => item.assetId !== assetId)),
     onClearMedia: () => setMedia([]),
@@ -612,6 +671,7 @@ export function PlayableNodeWorkbench({
     ]);
   }, []);
   const onPick = useCallback((pick: PlayablePickResult, additive: boolean) => {
+    setSettingsButtonSelected(false);
     const key = playablePickKey(pick);
     if (!additive) setInteractionSelections([]);
     setPicks((current) => {
@@ -624,7 +684,93 @@ export function PlayableNodeWorkbench({
         : [...current, pick].slice(-PICK_LIMIT);
     });
   }, []);
+  const onSelectSettingsButton = useCallback(() => {
+    setSettingsButtonSelected(true);
+    setSelectedGuideId(undefined);
+    setTextSelection(undefined);
+    setInteractionSelections([]);
+    setPicks([]);
+  }, []);
   const onPickCancel = useCallback(() => setTool("play"), []);
+  const toggleReferencePick = useCallback(
+    (pick: PlayablePickResult) => {
+      const key = playablePickKey(pick);
+      const next = referencePicks.some(
+        (candidate) => playablePickKey(candidate) === key,
+      )
+        ? referencePicks.filter((candidate) => playablePickKey(candidate) !== key)
+        : [...referencePicks, pick];
+      setReferencePicks(next);
+      if (referencePickKey === key)
+        setReferencePickKey(
+          next[0] ? playablePickKey(next[0]) : undefined,
+        );
+      else if (!referencePickKey && next.length)
+        setReferencePickKey(playablePickKey(next[0]!));
+    },
+    [referencePickKey, referencePicks],
+  );
+  const alignSelectionToReference = useCallback(
+    (referenceKey: string) => {
+      const reference = referencePicks.find(
+        (pick) => playablePickKey(pick) === referenceKey,
+      );
+      const targets = picks.filter(
+        (pick) =>
+          pick.tag === "button" &&
+          !referencePicks.some(
+            (candidate) => playablePickKey(candidate) === playablePickKey(pick),
+          ),
+      );
+      if (!reference || targets.length === 0) return;
+      setAlignCommand({
+        sequence: ++alignSequence.current,
+        reference,
+        targets,
+      });
+    },
+    [picks, referencePicks],
+  );
+  const onPreviewHistoryCommand = useCallback(
+    (command: PlayableHistoryCommand) => {
+      if (!onHistoryCommand) return;
+      void withPlayablePreviewRefreshSkip(
+        skipNextRuntimeRefresh,
+        async () => {
+          const change = onHistoryCommand(command);
+          if (!change) return false;
+          await change;
+          return true;
+        },
+        Boolean,
+      ).catch(() => {});
+    },
+    [onHistoryCommand, skipNextRuntimeRefresh],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        isTextEntry(event.target) ||
+        event.isComposing
+      )
+        return;
+      const command = undoShortcut(event);
+      if (!command) return;
+      if (command === "undo" && strokes.length > 0) {
+        event.preventDefault();
+        undoStroke();
+      } else if (command === "redo" && redoStrokes.length > 0) {
+        event.preventDefault();
+        redoStroke();
+      } else {
+        onPreviewHistoryCommand(command);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onPreviewHistoryCommand, redoStroke, redoStrokes.length, strokes.length, undoStroke]);
 
   /** Asks the AI now, or puts the request in the chat prompt when it cannot be sent. */
   const askAgent = useCallback(
@@ -899,6 +1045,8 @@ export function PlayableNodeWorkbench({
               : selection.endSeconds;
         return { ...selection, delaySeconds, endSeconds };
       });
+      if (interactionTimingEditsAreUnchanged(interactionSelections, edits))
+        return true;
       if (
         edits.some(
           ({ delaySeconds, endSeconds }) =>
@@ -972,7 +1120,6 @@ export function PlayableNodeWorkbench({
         showToast({ tone: "error", text: t("playableWorkbench.errorMotionEdit") });
         return;
       }
-      const releaseRefreshSkip = reserveRuntimeRefreshSkip();
       try {
         let appliedPick =
           pick.tag === "button" &&
@@ -991,11 +1138,17 @@ export function PlayableNodeWorkbench({
           | { contentType: string; bytes: ArrayBuffer }
           | undefined;
         if (pick.tag === "button" && pendingButtonNormalAsset) {
-          const assetId = await onReplaceButtonAsset(
-            pick,
-            pendingButtonNormalAsset,
+          const assetId = await withPlayablePreviewRefreshSkip(
+            skipNextRuntimeRefresh,
+            () =>
+              onReplaceButtonAsset(
+                pick,
+                pendingButtonNormalAsset,
+              ),
+            Boolean,
           );
-          if (!assetId) throw new Error("Could not save the normal-state image.");
+          if (!assetId)
+            throw new Error("Could not save the normal-state image.");
           const blob = await getLibraryAsset(
             pendingButtonNormalAsset.source.kind === "library"
               ? pendingButtonNormalAsset.source.assetId
@@ -1013,11 +1166,17 @@ export function PlayableNodeWorkbench({
           };
         }
         if (pick.tag === "button" && pendingButtonPressedAsset) {
-          const assetId = await onSetButtonPressedAsset(
-            appliedPick,
-            pendingButtonPressedAsset,
+          const assetId = await withPlayablePreviewRefreshSkip(
+            skipNextRuntimeRefresh,
+            () =>
+              onSetButtonPressedAsset(
+                appliedPick,
+                pendingButtonPressedAsset,
+              ),
+            Boolean,
           );
-          if (!assetId) throw new Error("Could not save the pressed-state image.");
+          if (!assetId)
+            throw new Error("Could not save the pressed-state image.");
           const blob = await getLibraryAsset(
             pendingButtonPressedAsset.source.kind === "library"
               ? pendingButtonPressedAsset.source.assetId
@@ -1029,15 +1188,18 @@ export function PlayableNodeWorkbench({
           };
           appliedPick = { ...appliedPick, buttonPressedAssetId: assetId };
         }
-        if (
-          !(await onWriteMotion(
-            appliedPick,
-            config,
-            undefined,
-            applyButtonPreset,
-          ))
-        ) {
-          releaseRefreshSkip();
+        const motionWritten = await withPlayablePreviewRefreshSkip(
+          skipNextRuntimeRefresh,
+          () =>
+            onWriteMotion(
+              appliedPick,
+              config,
+              undefined,
+              applyButtonPreset,
+            ),
+          Boolean,
+        );
+        if (!motionWritten) {
           showToast({ tone: "error", text: t("playableWorkbench.errorMotionEdit") });
           return;
         }
@@ -1060,13 +1222,7 @@ export function PlayableNodeWorkbench({
         );
         setPendingButtonNormalAsset(undefined);
         setPendingButtonPressedAsset(undefined);
-        if (
-          pick.tag === "button" ||
-          !pick.motion ||
-          !config.barAssetId ||
-          !sameMotionExceptBarAsset(pick.motion, config)
-        )
-          setMotionCommand({
+        setMotionCommand({
             sequence: ++motionSequence.current,
             target: { kind: "element", pick: appliedPick },
             config,
@@ -1096,8 +1252,8 @@ export function PlayableNodeWorkbench({
               ? { swipeAsset: motionSwipeAsset.transfer }
               : {}),
           });
+        if (config.feedback === "idle-pulse-hover-press") setTool("play");
       } catch (cause) {
-        releaseRefreshSkip();
         showToast({
           tone: "error",
           text: `${t("playableWorkbench.errorMotionEdit")}: ${errorMessage(cause)}`,
@@ -1114,7 +1270,7 @@ export function PlayableNodeWorkbench({
       onSetButtonPressedAsset,
       onWriteMotion,
       picks,
-      reserveRuntimeRefreshSkip,
+      skipNextRuntimeRefresh,
       showToast,
     ],
   );
@@ -1326,7 +1482,9 @@ export function PlayableNodeWorkbench({
             }
           : {}),
       });
-      setTool("select");
+      setTool(
+        config?.feedback === "idle-pulse-hover-press" ? "play" : "select",
+      );
       showToast({
         tone: "info",
         text: config
@@ -1354,25 +1512,91 @@ export function PlayableNodeWorkbench({
     ],
   );
 
-  const previewButtonAssetScale = useCallback(
-    (pick: PlayablePickResult, scaleX: number, scaleY: number) => {
+  const previewElementScale = useCallback(
+    (pick: PlayablePickResult, scale: number) => {
       if (!pick.source) return;
       setMediaCommand({
-        command: "button-asset-scale",
+        command: "element-scale-preview",
         nodeId: pick.nodeId,
         cssPath: pick.cssPath,
         source: pick.source,
-        scaleX,
-        scaleY,
+        scale,
       });
     },
     [],
   );
 
+  const commitElementScale = useCallback(
+    async (pick: PlayablePickResult, scale: number): Promise<boolean> => {
+      const releaseRefreshSkip = reserveRuntimeRefreshSkip();
+      try {
+        const saved = await onWriteTransform({
+          pick,
+          inPlace: Boolean(pick.source),
+          transform: {
+            scale,
+            rotation: pick.transformRotation ?? 0,
+            originX: pick.transformOriginX ?? 50,
+            originY: pick.transformOriginY ?? 50,
+          },
+        });
+        if (!saved) {
+          releaseRefreshSkip();
+          showToast({
+            tone: "error",
+            text: t("playableWorkbench.errorTransform"),
+          });
+          return false;
+        }
+        setPicks((current) =>
+          current.map((item) =>
+            playablePickKey(item) === playablePickKey(pick)
+              ? { ...item, transformScale: scale }
+              : item,
+          ),
+        );
+        setInteractionSelections((current) =>
+          current.map((item) =>
+            playablePickKey(item.pick) === playablePickKey(pick)
+              ? {
+                  ...item,
+                  pick: { ...item.pick, transformScale: scale },
+                }
+              : item,
+          ),
+        );
+        return true;
+      } catch (cause) {
+        releaseRefreshSkip();
+        showToast({
+          tone: "error",
+          text: `无法保存缩放：${errorMessage(cause)}`,
+        });
+        return false;
+      }
+    },
+    [onWriteTransform, reserveRuntimeRefreshSkip, showToast],
+  );
+
   const previewMotionBarScale = useCallback(
-    (scale: number, offsetX: number, offsetY: number) => {
+    (
+      scale: number,
+      offsetX: number,
+      offsetY: number,
+      circular?: boolean,
+      barLayer?: "bottom" | "top",
+    ) => {
       const pick = picks.at(-1);
-      if (!pick?.source || !motionBarAsset) return;
+      if (!pick?.source) return;
+      motionBarPlacement.current = {
+        cssPath: pick.cssPath,
+        scale,
+        offsetX,
+        offsetY,
+        circular: circular ?? pick.motion?.buttonShape === "circle",
+        barLayer: barLayer ?? pick.motion?.barLayer ?? "top",
+      };
+      if (!motionBarAsset) return;
       setMediaCommand({
         command: "motion-progress-preview",
         nodeId: pick.nodeId,
@@ -1381,6 +1605,8 @@ export function PlayableNodeWorkbench({
         scale,
         offsetX,
         offsetY,
+        circular: motionBarPlacement.current.circular,
+        barLayer: motionBarPlacement.current.barLayer,
         asset: {
           ...motionBarAsset.transfer,
           bytes: motionBarAsset.transfer.bytes.slice(0),
@@ -1432,7 +1658,7 @@ export function PlayableNodeWorkbench({
 
   const onMove = useCallback(
     (move: PlayableMove) => {
-      void (async () => {
+      moveWriteQueue.current = moveWriteQueue.current.then(async () => {
         if (move.inPlace) {
           const releaseRefreshSkip = reserveRuntimeRefreshSkip();
           try {
@@ -1452,7 +1678,7 @@ export function PlayableNodeWorkbench({
           [playableElementContext(move.pick)],
           `Moving <${move.pick.tag}>${excerpt}`,
         );
-      })();
+      }).catch(() => {});
     },
     [askAgent, onWriteMove, reserveRuntimeRefreshSkip, showToast],
   );
@@ -1588,6 +1814,15 @@ export function PlayableNodeWorkbench({
   const addMedia = useCallback(
     async (asset: PlayableAssetRequest, target: MediaTarget) => {
       try {
+        if (target === "settings-button") {
+          if (asset.type !== "image") return;
+          if (!(await onSetSettingsButtonIcon(asset)))
+            showToast({
+              tone: "error",
+              text: t("playableWorkbench.errorSettingsButtonIcon"),
+            });
+          return;
+        }
         if (target === "motion-ring") {
           if (asset.type !== "image") return;
           const id = await onAddAsset(asset);
@@ -1619,15 +1854,22 @@ export function PlayableNodeWorkbench({
             transfer,
           });
           const pick = picks.at(-1);
+          const placement =
+            pick && motionBarPlacement.current?.cssPath === pick.cssPath
+              ? motionBarPlacement.current
+              : undefined;
           if (pick?.source)
             setMediaCommand({
               command: "motion-progress-preview",
               nodeId: pick.nodeId,
               cssPath: pick.cssPath,
               source: pick.source,
-              scale: pick.motion?.barAssetScale ?? 100,
-              offsetX: pick.motion?.barAssetOffsetX ?? 0,
-              offsetY: pick.motion?.barAssetOffsetY ?? 0,
+              scale: placement?.scale ?? pick.motion?.barAssetScale ?? 100,
+              offsetX: placement?.offsetX ?? pick.motion?.barAssetOffsetX ?? 0,
+              offsetY: placement?.offsetY ?? pick.motion?.barAssetOffsetY ?? 0,
+              circular:
+                placement?.circular ?? pick.motion?.buttonShape === "circle",
+              barLayer: placement?.barLayer ?? pick.motion?.barLayer ?? "top",
               asset: { ...transfer, bytes: bytes.slice(0) },
             });
           return;
@@ -1784,6 +2026,7 @@ export function PlayableNodeWorkbench({
     [
       node.id,
       onAddAsset,
+      onSetSettingsButtonIcon,
       onInsertMediaAsset,
       backdropLoop,
       pictureInPictureVideoLoop,
@@ -2037,11 +2280,9 @@ export function PlayableNodeWorkbench({
       layout="side-panels"
       pickerOpen={chooser.isOpen}
       pickerNavigation={chooser.navigation}
-      stageOverlayHeight={28 + (tool !== "play" ? 36 : 0)}
+      stageOverlayHeight={28}
       stageOverlay={
-        <div
-          className={`playable-preview-stage-overlay has-timeline${tool !== "play" ? " has-shortcut-hint" : ""}`}
-        >
+        <div className="playable-preview-stage-overlay has-timeline">
           <PreviewTimeline
             state={mediaState}
             onSeek={(time) => setMediaCommand({ command: "seek", time })}
@@ -2052,14 +2293,6 @@ export function PlayableNodeWorkbench({
               });
             }}
           />
-          {tool !== "play" ? (
-            <div className="playable-preview-shortcut-hint">
-              {t(TOOL_HINTS[tool])}
-              {tool === "select" && picks.length
-                ? ` · ${t("playableWorkbench.pickedCount", { count: picks.length })}`
-                : ""}
-            </div>
-          ) : null}
         </div>
       }
       overlay={
@@ -2068,10 +2301,40 @@ export function PlayableNodeWorkbench({
             tool={tool}
             disabled={!ready}
             strokes={strokes.length}
+            redoStrokes={redoStrokes.length}
             picks={picks.length}
+            settingsButtonSelected={settingsButtonSelected}
+            guides={guides}
+            selectedGuideId={selectedGuideId}
+            onAddGuide={(axis) => {
+              const guide: PlayableAlignmentGuide = {
+                id: crypto.randomUUID(),
+                axis,
+                position: 0.5,
+              };
+              onGuidesChange([...guides, guide]);
+              setSelectedGuideId(guide.id);
+            }}
+            onRemoveGuide={() => {
+              if (!selectedGuideId) return;
+              onGuidesChange(guides.filter(({ id }) => id !== selectedGuideId));
+              setSelectedGuideId(undefined);
+            }}
+            onClearGuides={() => {
+              onGuidesChange([]);
+              setSelectedGuideId(undefined);
+            }}
+            referencePicks={referencePicks}
+            referencePickKey={referencePickKey}
+            selectedPicks={picks}
+            onToggleReferencePick={toggleReferencePick}
+            onReferencePickChange={setReferencePickKey}
+            onAlignSelection={alignSelectionToReference}
             textSelection={textSelection}
             interactionSelection={interactionSelection}
             motionSelection={picks.at(-1)}
+            onPreviewElementScale={previewElementScale}
+            onCommitElementScale={commitElementScale}
             motionRingAssetId={
               motionRingAsset?.id ?? picks.at(-1)?.motion?.ringAssetId
             }
@@ -2092,7 +2355,19 @@ export function PlayableNodeWorkbench({
             pendingButtonNormalAssetName={pendingButtonNormalAsset?.name}
             pendingButtonPressedAssetName={pendingButtonPressedAsset?.name}
             onChooseMotionRing={() => chooser.choose("motion-ring")}
-            onChooseMotionBar={() => chooser.choose("motion-bar")}
+            onChooseMotionBar={(scale, offsetX, offsetY, circular, barLayer) => {
+              const pick = picks.at(-1);
+              if (pick)
+                motionBarPlacement.current = {
+                  cssPath: pick.cssPath,
+                  scale,
+                  offsetX,
+                  offsetY,
+                  circular,
+                  barLayer,
+                };
+              chooser.choose("motion-bar");
+            }}
             onChooseMotionSwipe={() => chooser.choose("motion-swipe")}
             onChooseMotionBase={() => chooser.choose("motion-base")}
             onChooseButtonNormal={() => chooser.choose("button")}
@@ -2106,6 +2381,11 @@ export function PlayableNodeWorkbench({
             motionSignals={motionSignals}
             fonts={fonts}
             onTextStyle={onTextStyle}
+            vrEyeReference={vrEyeReference}
+            onVrEyeReference={(eye) => {
+              setVrEyeReference(eye);
+              setMediaCommand({ command: "vr-eye-preview", nodeId: node.id, eye });
+            }}
             onEditButtonLabel={editButtonLabel}
             onEditButtonFont={editButtonFont}
             onDeleteSelected={deleteSelected}
@@ -2120,14 +2400,25 @@ export function PlayableNodeWorkbench({
               id,
               label,
             }))}
-            onPreviewButtonAssetScale={previewButtonAssetScale}
             onPreviewMotionBarScale={previewMotionBarScale}
             onCommitButtonAssetScale={commitButtonAssetScale}
             onTool={setTool}
             mediaState={mediaState}
             onMediaCommand={setMediaCommand}
-            onUndoStroke={() => setStrokes((current) => current.slice(0, -1))}
-            onClearStrokes={() => setStrokes([])}
+            onHistoryCommand={onPreviewHistoryCommand}
+            onChooseSettingsButtonIcon={() =>
+              chooser.choose("settings-button")
+            }
+            onPreviewShortcut={(shortcut) =>
+              applyPreviewShortcut(shortcut, {
+                onTool: setTool,
+                onMediaCommand: setMediaCommand,
+                paused: mediaState.paused,
+              })
+            }
+            onUndoStroke={undoStroke}
+            onRedoStroke={redoStroke}
+            onClearStrokes={clearStrokes}
             media={
               <MediaMenu
                 disabled={!ready}
@@ -2140,7 +2431,22 @@ export function PlayableNodeWorkbench({
                 backdropLoop={backdropLoop}
                 pictureInPictureVideoLoop={pictureInPictureVideoLoop}
                 noInputMode={noInputMode}
+                canEnableVideoEndAutoAdvance={
+                  (() => {
+                    const outgoing = graph.edges.filter(
+                      (edge) => edge.source.nodeId === node.id,
+                    );
+                    return outgoing.length === 1 &&
+                      node.signals.find(
+                        (signal) => signal.id === outgoing[0]!.source.signal,
+                      )?.role !== "navigation";
+                  })()
+                }
+                videoEndAutoAdvance={videoEndAutoAdvance}
                 onChoose={chooser.choose}
+                onChooseSettingsButtonIcon={() =>
+                  chooser.choose("settings-button")
+                }
                 onRemoveBackdrop={() => void removeBackdrop()}
                 onBackdropLoopChange={(loop) => void writeBackdropLoop(loop)}
                 onPictureInPictureVideoLoopChange={(loop) =>
@@ -2148,6 +2454,9 @@ export function PlayableNodeWorkbench({
                 }
                 onNoInputModeChange={(mode) =>
                   void writeNoInputMode(mode)
+                }
+                onVideoEndAutoAdvanceChange={(enabled) =>
+                  void onWriteVideoEndAutoAdvance(enabled)
                 }
               />
             }
@@ -2176,9 +2485,30 @@ export function PlayableNodeWorkbench({
           definition={runtime.definition}
           frameUrl={playableSandboxUrl()}
           assets={runtime.assets}
+          onLoadAssets={runtime.loadAssets}
           saveKey={`putenggame:playable:preview:${projectId}`}
           storage={storage}
           preview={preview}
+          showGameSettings
+          settingsButtonSelected={settingsButtonSelected}
+          onSelectSettingsButton={onSelectSettingsButton}
+          onSettingsButtonPositionChange={async (position) => {
+            try {
+              const saved = await onWriteSettingsButtonPosition(position);
+              if (!saved)
+                showToast({
+                  tone: "error",
+                  text: t("playableWorkbench.errorSettingsButtonPosition"),
+                });
+              return saved;
+            } catch (cause) {
+              showToast({
+                tone: "error",
+                text: `${t("playableWorkbench.errorSettingsButtonPosition")}: ${errorMessage(cause)}`,
+              });
+              return false;
+            }
+          }}
           preserveMediaState={mediaState}
           backdropEffects={backdropEffects}
           deleteCommand={deleteCommand}
@@ -2203,10 +2533,19 @@ export function PlayableNodeWorkbench({
           onDelete={onDelete}
           onDeleteSelected={deleteSelected}
           onPasteElements={onPasteElements}
-          onHistoryCommand={onHistoryCommand}
+          onHistoryCommand={onPreviewHistoryCommand}
           elementClipboardCommand={elementClipboardCommand}
           onElementClipboardCommandApplied={onElementClipboardCommandApplied}
           onMediaState={setMediaState}
+          lockedPicks={referencePicks}
+          alignCommand={alignCommand}
+          onPreviewShortcut={(shortcut) =>
+            applyPreviewShortcut(shortcut, {
+              onTool: setTool,
+              onMediaCommand: setMediaCommand,
+              paused: mediaState.paused,
+            })
+          }
           mediaCommand={mediaCommand}
           onPickCancel={onPickCancel}
           onSnapshot={setSnapshot}
@@ -2225,9 +2564,21 @@ export function PlayableNodeWorkbench({
           viewport={graph.viewport}
           strokes={strokes}
           drawing={tool === "draw"}
-          onStroke={(stroke) => setStrokes((current) => [...current, stroke])}
+          onStroke={(stroke) =>
+            setStrokeHistory((current) => ({
+              strokes: [...current.strokes, stroke],
+              redo: [],
+            }))
+          }
         />
       ) : null}
+      <AlignmentGuides
+        viewport={graph.viewport}
+        guides={guides}
+        onChange={onGuidesChange}
+        selectedGuideId={selectedGuideId}
+        onSelectGuide={setSelectedGuideId}
+      />
     </WorkbenchPreview>
   );
 
@@ -2302,12 +2653,65 @@ const TOOLS: {
   },
 ];
 
-const TOOL_HINTS: Record<Exclude<PreviewTool, "play">, "playableWorkbench.selectToolHint" | "playableWorkbench.textToolHint" | "playableWorkbench.moveToolHint" | "playableWorkbench.drawToolHint"> = {
-  select: "playableWorkbench.selectToolHint",
-  text: "playableWorkbench.textToolHint",
-  move: "playableWorkbench.moveToolHint",
-  draw: "playableWorkbench.drawToolHint",
-};
+function applyPreviewShortcut(
+  shortcut: PlayablePreviewShortcut,
+  handlers: {
+    onTool: (tool: PreviewTool) => void;
+    onMediaCommand: (command: PlayableMediaCommand) => void;
+    paused: boolean;
+  },
+): void {
+  if (shortcut === "toggle-playback") {
+    handlers.onTool("play");
+    handlers.onMediaCommand({
+      command: handlers.paused ? "play" : "pause",
+    });
+    return;
+  }
+  handlers.onTool(shortcut);
+}
+
+export async function withPlayablePreviewRefreshSkip<T>(
+  skip: { current: number },
+  write: () => Promise<T>,
+  succeeded: (result: T) => boolean,
+): Promise<T> {
+  skip.current += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    skip.current = Math.max(0, skip.current - 1);
+  };
+  try {
+    const result = await write();
+    if (!succeeded(result)) release();
+    return result;
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+function previewShortcutForKey(
+  key: string,
+): PlayablePreviewShortcut | undefined {
+  switch (key.toLowerCase()) {
+    case "s":
+      return "select";
+    case "t":
+      return "text";
+    case "m":
+      return "move";
+    case "d":
+      return "draw";
+    case " ":
+    case "spacebar":
+      return "toggle-playback";
+    default:
+      return undefined;
+  }
+}
 
 /** Floats over the bottom of the preview. */
 export function PreviewToolbar({
@@ -2315,6 +2719,17 @@ export function PreviewToolbar({
   disabled,
   strokes,
   picks,
+  guides = [],
+  selectedGuideId,
+  onAddGuide = () => {},
+  onRemoveGuide = () => {},
+  onClearGuides = () => {},
+  referencePicks = [],
+  referencePickKey,
+  selectedPicks = [],
+  onToggleReferencePick,
+  onReferencePickChange,
+  onAlignSelection,
   textSelection,
   interactionSelection,
   motionSelection,
@@ -2334,6 +2749,9 @@ export function PreviewToolbar({
   motionSignals,
   mediaState,
   onMediaCommand,
+  onPreviewShortcut,
+  vrEyeReference = "full",
+  onVrEyeReference,
   fonts,
   onTextStyle,
   onInteractionTiming,
@@ -2346,12 +2764,18 @@ export function PreviewToolbar({
   onEditButtonLabel,
   onEditButtonFont,
   buttonSignals = [],
-  onPreviewButtonAssetScale,
+  onPreviewElementScale,
+  onCommitElementScale,
   onPreviewMotionBarScale,
   onCommitButtonAssetScale,
+  settingsButtonSelected = false,
+  onChooseSettingsButtonIcon,
   onTool,
   onUndoStroke,
+  onRedoStroke = () => {},
   onClearStrokes,
+  redoStrokes = 0,
+  onHistoryCommand,
   media,
   picker,
   pickerOpen = false,
@@ -2360,6 +2784,17 @@ export function PreviewToolbar({
   disabled: boolean;
   strokes: number;
   picks: number;
+  guides?: readonly PlayableAlignmentGuide[];
+  selectedGuideId?: string;
+  onAddGuide?: (axis: PlayableAlignmentGuide["axis"]) => void;
+  onRemoveGuide?: () => void;
+  onClearGuides?: () => void;
+  referencePicks?: readonly PlayablePickResult[];
+  referencePickKey?: string;
+  selectedPicks?: readonly PlayablePickResult[];
+  onToggleReferencePick?: (pick: PlayablePickResult) => void;
+  onReferencePickChange?: (key: string) => void;
+  onAlignSelection?: (referenceKey: string) => void;
   textSelection?: PlayableTextSelection;
   interactionSelection?: PlayableInteractionSelection;
   motionSelection?: PlayablePickResult;
@@ -2371,7 +2806,13 @@ export function PreviewToolbar({
   pendingButtonNormalAssetName?: string;
   pendingButtonPressedAssetName?: string;
   onChooseMotionRing?: () => void;
-  onChooseMotionBar?: () => void;
+  onChooseMotionBar?: (
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+    circular: boolean,
+    barLayer: "bottom" | "top",
+  ) => void;
   onChooseMotionSwipe?: () => void;
   onChooseMotionBase?: () => void;
   onChooseButtonNormal?: () => void;
@@ -2379,6 +2820,9 @@ export function PreviewToolbar({
   motionSignals: readonly { id: string; label: string }[];
   mediaState: PlayableMediaState;
   onMediaCommand: (command: PlayableMediaCommand) => void;
+  onPreviewShortcut?: (shortcut: PlayablePreviewShortcut) => void;
+  vrEyeReference?: "full" | "left" | "right";
+  onVrEyeReference?: (eye: "full" | "left" | "right") => void;
   onDeleteSelected?: () => void;
   fonts: readonly string[];
   onTextStyle: (
@@ -2427,11 +2871,17 @@ export function PreviewToolbar({
     fontFamily: string,
   ) => Promise<boolean>;
   buttonSignals?: readonly { id: string; label: string }[];
-  onPreviewButtonAssetScale?: (
+  onPreviewElementScale?: (
     pick: PlayablePickResult,
-    scaleX: number,
-    scaleY: number,
+    scale: number,
   ) => void;
+  onCommitElementScale?: (
+    pick: PlayablePickResult,
+    scale: number,
+  ) => Promise<boolean>;
+  settingsButtonSelected?: boolean;
+  onChooseSettingsButtonIcon?: () => void;
+  redoStrokes?: number;
   onPreviewMotionBarScale?: (
     scale: number,
     offsetX: number,
@@ -2444,7 +2894,9 @@ export function PreviewToolbar({
   ) => Promise<boolean>;
   onTool: (tool: PreviewTool) => void;
   onUndoStroke: () => void;
+  onRedoStroke?: () => void;
   onClearStrokes: () => void;
+  onHistoryCommand?: (command: PlayableHistoryCommand) => void;
   /** An action after the tools, such as the Media menu. */
   media?: ReactNode;
   /** Inline media chooser placed beside the inspector instead of over the scene. */
@@ -2452,13 +2904,72 @@ export function PreviewToolbar({
   pickerOpen?: boolean;
 }) {
   const language = readLanguage();
-  const [assetScaleOpen, setAssetScaleOpen] = useState(false);
-  const [assetScaleLinked, setAssetScaleLinked] = useState(true);
-  const assetScaleButton = useRef<HTMLButtonElement>(null);
-  const assetScaleMenu = useRef<HTMLDivElement>(null);
-  useDismiss(assetScaleOpen, [assetScaleButton, assetScaleMenu], () =>
-    setAssetScaleOpen(false),
-  );
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        !isTextEntry(event.target)
+      ) {
+        const command = undoShortcut(event);
+        if (command) {
+          if (command === "undo" && strokes > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            onUndoStroke();
+            return;
+          }
+          if (command === "redo" && redoStrokes > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            onRedoStroke();
+            return;
+          }
+          if (onHistoryCommand) {
+            event.preventDefault();
+            event.stopPropagation();
+            onHistoryCommand(command);
+            return;
+          }
+        }
+      }
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isTextEntry(event.target)
+      )
+        return;
+      const shortcut = previewShortcutForKey(event.key);
+      if (!shortcut) return;
+      event.preventDefault();
+      if (onPreviewShortcut) {
+        onPreviewShortcut(shortcut);
+        return;
+      }
+      applyPreviewShortcut(shortcut, {
+        onTool,
+        onMediaCommand,
+        paused: mediaState.paused,
+      });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    mediaState.paused,
+    onMediaCommand,
+    onPreviewShortcut,
+    onHistoryCommand,
+    onRedoStroke,
+    onUndoStroke,
+    onTool,
+    redoStrokes,
+    strokes,
+  ]);
   const selectedButtonAsset = motionSelection?.buttonAssetId
     ? motionSelection
     : undefined;
@@ -2469,65 +2980,57 @@ export function PreviewToolbar({
     : "";
   const [assetScaleXDraft, setAssetScaleXDraft] = useState(savedAssetScaleX);
   const [assetScaleYDraft, setAssetScaleYDraft] = useState(savedAssetScaleY);
+  const [elementScaleDraft, setElementScaleDraft] = useState(
+    Math.round((motionSelection?.transformScale ?? 1) * 100),
+  );
+  const [elementScaleInputDraft, setElementScaleInputDraft] = useState(
+    String(elementScaleDraft),
+  );
+  const elementScaleCommitted = useRef(elementScaleDraft);
+  const elementSelectionKey = motionSelection
+    ? playablePickKey(motionSelection)
+    : "";
+  useEffect(() => {
+    const scale = Math.round((motionSelection?.transformScale ?? 1) * 100);
+    setElementScaleDraft(scale);
+    setElementScaleInputDraft(String(scale));
+    elementScaleCommitted.current = scale;
+  }, [elementSelectionKey, motionSelection?.transformScale]);
+  const previewElementScaleDraft = (value: number) => {
+    if (!motionSelection) return;
+    setElementScaleDraft(value);
+    setElementScaleInputDraft(String(value));
+    onPreviewElementScale?.(motionSelection, value / 100);
+  };
+  const commitElementScaleDraft = async (value = elementScaleDraft) => {
+    const scale = Math.max(5, Math.min(500, Math.round(value)));
+    if (scale !== elementScaleDraft) previewElementScaleDraft(scale);
+    if (
+      !motionSelection?.source ||
+      scale === elementScaleCommitted.current
+    )
+      return;
+    if (
+      await onCommitElementScale?.(
+        motionSelection,
+        scale / 100,
+      )
+    )
+      elementScaleCommitted.current = scale;
+  };
+  const commitElementScaleInputDraft = () => {
+    const value = Number(elementScaleInputDraft);
+    const scale =
+      elementScaleInputDraft.trim() && Number.isFinite(value)
+        ? Math.max(5, Math.min(500, Math.round(value)))
+        : elementScaleCommitted.current;
+    previewElementScaleDraft(scale);
+    void commitElementScaleDraft(scale);
+  };
   useEffect(() => {
     setAssetScaleXDraft(savedAssetScaleX);
     setAssetScaleYDraft(savedAssetScaleY);
-    setAssetScaleLinked(savedAssetScaleX === savedAssetScaleY);
   }, [assetSelectionKey, savedAssetScaleX, savedAssetScaleY]);
-  useEffect(() => {
-    setAssetScaleOpen(false);
-  }, [assetSelectionKey]);
-  const previewAssetScale = (axis: "x" | "y", scale: number) => {
-    if (!selectedButtonAsset) return;
-    const scaleX = assetScaleLinked || axis === "x" ? scale : assetScaleXDraft;
-    const scaleY = assetScaleLinked || axis === "y" ? scale : assetScaleYDraft;
-    setAssetScaleXDraft(scaleX);
-    setAssetScaleYDraft(scaleY);
-    onPreviewButtonAssetScale?.(selectedButtonAsset, scaleX, scaleY);
-  };
-  const setAssetScaleMode = (linked: boolean) => {
-    setAssetScaleLinked(linked);
-    if (
-      linked &&
-      selectedButtonAsset &&
-      assetScaleXDraft !== assetScaleYDraft
-    ) {
-      setAssetScaleYDraft(assetScaleXDraft);
-      onPreviewButtonAssetScale?.(
-        selectedButtonAsset,
-        assetScaleXDraft,
-        assetScaleXDraft,
-      );
-    }
-  };
-  const resetAssetScale = () => {
-    if (!selectedButtonAsset) return;
-    setAssetScaleXDraft(100);
-    setAssetScaleYDraft(100);
-    onPreviewButtonAssetScale?.(selectedButtonAsset, 100, 100);
-  };
-  const renderAssetScaleSlider = (
-    axis: "x" | "y",
-    label: string,
-    value: number,
-  ) => (
-    <label className="playable-preview-asset-scale-row">
-      <span>{label}</span>
-      <input
-        type="range"
-        min={PLAYABLE_BUTTON_ASSET_SCALE_MIN}
-        max={PLAYABLE_BUTTON_ASSET_SCALE_MAX}
-        step="1"
-        value={value}
-        aria-label={t("playableWorkbench.scaleControl", { label })}
-        aria-valuetext={`${value}%`}
-        onChange={(event) =>
-          previewAssetScale(axis, Number(event.target.value))
-        }
-      />
-      <output>{value}%</output>
-    </label>
-  );
   const fontFamilies =
     textSelection?.fontFamily && !fonts.includes(textSelection.fontFamily)
       ? [textSelection.fontFamily, ...fonts]
@@ -2585,12 +3088,24 @@ export function PreviewToolbar({
       !timingDraft.disappearMinutes &&
       !secondsValue
     ) {
+      if (interactionSelection?.endSeconds === undefined) return;
       onInteractionTiming("disappear", undefined);
       return;
     }
     const seconds = Number(secondsValue || 0);
+    const nextTime = minutes * 60 + seconds;
+    if (
+      property === "appear" &&
+      interactionSelection?.delaySeconds === nextTime
+    )
+      return;
+    if (
+      property === "disappear" &&
+      interactionSelection?.endSeconds === nextTime
+    )
+      return;
     if (Number.isFinite(minutes) && Number.isFinite(seconds))
-      onInteractionTiming(property, minutes * 60 + seconds);
+      onInteractionTiming(property, nextTime);
   };
   const timingControls =
     tool === "select" &&
@@ -2675,6 +3190,12 @@ export function PreviewToolbar({
         ) : null}
       </div>
     ) : null;
+  const motionSelectionIsReference =
+    motionSelection?.tag === "button" &&
+    referencePicks.some(
+      (pick) =>
+        playablePickKey(pick) === playablePickKey(motionSelection),
+    );
   return (
     <div className="playable-preview-dock">
       <aside className="playable-preview-tools">
@@ -2692,15 +3213,160 @@ export function PreviewToolbar({
               type="button"
               className={tool === value ? "is-active" : undefined}
               title={t(title)}
+              aria-label={t(label)}
               aria-pressed={tool === value}
               disabled={disabled}
               onClick={() => onTool(value)}
             >
-              <ToolIcon size={14} />
-              <span>{t(label)}</span>
+              <ToolIcon size={18} />
             </button>
           ))}
         </div>
+        <section className="playable-preview-tool-group">
+          <div
+            className="playable-preview-tool-group-title"
+            title={t("playableWorkbench.alignmentGuides")}
+            role="heading"
+            aria-level={2}
+          >
+            <Move size={15} />
+            <span>{t("playableWorkbench.alignmentGuides")}</span>
+          </div>
+          <div
+            className="playable-preview-guide-tools"
+            role="group"
+            aria-label={t("playableWorkbench.alignmentGuides")}
+          >
+            <button
+              type="button"
+              title={t("playableWorkbench.addHorizontalGuide")}
+              aria-label={t("playableWorkbench.addHorizontalGuide")}
+              disabled={disabled}
+              onClick={() => onAddGuide("horizontal")}
+            >
+              <GuideHorizontal size={18} />
+            </button>
+            <button
+              type="button"
+              title={t("playableWorkbench.addVerticalGuide")}
+              aria-label={t("playableWorkbench.addVerticalGuide")}
+              disabled={disabled}
+              onClick={() => onAddGuide("vertical")}
+            >
+              <GuideVertical size={18} />
+            </button>
+            <button
+              type="button"
+              title={t("playableWorkbench.removeSelectedGuide")}
+              aria-label={t("playableWorkbench.removeSelectedGuide")}
+              disabled={disabled || !selectedGuideId}
+              onClick={onRemoveGuide}
+            >
+              <Trash2 size={16} />
+            </button>
+            <button
+              type="button"
+              title={t("playableWorkbench.clearGuides")}
+              aria-label={t("playableWorkbench.clearGuides")}
+              disabled={disabled || !guides.length}
+              onClick={onClearGuides}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </section>
+        <section className="playable-preview-tool-group">
+            <div
+              className="playable-preview-tool-group-title"
+              title={t("playableWorkbench.positionAlignment")}
+              role="heading"
+              aria-level={2}
+            >
+              <Move size={15} />
+              <span>
+                {t("playableWorkbench.positionAlignment")}
+                {referencePicks.length ? ` · ${referencePicks.length}` : ""}
+              </span>
+            </div>
+            <div
+              className="playable-preview-alignment-tools"
+              role="group"
+              aria-label={t("playableWorkbench.positionAlignment")}
+            >
+              <button
+                type="button"
+                className="is-icon-action"
+                aria-pressed={motionSelectionIsReference}
+                title={
+                  motionSelectionIsReference
+                    ? t("playableWorkbench.unlockReference")
+                    : t("playableWorkbench.lockReference")
+                }
+                aria-label={
+                  motionSelectionIsReference
+                    ? t("playableWorkbench.unlockReference")
+                    : t("playableWorkbench.lockReference")
+                }
+                disabled={disabled || motionSelection?.tag !== "button"}
+                onClick={() => {
+                  if (motionSelection?.tag === "button")
+                    onToggleReferencePick?.(motionSelection);
+                }}
+              >
+                {motionSelectionIsReference ? (
+                  <Lock size={16} />
+                ) : (
+                  <LockOpen size={16} />
+                )}
+              </button>
+              <select
+                value={referencePickKey ?? ""}
+                disabled={disabled || !referencePicks.length}
+                onChange={(event) =>
+                  onReferencePickChange?.(event.target.value)
+                }
+                aria-label={t("playableWorkbench.referenceButton")}
+                title={t("playableWorkbench.referenceButton")}
+              >
+                <option value="">
+                  {t("playableWorkbench.referenceButton")}
+                </option>
+                {referencePicks.map((pick) => {
+                  const key = playablePickKey(pick);
+                  return (
+                    <option key={key} value={key}>
+                      {pick.text || t("playableWorkbench.defaultButtonText")}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                type="button"
+                className="is-icon-action"
+                title={t("playableWorkbench.alignCenters")}
+                aria-label={t("playableWorkbench.alignCenters")}
+                disabled={
+                  disabled ||
+                  !referencePickKey ||
+                  !selectedPicks.some(
+                    (pick) =>
+                      pick.tag === "button" &&
+                      !referencePicks.some(
+                        (reference) =>
+                          playablePickKey(reference) ===
+                          playablePickKey(pick),
+                      ),
+                  )
+                }
+                onClick={() =>
+                  referencePickKey &&
+                  onAlignSelection?.(referencePickKey)
+                }
+              >
+                <Move size={16} />
+              </button>
+            </div>
+        </section>
       </aside>
       {pickerOpen ? (
         <aside className="playable-preview-library">
@@ -2710,6 +3376,47 @@ export function PreviewToolbar({
       <aside className="playable-preview-inspector">
         <div className="playable-preview-inspector-content">
           <div className="playable-preview-toolbar" role="toolbar" aria-label={translateText("Scene adjustments")}>
+        {tool === "select" &&
+        settingsButtonSelected &&
+        onChooseSettingsButtonIcon ? (
+          <section
+            className="playable-preview-text-settings playable-preview-settings-button"
+            aria-label={t("playableWorkbench.settingsButton")}
+          >
+            <strong>{t("playableWorkbench.settingsButton")}</strong>
+            <button
+              type="button"
+              aria-label={t("playableWorkbench.chooseSettingsButtonIcon")}
+              title={t("playableWorkbench.chooseSettingsButtonIcon")}
+              onClick={onChooseSettingsButtonIcon}
+            >
+              <Image size={14} />
+              <span>{t("playableWorkbench.chooseSettingsButtonIcon")}</span>
+            </button>
+          </section>
+        ) : null}
+        {mediaState.backdropAssetId && onVrEyeReference ? (
+          <>
+            <span className="playable-preview-toolbar-divider" aria-hidden="true" />
+            <div className="playable-vr-eye-reference" role="group" aria-label={t("playableWorkbench.vrEyeReference")}>
+              {([
+                ["full", "playableWorkbench.fullFrame"],
+                ["left", "playableWorkbench.leftEye"],
+                ["right", "playableWorkbench.rightEye"],
+              ] as const).map(([eye, label]) => (
+                <button
+                  key={eye}
+                  type="button"
+                  aria-pressed={vrEyeReference === eye}
+                  className={vrEyeReference === eye ? "is-active" : undefined}
+                  onClick={() => onVrEyeReference(eye)}
+                >
+                  {t(label)}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
         {media ? (
           <>
             <span
@@ -2717,90 +3424,6 @@ export function PreviewToolbar({
               aria-hidden="true"
             />
             {media}
-          </>
-        ) : null}
-        {tool === "select" && selectedButtonAsset ? (
-          <>
-            <span
-              className="playable-preview-toolbar-divider"
-              aria-hidden="true"
-            />
-            <span className="playable-preview-asset-scale">
-              <button
-                ref={assetScaleButton}
-                type="button"
-                className={assetScaleOpen ? "is-active" : undefined}
-                title={t("playableWorkbench.adjustButtonBackgroundSize")}
-                aria-label={t("playableWorkbench.adjustButtonBackgroundSize")}
-                aria-haspopup="dialog"
-                aria-expanded={assetScaleOpen}
-                onClick={() => setAssetScaleOpen((open) => !open)}
-              >
-                <SlidersHorizontal size={14} />
-                <span>{t("playableWorkbench.backgroundImage")}</span>
-              </button>
-              {assetScaleOpen ? (
-                <div
-                  ref={assetScaleMenu}
-                  className="playable-preview-popover is-asset-scale"
-                  role="dialog"
-                  aria-label={t("playableWorkbench.buttonBackgroundImageSize")}
-                >
-                  <header>
-                    <span>{t("playableWorkbench.buttonBackgroundImageSize")}</span>
-                    <button
-                      type="button"
-                      title={t("playableWorkbench.resetSize")}
-                      aria-label={t("playableWorkbench.resetSize")}
-                      disabled={
-                        assetScaleXDraft === 100 && assetScaleYDraft === 100
-                      }
-                      onClick={resetAssetScale}
-                    >
-                      <RotateCcw size={13} />
-                    </button>
-                  </header>
-                  <div
-                    className="playable-preview-asset-scale-modes"
-                    role="group"
-                    aria-label={t("playableWorkbench.scaleMode")}
-                  >
-                    <button
-                      type="button"
-                      aria-label={t("playableWorkbench.proportionalScaling")}
-                      aria-pressed={assetScaleLinked}
-                      className={assetScaleLinked ? "is-active" : undefined}
-                      onClick={() => setAssetScaleMode(true)}
-                    >
-                      {t("playableWorkbench.proportional")}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={t("playableWorkbench.independentScaling")}
-                      aria-pressed={!assetScaleLinked}
-                      className={!assetScaleLinked ? "is-active" : undefined}
-                      onClick={() => setAssetScaleMode(false)}
-                    >
-                      {t("playableWorkbench.independent")}
-                    </button>
-                  </div>
-                  {assetScaleLinked ? (
-                    renderAssetScaleSlider("x", t("playableWorkbench.overallSize"), assetScaleXDraft)
-                  ) : (
-                    <>
-                      {renderAssetScaleSlider("x", t("playableWorkbench.width"), assetScaleXDraft)}
-                      {renderAssetScaleSlider("y", t("playableWorkbench.height"), assetScaleYDraft)}
-                    </>
-                  )}
-                  <small>
-                    {t("playableWorkbench.adjustableRange", {
-                      min: PLAYABLE_BUTTON_ASSET_SCALE_MIN,
-                      max: PLAYABLE_BUTTON_ASSET_SCALE_MAX,
-                    })}
-                  </small>
-                </div>
-              ) : null}
-            </span>
           </>
         ) : null}
         {tool === "text" && textSelection ? (
@@ -2853,7 +3476,7 @@ export function PreviewToolbar({
             </label>
           </section>
         ) : null}
-        {strokes ? (
+        {strokes || redoStrokes ? (
           <>
             <span
               className="playable-preview-toolbar-divider"
@@ -2861,16 +3484,27 @@ export function PreviewToolbar({
             />
             <button
               type="button"
-              title={translateText("Undo the last stroke")}
-              aria-label={translateText("Undo stroke")}
+              title={t("playableWorkbench.undoStroke")}
+              aria-label={t("playableWorkbench.undoStroke")}
+              disabled={!strokes}
               onClick={onUndoStroke}
             >
               <Undo2 size={14} />
             </button>
             <button
               type="button"
-              title={translateText("Clear the drawing")}
-              aria-label={translateText("Clear drawing")}
+              title={t("playableWorkbench.redoStroke")}
+              aria-label={t("playableWorkbench.redoStroke")}
+              disabled={!redoStrokes}
+              onClick={onRedoStroke}
+            >
+              <Redo2 size={14} />
+            </button>
+            <button
+              type="button"
+              title={t("playableWorkbench.clearDrawing")}
+              aria-label={t("playableWorkbench.clearDrawing")}
+              disabled={!strokes}
               onClick={onClearStrokes}
             >
               <Trash2 size={14} />
@@ -2878,6 +3512,61 @@ export function PreviewToolbar({
           </>
         ) : null}
           </div>
+          {tool === "select" && motionSelection?.source ? (
+            <section
+              className="playable-preview-element-scale"
+              aria-label={t("playableWorkbench.elementScale")}
+            >
+              <label className="playable-preview-asset-scale-row">
+                <span>{t("playableWorkbench.elementScale")}</span>
+                <input
+                  type="range"
+                  min="5"
+                  max="500"
+                  step="1"
+                  value={elementScaleDraft}
+                  aria-label={t("playableWorkbench.elementScale")}
+                  aria-valuetext={`${elementScaleDraft}%`}
+                  onChange={(event) =>
+                    previewElementScaleDraft(Number(event.target.value))
+                  }
+                  onPointerUp={() => void commitElementScaleDraft()}
+                  onKeyUp={() => void commitElementScaleDraft()}
+                  onBlur={() => void commitElementScaleDraft()}
+                />
+                <span className="playable-preview-element-scale-input">
+                  <input
+                    type="number"
+                    min="5"
+                    max="500"
+                    step="1"
+                    value={elementScaleInputDraft}
+                    aria-label={t("playableWorkbench.elementScale")}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setElementScaleInputDraft(value);
+                      const scale = Number(value);
+                      if (
+                        value.trim() &&
+                        Number.isFinite(scale) &&
+                        scale >= 5 &&
+                        scale <= 500
+                      ) {
+                        setElementScaleDraft(scale);
+                        onPreviewElementScale?.(motionSelection, scale / 100);
+                      }
+                    }}
+                    onBlur={commitElementScaleInputDraft}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter")
+                        event.currentTarget.blur();
+                    }}
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+            </section>
+          ) : null}
         </div>
       <MotionLibraryPopover
         selection={motionSelection}
@@ -2888,7 +3577,9 @@ export function PreviewToolbar({
         pendingButtonNormalAssetName={pendingButtonNormalAssetName}
         pendingButtonPressedAssetName={pendingButtonPressedAssetName}
         onChooseRing={() => onChooseMotionRing?.()}
-        onChooseBar={() => onChooseMotionBar?.()}
+        onChooseBar={(scale, offsetX, offsetY, circular, barLayer) =>
+          onChooseMotionBar?.(scale, offsetX, offsetY, circular, barLayer)
+        }
         onChooseBase={() => onChooseMotionBase?.()}
         onChooseButtonNormal={() => onChooseButtonNormal?.()}
         onChooseButtonPressed={() => onChooseButtonPressed?.()}
@@ -3024,9 +3715,11 @@ function builtInButtonPreset(
             : {}),
         }
       : {}),
-    ...(selection?.tag === "button"
-      ? { feedback: "hover-press" as const }
-      : {}),
+    ...(kind === "hold-charge"
+      ? { feedback: "bounce-hover-press" as const }
+      : kind === "countdown" || selection?.tag === "button"
+        ? { feedback: "hover-press" as const }
+        : {}),
   };
 }
 
@@ -3082,7 +3775,13 @@ function MotionLibraryPopover({
   pendingButtonNormalAssetName?: string;
   pendingButtonPressedAssetName?: string;
   onChooseRing: () => void;
-  onChooseBar: () => void;
+  onChooseBar: (
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+    circular: boolean,
+    barLayer: "bottom" | "top",
+  ) => void;
   onChooseBase: () => void;
   onChooseButtonNormal: () => void;
   onChooseButtonPressed: () => void;
@@ -3129,13 +3828,26 @@ function MotionLibraryPopover({
     scale: number,
     offsetX: number,
     offsetY: number,
+    circular: boolean,
+    barLayer: "bottom" | "top",
   ) => void;
   timingControls?: ReactNode;
 }) {
   const [kind, setKind] = useState<PlayableMotionKind>("progress-bar");
   const [buttonShape, setButtonShape] = useState<"rectangle" | "circle">("rectangle");
   const [buttonLabel, setButtonLabel] = useState(selection?.text ?? "");
+  const [buttonLabelEdited, setButtonLabelEdited] = useState(false);
   const [buttonAction, setButtonAction] = useState<PlayableButtonAction>();
+  const [pressEffect, setPressEffect] = useState<
+    PlayableButtonPressEffect | "none"
+  >("none");
+  const [effectColor, setEffectColor] = useState(
+    PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR,
+  );
+  const [effectAnchorX, setEffectAnchorX] = useState(50);
+  const [effectAnchorY, setEffectAnchorY] = useState(50);
+  const [effectOffsetX, setEffectOffsetX] = useState("0");
+  const [effectOffsetY, setEffectOffsetY] = useState("0");
   const [buttonFontFamily, setButtonFontFamily] = useState(
     selection?.fontFamily ?? "inherit",
   );
@@ -3164,9 +3876,11 @@ function MotionLibraryPopover({
   const [barAssetScale, setBarAssetScale] = useState(100);
   const [barAssetOffsetX, setBarAssetOffsetX] = useState(0);
   const [barAssetOffsetY, setBarAssetOffsetY] = useState(0);
+  const [barLayer, setBarLayer] = useState<"bottom" | "top">("top");
   const [pressedAssetId, setPressedAssetId] = useState(sourcePressedAssetId);
   const [swipeBehavior, setSwipeBehavior] =
     useState<NonNullable<PlayableMotionConfig["swipeBehavior"]>>("one-way");
+  const [disappearAfterSwipe, setDisappearAfterSwipe] = useState(false);
   const [reuseExistingSignals, setReuseExistingSignals] = useState(false);
   const [buttonSignal, setButtonSignal] = useState("");
   const [sharedExitNotice, setSharedExitNotice] = useState("");
@@ -3181,7 +3895,10 @@ function MotionLibraryPopover({
     [sourcePressedAssetId],
   );
   useEffect(
-    () => setButtonLabel(selection?.text ?? ""),
+    () => {
+      setButtonLabel(selection?.text ?? "");
+      setButtonLabelEdited(false);
+    },
     [selection?.cssPath, selection?.text],
   );
   useEffect(
@@ -3217,7 +3934,9 @@ function MotionLibraryPopover({
       );
       setKind(config.kind);
       setEffectPreset(
-        config.kind === "button-feedback" &&
+        config.kind === "swipe-button" && config.disappearAfterSwipe
+          ? "builtin:swipe-button:circle:disappear"
+          : config.kind === "button-feedback" &&
           config.feedback === "ripple-hint"
           ? "builtin:button-feedback-ripple"
           : config.kind === "button-feedback" &&
@@ -3250,10 +3969,24 @@ function MotionLibraryPopover({
       setBarAssetScale(config.barAssetScale ?? 100);
       setBarAssetOffsetX(config.barAssetOffsetX ?? 0);
       setBarAssetOffsetY(config.barAssetOffsetY ?? 0);
+      setBarLayer(config.barLayer ?? "top");
       setSwipeBehavior(config.swipeBehavior ?? "one-way");
+      setDisappearAfterSwipe(config.disappearAfterSwipe ?? false);
+      setPressEffect(config.pressEffect ?? "none");
+      setEffectColor(
+        config.effectColor ?? PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR,
+      );
+      setEffectAnchorX(config.effectAnchorX ?? 50);
+      setEffectAnchorY(config.effectAnchorY ?? 50);
+      setEffectOffsetX(String(config.effectOffsetX ?? 0));
+      setEffectOffsetY(String(config.effectOffsetY ?? 0));
       setFeedback(
         config.feedback ??
-          (selection.tag === "button" ? "hover-press" : "none"),
+          (config.kind === "hold-charge"
+            ? "bounce-hover-press"
+            : selection.tag === "button"
+              ? "hover-press"
+              : "none"),
       );
       setTimeoutDuration(
         String(
@@ -3283,7 +4016,13 @@ function MotionLibraryPopover({
       setBarAssetScale(100);
       setBarAssetOffsetX(0);
       setBarAssetOffsetY(0);
+      setBarLayer("top");
       setSwipeBehavior("one-way");
+      setDisappearAfterSwipe(false);
+      setPressEffect("none");
+      setEffectColor(PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR);
+      setEffectAnchorX(50);
+      setEffectAnchorY(50);
       setFeedback(selection.tag === "button" ? "hover-press" : "none");
       const successSignal = connected(selection.signal) || signals[0]?.id || "";
       setSignal(successSignal);
@@ -3301,7 +4040,13 @@ function MotionLibraryPopover({
       setBarAssetScale(100);
       setBarAssetOffsetX(0);
       setBarAssetOffsetY(0);
+      setBarLayer("top");
       setSwipeBehavior("one-way");
+      setDisappearAfterSwipe(false);
+      setPressEffect("none");
+      setEffectColor(PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR);
+      setEffectAnchorX(50);
+      setEffectAnchorY(50);
       setFeedback("none");
       setSignal(signals[0]?.id ?? "");
       setTimeoutSignal(signals[1]?.id ?? signals[0]?.id ?? "");
@@ -3311,6 +4056,17 @@ function MotionLibraryPopover({
 
   const isBounceClickPreset =
     kind === "button-feedback" && feedback === "bounce-hover-press";
+  const canAttachPressEffect = selection
+    ? selection.tag.toLowerCase() === "button"
+    : Boolean(onAddButtonPreset);
+  const offsetValue = (value: string) => {
+    const number = Number(value);
+    return Number.isFinite(number)
+      ? Math.max(-500, Math.min(500, Math.round(number)))
+      : 0;
+  };
+  const effectOffsetXValue = offsetValue(effectOffsetX);
+  const effectOffsetYValue = offsetValue(effectOffsetY);
   const config: PlayableMotionConfig = {
     kind,
     buttonShape,
@@ -3366,16 +4122,23 @@ function MotionLibraryPopover({
           ...(barAssetOffsetY ? { barAssetOffsetY } : {}),
         }
       : {}),
+    ...(["progress-bar", "hold-charge"].includes(kind) &&
+    (selection?.tag === "button" || !selection)
+      ? { barLayer }
+      : {}),
     ...(kind === "swipe-button"
       ? {
           swipeStyle: buttonShape === "circle" ? "floating" : "base",
           swipeBehavior,
+          ...(disappearAfterSwipe ? { disappearAfterSwipe: true } : {}),
           feedback: "none" as const,
         }
       : {}),
     ...(kind === "button-feedback"
       ? { feedback }
-      : selection?.tag === "button"
+      : kind === "hold-charge"
+        ? { feedback }
+        : kind === "countdown" || selection?.tag === "button"
         ? { feedback }
         : {}),
     ...(kind !== "button-feedback" && signal
@@ -3392,6 +4155,20 @@ function MotionLibraryPopover({
     mode === "interactive" &&
     timeoutSignal
       ? { timeoutSignal }
+      : {}),
+    ...(canAttachPressEffect && pressEffect !== "none"
+      ? {
+          pressEffect,
+          effectColor,
+          effectAnchorX,
+          effectAnchorY,
+          ...(effectOffsetXValue
+            ? { effectOffsetX: effectOffsetXValue }
+            : {}),
+          ...(effectOffsetYValue
+            ? { effectOffsetY: effectOffsetYValue }
+            : {}),
+        }
       : {}),
   };
   const clearProgressAsset = (target: "ring" | "bar") => {
@@ -3429,6 +4206,19 @@ function MotionLibraryPopover({
       config.requiredCount <= 20);
   const selectedButton = selection?.tag === "button" ? selection : undefined;
   const isRippleHintPreset = effectPreset === "builtin:button-feedback-ripple";
+  const buttonLabelValue = selection
+    ? buttonLabel
+    : buttonLabelEdited
+      ? buttonLabel
+      : isRippleHintPreset
+        ? ""
+        : buttonAction === "continue"
+          ? t("playableWorkbench.continueButtonText")
+          : buttonAction === "story-map"
+            ? t("playableWorkbench.storyMapButtonText")
+            : buttonAction === "new-game"
+              ? t("playableWorkbench.newGameButtonText")
+              : defaultButtonText(kind);
 
   const setConfigFields = (presetConfig: PlayableMotionConfig) => {
     setButtonShape(
@@ -3459,12 +4249,17 @@ function MotionLibraryPopover({
     );
     setRequiredCount(String(presetConfig.requiredCount ?? 3));
     setRingFill(presetConfig.ringFill ?? "deplete");
-    setFeedback(presetConfig.feedback ?? "hover-press");
+    setFeedback(
+      presetConfig.feedback ??
+        (presetConfig.kind === "hold-charge" ? "bounce-hover-press" : "hover-press"),
+    );
     setRingAssetId(presetConfig.ringAssetId);
     setRingAssetScale(presetConfig.ringAssetScale ?? 100);
     setBarAssetId(presetConfig.barAssetId);
     setBarAssetScale(presetConfig.barAssetScale ?? 100);
+    setBarLayer(presetConfig.barLayer ?? "top");
     setSwipeBehavior(presetConfig.swipeBehavior ?? "one-way");
+    setDisappearAfterSwipe(presetConfig.disappearAfterSwipe ?? false);
     const successSignal =
       presetConfig.signal &&
       signals.some((item) => item.id === presetConfig.signal)
@@ -3535,6 +4330,20 @@ function MotionLibraryPopover({
         setButtonAction(action);
         return;
       }
+      if (
+        value === "builtin:button-feedback-prompt:rectangle" ||
+        value === "builtin:button-feedback-prompt:circle"
+      ) {
+        const shape = value.endsWith(":circle") ? "circle" : "rectangle";
+        applyPreset(value, {
+          kind: "button-feedback",
+          mode: "visual",
+          duration: 0.1,
+          buttonShape: shape,
+          feedback: "idle-pulse-hover-press",
+        });
+        return;
+      }
       if (value === "builtin:button-feedback-ripple") {
         if (!selection) setButtonLabel("");
         applyPreset(value, {
@@ -3545,7 +4354,9 @@ function MotionLibraryPopover({
         return;
       }
       const bounce = value.startsWith("builtin:button-feedback-bounce");
-      const shape = value.endsWith(":circle")
+      const disappearingSwipe =
+        value === "builtin:swipe-button:circle:disappear";
+      const shape = disappearingSwipe || value.endsWith(":circle")
         ? "circle"
         : value.endsWith(":rectangle")
           ? "rectangle"
@@ -3564,9 +4375,11 @@ function MotionLibraryPopover({
         });
         return;
       }
-      const presetKind = value
-        .slice("builtin:".length)
-        .replace(/:(?:circle|rectangle)$/, "") as PlayableMotionKind;
+      const presetKind = disappearingSwipe
+        ? "swipe-button"
+        : (value
+            .slice("builtin:".length)
+            .replace(/:(?:circle|rectangle)$/, "") as PlayableMotionKind);
       if (
         ![
           "countdown",
@@ -3594,6 +4407,7 @@ function MotionLibraryPopover({
             return preset;
           })(),
           buttonShape: shape,
+          ...(disappearingSwipe ? { disappearAfterSwipe: true } : {}),
         },
       );
       return;
@@ -3613,16 +4427,7 @@ function MotionLibraryPopover({
       pressedAssetId,
       selection
         ? undefined
-        : isRippleHintPreset
-          ? ""
-          : buttonLabel.trim() ||
-            (buttonAction === "continue"
-              ? t("playableWorkbench.continueButtonText")
-              : buttonAction === "story-map"
-                ? t("playableWorkbench.storyMapButtonText")
-                : buttonAction === "new-game"
-                  ? t("playableWorkbench.newGameButtonText")
-                  : defaultButtonText(kind)),
+        : buttonLabelValue.trim(),
       selection || buttonFontFamily === "inherit"
         ? undefined
         : buttonFontFamily,
@@ -3722,19 +4527,11 @@ function MotionLibraryPopover({
             <input
               aria-label={translateText("Button text", readLanguage())}
               maxLength={120}
-              value={
-                selection
-                  ? buttonLabel
-                  : buttonLabel ||
-                    (buttonAction === "continue"
-                      ? t("playableWorkbench.continueButtonText")
-                      : buttonAction === "story-map"
-                        ? t("playableWorkbench.storyMapButtonText")
-                        : buttonAction === "new-game"
-                          ? t("playableWorkbench.newGameButtonText")
-                          : defaultButtonText(kind))
-              }
-              onChange={(event) => setButtonLabel(event.target.value)}
+              value={buttonLabelValue}
+              onChange={(event) => {
+                setButtonLabel(event.target.value);
+                setButtonLabelEdited(true);
+              }}
             />
           </label>
           <label>
@@ -3862,16 +4659,23 @@ function MotionLibraryPopover({
           <optgroup label={translateText("Built-in button presets", readLanguage())}>
             <option value="builtin:countdown">{translateText("Countdown button (rectangle)", readLanguage())}</option>
             <option value="builtin:countdown:circle">{translateText("Countdown button (circle)", readLanguage())}</option>
-            <option value="builtin:progress-ring">{translateText("Ring countdown button (rectangle)", readLanguage())}</option>
-            <option value="builtin:progress-ring:circle">{translateText("Ring countdown button (circle)", readLanguage())}</option>
-            <option value="builtin:progress-bar">{translateText("Progress bar button (rectangle)", readLanguage())}</option>
-            <option value="builtin:progress-bar:circle">{translateText("Progress bar button (circle)", readLanguage())}</option>
+            {selection ? (
+              <>
+                <option value="builtin:progress-ring">{t("playableWorkbench.progressRingRectangle")}</option>
+                <option value="builtin:progress-ring:circle">{t("playableWorkbench.progressRingCircle")}</option>
+                <option value="builtin:progress-bar">{t("playableWorkbench.progressBarRectangle")}</option>
+                <option value="builtin:progress-bar:circle">{t("playableWorkbench.progressBarCircle")}</option>
+              </>
+            ) : null}
             <option value="builtin:hold-charge">{translateText("Hold-to-charge button (rectangle)", readLanguage())}</option>
             <option value="builtin:hold-charge:circle">{translateText("Hold-to-charge button (circle)", readLanguage())}</option>
             <option value="builtin:swipe-button">{translateText("Swipe button (rectangle)", readLanguage())}</option>
             <option value="builtin:swipe-button:circle">{translateText("Swipe button (no background image)", readLanguage())}</option>
+            <option value="builtin:swipe-button:circle:disappear">{t("playableWorkbench.swipeDisappear")}</option>
             <option value="builtin:button-feedback">{translateText("Click button (rectangle)", readLanguage())}</option>
             <option value="builtin:button-feedback:circle">{translateText("Click button (circle)", readLanguage())}</option>
+            <option value="builtin:button-feedback-prompt:rectangle">{t("playableWorkbench.promptClickRectangle")}</option>
+            <option value="builtin:button-feedback-prompt:circle">{t("playableWorkbench.promptClickCircle")}</option>
             <option value="builtin:button-feedback-ripple">{translateText("Expanding hint button", readLanguage())}</option>
             <option value="builtin:button-feedback-bounce:rectangle">{translateText("Bouncing click button (rectangle)", readLanguage())}</option>
             <option value="builtin:button-feedback-bounce">{translateText("Bouncing click button (circle)", readLanguage())}</option>
@@ -3900,6 +4704,112 @@ function MotionLibraryPopover({
           </optgroup>
         </select>
       </label>
+      {canAttachPressEffect ? (
+        <div className="playable-preview-motion-effect-library">
+          <label>
+            <span>{t("playableWorkbench.pressEffectLibrary")}</span>
+            <select
+              aria-label={t("playableWorkbench.pressEffectLibrary")}
+              value={pressEffect}
+              onChange={(event) =>
+                setPressEffect(
+                  event.target.value as PlayableButtonPressEffect | "none",
+                )
+              }
+            >
+              <option value="none">{t("playableWorkbench.noPressEffect")}</option>
+              {PLAYABLE_BUTTON_PRESS_EFFECTS.map((effect) => (
+                <option key={effect.id} value={effect.id}>
+                  {t(effect.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {pressEffect !== "none" ? (
+            <div className="playable-preview-motion-effect-anchor">
+              <label className="playable-preview-motion-effect-color">
+                <span>{t("playableWorkbench.effectColor")}</span>
+                <span className="playable-preview-motion-effect-color-value">
+                  <input
+                    type="color"
+                    value={effectColor}
+                    aria-label={t("playableWorkbench.effectColor")}
+                    onChange={(event) => setEffectColor(event.target.value)}
+                  />
+                  <output>{effectColor.toUpperCase()}</output>
+                </span>
+              </label>
+              <strong>{t("playableWorkbench.effectAttachmentPoint")}</strong>
+              <label>
+                <span>{t("playableWorkbench.effectAnchorX")}</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={effectAnchorX}
+                  style={{ accentColor: effectColor }}
+                  aria-label={t("playableWorkbench.effectAnchorX")}
+                  aria-valuetext={`${effectAnchorX}%`}
+                  onChange={(event) =>
+                    setEffectAnchorX(Number(event.target.value))
+                  }
+                />
+                <output>{effectAnchorX}%</output>
+              </label>
+              <label>
+                <span>{t("playableWorkbench.effectAnchorY")}</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={effectAnchorY}
+                  style={{ accentColor: effectColor }}
+                  aria-label={t("playableWorkbench.effectAnchorY")}
+                  aria-valuetext={`${effectAnchorY}%`}
+                  onChange={(event) =>
+                    setEffectAnchorY(Number(event.target.value))
+                  }
+                />
+                <output>{effectAnchorY}%</output>
+              </label>
+              <div className="playable-preview-motion-effect-offset">
+                <label>
+                  <span>{t("playableWorkbench.effectOffsetX")}</span>
+                  <input
+                    type="number"
+                    min="-500"
+                    max="500"
+                    step="1"
+                    value={effectOffsetX}
+                    aria-label={t("playableWorkbench.effectOffsetX")}
+                    onChange={(event) => setEffectOffsetX(event.target.value)}
+                    onBlur={(event) =>
+                      setEffectOffsetX(String(offsetValue(event.target.value)))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{t("playableWorkbench.effectOffsetY")}</span>
+                  <input
+                    type="number"
+                    min="-500"
+                    max="500"
+                    step="1"
+                    value={effectOffsetY}
+                    aria-label={t("playableWorkbench.effectOffsetY")}
+                    onChange={(event) => setEffectOffsetY(event.target.value)}
+                    onBlur={(event) =>
+                      setEffectOffsetY(String(offsetValue(event.target.value)))
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {kind !== "button-feedback" && kind !== "swipe-button" ? (
         <label>
           <span>{translateText("Run mode")}</span>
@@ -4111,7 +5021,15 @@ function MotionLibraryPopover({
             <button
               type="button"
               aria-label={translateText(barAssetId ? "Replace progress bar image" : "Choose progress bar image")}
-              onClick={onChooseBar}
+              onClick={() =>
+                onChooseBar(
+                  barAssetScale,
+                  barAssetOffsetX,
+                  barAssetOffsetY,
+                  buttonShape === "circle",
+                  barLayer,
+                )
+              }
             >
               {translateText(barAssetId ? "Replace" : "Choose")}
             </button>
@@ -4126,6 +5044,53 @@ function MotionLibraryPopover({
               </button>
             ) : null}
           </div>
+          {selection?.tag === "button" || !selection ? (
+            <div
+              className="playable-preview-motion-layer-actions"
+              role="group"
+              aria-label={translateText("Progress bar layer")}
+            >
+              <span>{translateText("Progress bar layer")}</span>
+              <button
+                type="button"
+                title={translateText("Move progress bar to bottom")}
+                aria-label={translateText("Move progress bar to bottom")}
+                aria-pressed={barLayer === "bottom"}
+                className={barLayer === "bottom" ? "is-active" : undefined}
+                onClick={() => {
+                  setBarLayer("bottom");
+                  onPreviewBarScale?.(
+                    barAssetScale,
+                    barAssetOffsetX,
+                    barAssetOffsetY,
+                    buttonShape === "circle",
+                    "bottom",
+                  );
+                }}
+              >
+                <ArrowDownToLine size={14} />
+              </button>
+              <button
+                type="button"
+                title={translateText("Move progress bar to top")}
+                aria-label={translateText("Move progress bar to top")}
+                aria-pressed={barLayer === "top"}
+                className={barLayer === "top" ? "is-active" : undefined}
+                onClick={() => {
+                  setBarLayer("top");
+                  onPreviewBarScale?.(
+                    barAssetScale,
+                    barAssetOffsetX,
+                    barAssetOffsetY,
+                    buttonShape === "circle",
+                    "top",
+                  );
+                }}
+              >
+                <ArrowUp size={14} />
+              </button>
+            </div>
+          ) : null}
           {barAssetId ? (
             <label>
               <span>{translateText("Progress image size")}</span>
@@ -4145,6 +5110,8 @@ function MotionLibraryPopover({
                       scale,
                       barAssetOffsetX,
                       barAssetOffsetY,
+                      buttonShape === "circle",
+                      barLayer,
                     );
                   })()
                 }
@@ -4170,6 +5137,8 @@ function MotionLibraryPopover({
                       barAssetScale,
                       offset,
                       barAssetOffsetY,
+                      buttonShape === "circle",
+                      barLayer,
                     );
                   }}
                 />
@@ -4191,6 +5160,8 @@ function MotionLibraryPopover({
                       barAssetScale,
                       barAssetOffsetX,
                       offset,
+                      buttonShape === "circle",
+                      barLayer,
                     );
                   }}
                 />
@@ -4551,6 +5522,168 @@ export function DrawingLayer({
   );
 }
 
+export function AlignmentGuides({
+  viewport,
+  guides,
+  onChange,
+  selectedGuideId,
+  onSelectGuide,
+}: {
+  viewport: { width: number; height: number };
+  guides: readonly PlayableAlignmentGuide[];
+  onChange: (guides: PlayableAlignmentGuide[]) => void;
+  selectedGuideId?: string;
+  onSelectGuide: (id: string) => void;
+}) {
+  const svg = useRef<SVGSVGElement>(null);
+  const dragPointer = useRef<number | undefined>(undefined);
+  const guidesRef = useRef(guides);
+  const [drag, setDrag] = useState<{ id: string; position: number }>();
+  guidesRef.current = guides;
+
+  const positionAt = (
+    clientX: number,
+    clientY: number,
+    axis: PlayableAlignmentGuide["axis"],
+  ) => {
+    const bounds = svg.current?.getBoundingClientRect();
+    if (!bounds) return undefined;
+    const size = axis === "horizontal" ? bounds.height : bounds.width;
+    if (!size) return undefined;
+    const offset =
+      axis === "horizontal"
+        ? clientY - bounds.top
+        : clientX - bounds.left;
+    return Math.min(1, Math.max(0, offset / size));
+  };
+  const moveGuide = (id: string, position: number) => {
+    onChange(
+      guidesRef.current.map((guide) =>
+        guide.id === id ? { ...guide, position } : guide,
+      ),
+    );
+  };
+  const finishDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!drag || dragPointer.current !== event.pointerId) return;
+    const guide = guidesRef.current.find(({ id }) => id === drag.id);
+    const position = guide
+      ? (positionAt(event.clientX, event.clientY, guide.axis) ?? drag.position)
+      : drag.position;
+    moveGuide(drag.id, position);
+    dragPointer.current = undefined;
+    setDrag(undefined);
+    try {
+      svg.current?.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is not available in every embedded preview.
+    }
+  };
+
+  return (
+    <svg
+      ref={svg}
+      className="playable-alignment-guides"
+      viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+      preserveAspectRatio="none"
+      aria-label={t("playableWorkbench.alignmentGuides")}
+      onPointerMove={(event) => {
+        if (!drag || dragPointer.current !== event.pointerId) return;
+        const guide = guidesRef.current.find(({ id }) => id === drag.id);
+        const position = guide
+          ? positionAt(event.clientX, event.clientY, guide.axis)
+          : undefined;
+        if (position !== undefined) setDrag({ id: drag.id, position });
+      }}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+    >
+      {guides.map((guide, index) => {
+        const position =
+          drag?.id === guide.id ? drag.position : guide.position;
+        const horizontal = guide.axis === "horizontal";
+        const selected = guide.id === selectedGuideId;
+        const x1 = horizontal ? 0 : position * viewport.width;
+        const y1 = horizontal ? position * viewport.height : 0;
+        const x2 = horizontal ? viewport.width : position * viewport.width;
+        const y2 = horizontal ? position * viewport.height : viewport.height;
+        return (
+          <g
+            key={guide.id}
+            className={`${horizontal ? "is-horizontal" : "is-vertical"}${selected ? " is-selected" : ""}`}
+            role="slider"
+            tabIndex={0}
+            aria-label={`${t(horizontal ? "playableWorkbench.horizontalGuide" : "playableWorkbench.verticalGuide")} ${index + 1}`}
+            aria-orientation={horizontal ? "vertical" : "horizontal"}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(position * 100)}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onSelectGuide(guide.id);
+              dragPointer.current = event.pointerId;
+              setDrag({
+                id: guide.id,
+                position:
+                  positionAt(event.clientX, event.clientY, guide.axis) ??
+                  guide.position,
+              });
+              try {
+                svg.current?.setPointerCapture(event.pointerId);
+              } catch {
+                // Pointer capture is not available in every embedded preview.
+              }
+            }}
+            onKeyDown={(event) => {
+              const direction = horizontal
+                ? event.key === "ArrowUp"
+                  ? -1
+                  : event.key === "ArrowDown"
+                    ? 1
+                    : 0
+                : event.key === "ArrowLeft"
+                  ? -1
+                  : event.key === "ArrowRight"
+                    ? 1
+                    : 0;
+              if (!direction) return;
+              event.preventDefault();
+              onSelectGuide(guide.id);
+              moveGuide(
+                guide.id,
+                Math.min(
+                  1,
+                  Math.max(
+                    0,
+                    guide.position +
+                      direction * (event.shiftKey ? 0.05 : 0.01),
+                  ),
+                ),
+              );
+            }}
+          >
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              className="playable-alignment-guide-hit"
+            />
+            <line
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              className="playable-alignment-guide-line"
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 /** Where chosen media goes: canvas, background, chat, or a selected button. */
 type MediaTarget =
   | "backdrop"
@@ -4562,7 +5695,8 @@ type MediaTarget =
   | "motion-bar"
   | "motion-swipe"
   | "motion-base"
-  | "motion-pressed";
+  | "motion-pressed"
+  | "settings-button";
 
 /**
  * Chooses an image or a video from the Library, or uploads a new one.
@@ -4682,6 +5816,15 @@ export function useMediaChooser(
     }
   };
 
+  const refreshSourceFolders = async () => {
+    try {
+      setLibrary(await loadLibraryAssets());
+    } catch (cause) {
+      onError(translateText(errorMessage(cause), readLanguage()));
+      throw cause;
+    }
+  };
+
   const elements = (
     <>
       <input
@@ -4783,6 +5926,7 @@ export function useMediaChooser(
           sourceFolders={sourceFolders}
           onChooseSourceFolder={(folderCategory) => void chooseSourceFolder(folderCategory)}
           onClearSourceFolder={(folderCategory) => void clearSourceFolder(folderCategory)}
+          onRefreshSourceFolders={refreshSourceFolders}
           assets={library.filter((asset) => {
             const type = playableAssetType(asset.mediaType);
             return type === "image" || type === "video";
@@ -4867,7 +6011,8 @@ function isImageOnlyTarget(target: MediaTarget): boolean {
     target === "motion-bar" ||
     target === "motion-swipe" ||
     target === "motion-base" ||
-    target === "motion-pressed";
+    target === "motion-pressed" ||
+    target === "settings-button";
 }
 
 /** Scene media controls in the inspector. */
@@ -4880,11 +6025,15 @@ export function MediaMenu({
   backdropLoop,
   pictureInPictureVideoLoop,
   noInputMode,
+  canEnableVideoEndAutoAdvance,
+  videoEndAutoAdvance,
   onChoose,
+  onChooseSettingsButtonIcon,
   onRemoveBackdrop,
   onBackdropLoopChange,
   onPictureInPictureVideoLoopChange,
   onNoInputModeChange,
+  onVideoEndAutoAdvanceChange,
 }: {
   disabled: boolean;
   uploading: boolean;
@@ -4894,11 +6043,15 @@ export function MediaMenu({
   backdropLoop: boolean;
   pictureInPictureVideoLoop: boolean;
   noInputMode: PlayableNoInputMode | undefined;
+  canEnableVideoEndAutoAdvance: boolean;
+  videoEndAutoAdvance: boolean;
   onChoose: (to: MediaTarget) => void;
+  onChooseSettingsButtonIcon: () => void;
   onRemoveBackdrop: () => void;
   onBackdropLoopChange: (loop: boolean) => void;
   onPictureInPictureVideoLoopChange: (loop: boolean) => void;
   onNoInputModeChange: (mode: PlayableNoInputMode) => void;
+  onVideoEndAutoAdvanceChange: (enabled: boolean) => void;
 }) {
   const language = readLanguage();
   const unavailable = disabled || uploading;
@@ -4945,6 +6098,19 @@ export function MediaMenu({
             )}
           </span>
         </button>
+        <div className="playable-preview-media-heading">
+          {translateText("Game settings button", language)}
+        </div>
+        <button
+          type="button"
+          disabled={unavailable}
+          onClick={onChooseSettingsButtonIcon}
+        >
+          <Image size={13} />
+          <span>
+            {translateText("Choose settings button icon from Library", language)}
+          </span>
+        </button>
         {canSetBackdropLoop ? (
           <PlaybackModeOptions
             label={translateText("Background video playback", language)}
@@ -4962,6 +6128,31 @@ export function MediaMenu({
         <div className="playable-preview-media-heading">
           {translateText("Interaction mode", language)}
         </div>
+        {canSetBackdropLoop ? (
+          <label className="playable-video-end-auto-advance">
+            <input
+              type="checkbox"
+              checked={videoEndAutoAdvance}
+              disabled={unavailable || (backdropLoop && !videoEndAutoAdvance)}
+              title={
+                !canEnableVideoEndAutoAdvance
+                  ? translateText("Requires exactly one connected story Exit", language)
+                  : backdropLoop
+                    ? translateText("Turn off looping to use video-end navigation", language)
+                    : undefined
+              }
+              onChange={(event) =>
+                onVideoEndAutoAdvanceChange(event.target.checked)
+              }
+            />
+            <span>
+              {translateText(
+                "Automatically continue when the video ends",
+                language,
+              )}
+            </span>
+          </label>
+        ) : null}
         <div className="playable-no-input-options" role="radiogroup" aria-label={translateText("Interaction mode", language)}>
           {(
             [
@@ -5221,81 +6412,79 @@ function fixErrorsRequest(title: string, errors: readonly string[]): string {
 }
 
 /**
- * Calls `onDismiss` on Escape or a press outside the given elements while
- * `open`. A press in the preview frame reaches only the frame, so the window
- * losing focus to it counts as outside too.
- */
-function useDismiss(
-  open: boolean,
-  inside: readonly RefObject<HTMLElement | null>[],
-  onDismiss: () => void,
-): void {
-  const latest = useRef({ inside, onDismiss });
-  latest.current = { inside, onDismiss };
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as globalThis.Node;
-      if (!latest.current.inside.some((ref) => ref.current?.contains(target)))
-        latest.current.onDismiss();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      latest.current.onDismiss();
-    };
-    const onBlur = () => latest.current.onDismiss();
-    document.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, [open]);
-}
-
-/**
  * Builds the project's current sources for a Workbench preview. A rebuild
  * with identical output keeps the running preview.
  */
 export function usePlayablePreviewRuntime(
   projectId: string,
+  nodeId: string,
   revision: number,
   skipNextRevision?: { current: number },
 ): PreviewRuntime {
   const [runtime, setRuntime] = useState<PreviewRuntime>({});
   const runtimeKey = useRef<string | undefined>(undefined);
   const assetCache = useRef(new Map<string, Blob>());
+  const graphRef = useRef<NodeGraph | undefined>(undefined);
+  const lastRevision = useRef({ projectId, revision });
+  const loadAssets = useCallback(
+    (assetIds: readonly string[]) => {
+      const graph = graphRef.current;
+      if (!graph) throw new Error("Scene Assets are not available yet.");
+      return loadPlayableAssets(projectId, graph, assetCache.current, assetIds);
+    },
+    [projectId],
+  );
 
   useEffect(() => {
+    const previous = lastRevision.current;
+    if (previous.projectId !== projectId) {
+      runtimeKey.current = undefined;
+      assetCache.current.clear();
+      graphRef.current = undefined;
+    }
+    const revisionDelta =
+      previous.projectId === projectId
+        ? Math.max(0, revision - previous.revision)
+        : 0;
+    lastRevision.current = { projectId, revision };
     // Never skip the first runtime load: an edit can finish while that load is
     // still in flight, and skipping its replacement would leave the preview empty.
     const canKeepRunningPreview = runtimeKey.current !== undefined;
-    if (skipNextRevision && skipNextRevision.current > 0) {
-      skipNextRevision.current -= 1;
-      if (canKeepRunningPreview) return;
+    if (skipNextRevision && revisionDelta > 0 && skipNextRevision.current > 0) {
+      const skippedRevisions = Math.min(
+        revisionDelta,
+        skipNextRevision.current,
+      );
+      skipNextRevision.current -= skippedRevisions;
+      if (canKeepRunningPreview && skippedRevisions === revisionDelta) return;
     }
     let disposed = false;
     void getNodeRuntime(projectId)
       .then(async (result) => {
         if (!result.available)
           throw new Error("This project has no Scenes yet.");
+        graphRef.current = result.definition.graph;
         const key = playableRuntimeKey(result.definition);
+        const selectedNode =
+          result.definition.graph.nodes.find((node) => node.id === nodeId) ??
+          result.definition.graph.nodes.find(
+            (node) => node.id === result.definition.graph.entryNodeId,
+          );
+        if (!selectedNode)
+          throw new Error("This project has no Scenes yet.");
+        const assets = await loadAssets(selectedNode.assets);
+        if (disposed) return;
         if (key === runtimeKey.current) {
-          if (!disposed)
-            setRuntime((current) => ({ ...current, error: undefined }));
+          setRuntime((current) => ({
+            ...current,
+            assets: { ...current.assets, ...assets },
+            loadAssets,
+            error: undefined,
+          }));
           return;
         }
-        const assets = await loadPlayableAssets(
-          projectId,
-          result.definition.graph,
-          assetCache.current,
-        );
-        if (disposed) return;
         runtimeKey.current = key;
-        setRuntime({ definition: result.definition, assets });
+        setRuntime({ definition: result.definition, assets, loadAssets });
       })
       .catch((cause) => {
         if (!disposed)
@@ -5304,7 +6493,7 @@ export function usePlayablePreviewRuntime(
     return () => {
       disposed = true;
     };
-  }, [projectId, revision, skipNextRevision]);
+  }, [projectId, nodeId, revision, skipNextRevision, loadAssets]);
 
   return runtime;
 }

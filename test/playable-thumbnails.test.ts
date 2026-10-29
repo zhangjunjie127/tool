@@ -64,7 +64,7 @@ describe("Node thumbnail cache", () => {
     expect(await listPlayableThumbnails(workspace)).toEqual({});
   });
 
-  it("rejects unknown Nodes, invalid IDs and hashes, and a linked cache", async () => {
+  it("rejects unknown Nodes, invalid IDs and hashes", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
     const nodeIds = new Set(["menu"]);
 
@@ -72,10 +72,20 @@ describe("Node thumbnail cache", () => {
     await expect(writePlayableThumbnail(workspace, "../menu", "0123abcd", IMAGE, nodeIds)).rejects.toThrow("Node ID is invalid");
     await expect(writePlayableThumbnail(workspace, "menu", "XYZ", IMAGE, nodeIds)).rejects.toThrow("hash is invalid");
     await expect(readPlayableThumbnail(workspace, "../../etc/passwd")).rejects.toThrow("Node ID is invalid");
+  });
 
+  it("rejects a linked cache", async ({ skip }) => {
     const outside = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-outside-"));
     const linked = await mkdtemp(path.join(tmpdir(), "putenggame-thumbnails-"));
-    await symlink(outside, path.join(linked, ".putenggame"));
+    const nodeIds = new Set(["menu"]);
+    try {
+      await symlink(outside, path.join(linked, ".putenggame"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP")
+        skip("The current environment does not allow creating symbolic links");
+      throw error;
+    }
     await expect(writePlayableThumbnail(linked, "menu", "0123abcd", IMAGE, nodeIds)).rejects.toThrow(PlayableThumbnailError);
     expect(await readdir(outside)).toEqual([]);
   });

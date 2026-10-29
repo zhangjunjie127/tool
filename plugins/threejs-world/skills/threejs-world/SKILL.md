@@ -21,11 +21,11 @@ This skill covers scene and world building. When the user later wants rules, goa
 
 Read the existing design, the relevant code, and the user's feedback first. Update the affected part of the design and the matching named region together, and preserve unrelated intent and working content. Recheck the modified views and their connections to the rest of the world.
 
-## OhMyGame Contract
+## puteng game Contract
 
 - Follow the workspace's `AGENTS.md`. In an existing project, preserve its build tool and output layout unless the user requests a migration.
-- OhMyGame runs the preview. Do not leave a development server or other background process running after the turn, and do not ask the user to open a local URL. Run a build when you need to check compilation.
+- puteng game runs the preview. Do not leave a development server or other background process running after the turn, and do not ask the user to open a local URL. Run a build when you need to check compilation.
 - Keep the world responsive inside an iframe without horizontal overflow.
-- When publishing is in scope, produce static output supported by OhMyGame.
+- When publishing is in scope, produce static output supported by puteng game.
 - Do not install Playwright, Puppeteer, browser binaries, or global dependencies. Keep caches, logs, and screenshots out of the shipped project.
 - Never claim visual or interaction checks that were not actually performed.

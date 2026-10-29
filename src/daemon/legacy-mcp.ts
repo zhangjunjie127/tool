@@ -20,10 +20,10 @@ export class LegacyMcpConfiguration {
       allowTrailingComma: true,
     }) as unknown;
     if (errors.length || !isRecord(config))
-      throw new Error(`OhMyGame Pi MCP config is invalid: ${filePath}`);
+      throw new Error(`puteng game Pi MCP config is invalid: ${filePath}`);
     if (config.mcpServers !== undefined && !isRecord(config.mcpServers))
       throw new Error(
-        `OhMyGame Pi MCP config has an invalid mcpServers field: ${filePath}`,
+        `puteng game Pi MCP config has an invalid mcpServers field: ${filePath}`,
       );
     await mkdir(this.agentDirectory, { recursive: true });
     try {

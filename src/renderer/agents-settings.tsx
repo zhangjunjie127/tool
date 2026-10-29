@@ -17,7 +17,7 @@ export type AgentsView =
   { page: "agents" } | { page: "agent"; id: AgentRuntimeId };
 
 /**
- * Who does the work in a conversation: OhMyGame's own agent, which uses the
+ * Who does the work in a conversation: puteng game's own agent, which uses the
  * models set up in Providers & Models, and the coding agent CLIs on this
  * computer, which bring their own models and accounts. A conversation picks
  * one in its model picker; this page sets them up.
@@ -72,7 +72,7 @@ function AgentList({
   // A CLI still listing its models may hold the default; decide once all have answered.
   const settled =
     catalog.status === "ready" && !catalog.loadingRuntimes?.length;
-  // Without a default, a new conversation starts on the first model, one of OhMyGame's own.
+  // Without a default, a new conversation starts on the first model, one of puteng game's own.
   const defaultAgent =
     defaultModel && isAgentRuntimeId(defaultModel.provider)
       ? defaultModel.provider
@@ -111,7 +111,7 @@ function AgentList({
             </span>
             <span className="settings-provider-copy">
               <strong className="settings-provider-name">
-                <span>OhMyGame</span>
+                <span>puteng game</span>
                 {settled && !defaultAgent ? (
                   <small>{t("agents.default")}</small>
                 ) : null}

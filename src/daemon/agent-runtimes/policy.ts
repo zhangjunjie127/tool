@@ -19,7 +19,7 @@ export interface AgentPolicyContext {
   sandboxedCommands?: boolean;
   /**
    * The person gave the agent full access: nothing is asked, as with
-   * OhMyGame's own agent. Protected roots a request names are still refused.
+   * puteng game's own agent. Protected roots a request names are still refused.
    */
   fullAccess?: boolean;
 }
@@ -67,7 +67,7 @@ export function neverTouchPaths(
 }
 
 /**
- * What OhMyGame says before the person is asked. OhMyGame's own agent works
+ * What puteng game says before the person is asked. puteng game's own agent works
  * in the workspace without asking, so a coding agent does too; it is stopped
  * outright where no agent may go, and the person decides the rest: files
  * outside the workspace and commands that publish, escalate or reach outside.
@@ -120,7 +120,7 @@ function judgeRequest(
       )
     )
       return "deny";
-    // The workspace may itself be inside OhMyGame's data folder, which is otherwise out of bounds.
+    // The workspace may itself be inside puteng game's data folder, which is otherwise out of bounds.
     if (inside(target, workspace))
       return details.kind === "file" || details.kind === "other"
         ? "allow"

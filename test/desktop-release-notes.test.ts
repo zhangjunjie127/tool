@@ -47,7 +47,7 @@ it.each([
         },
       );
       expect(result.status, result.stderr).toBe(0);
-      const artifact = path.join(directory, `OhMyGame.${extension}`);
+      const artifact = path.join(directory, `puteng-game.${extension}`);
       await writeFile(artifact, "installer fixture");
       const packager = {
         config,

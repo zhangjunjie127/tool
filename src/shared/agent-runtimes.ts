@@ -1,7 +1,7 @@
 import type { AgentUsageLimit } from "./contracts.js";
 /**
  * Coding agents: native CLIs (Claude Code, Codex, OpenCode) that run a
- * conversation's agent loop in place of OhMyGame's built-in Pi agent. A
+ * conversation's agent loop in place of puteng game's built-in Pi agent. A
  * conversation uses one when its model is one of the agent's models; the
  * model's provider is the agent's ID, so a model reference names both.
  */
@@ -36,7 +36,7 @@ export function nativeEffort(
   );
 }
 
-/** Where the agent's model requests are billed, as far as OhMyGame can tell. */
+/** Where the agent's model requests are billed, as far as puteng game can tell. */
 export type AgentRuntimeBilling =
   "subscription" | "api-key" | "provider" | "unknown";
 
@@ -60,7 +60,7 @@ export interface AgentRuntimeDiagnostic {
 /**
  * How freely a coding agent works. "standard" runs its commands in the CLI's
  * sandbox where it has one and asks about anything the policy cannot clear;
- * "full" turns the sandbox off and asks nothing, as OhMyGame's own agent does.
+ * "full" turns the sandbox off and asks nothing, as puteng game's own agent does.
  * Planning is read-only either way.
  */
 export const AGENT_PERMISSION_MODES = ["standard", "full"] as const;
@@ -86,7 +86,7 @@ export interface AgentRuntimeStatus {
   partialIsolation?: boolean;
   /**
    * Whether the commands the agent runs are confined by an operating-system
-   * sandbox, beyond OhMyGame's approvals. "none" means approvals alone.
+   * sandbox, beyond puteng game's approvals. "none" means approvals alone.
    */
   commandSandbox: "os" | "none";
   permissionMode: AgentPermissionMode;

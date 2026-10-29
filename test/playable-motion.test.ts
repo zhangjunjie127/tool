@@ -112,7 +112,7 @@ it("scales button feedback after its centering transform and restores authored s
     },
   });
 
-  expect(button.style.transformOrigin).toBe("center center");
+  expect(button.style.transformOrigin).toBe("left top");
   expect(button.querySelector("[data-putenggame-motion-ui]")).toBeNull();
   button.dispatchEvent(
     new PointerEvent("pointerenter", {
@@ -127,6 +127,292 @@ it("scales button feedback after its centering transform and restores authored s
   cleanup();
   expect(button.style.transformOrigin).toBe("left top");
   expect(button.style.transform).toBe("translate(-50%, -50%)");
+});
+
+it("centers idle click feedback without changing authored button geometry", () => {
+  const button = document.createElement("button");
+  button.style.transform = "translate(-50%, -50%)";
+  button.style.left = "37%";
+  button.style.top = "62%";
+  button.style.width = "84px";
+  button.style.height = "52px";
+  button.style.setProperty(
+    "transform-origin",
+    "126.94% 126.95%",
+    "important",
+  );
+  button.setAttribute("data-putenggame-motion", "button-feedback");
+  button.setAttribute("data-putenggame-motion-mode", "visual");
+  button.setAttribute("data-putenggame-motion-duration", "0.1");
+  button.setAttribute(
+    "data-putenggame-motion-feedback",
+    "idle-pulse-hover-press",
+  );
+  Object.defineProperty(button, "animate", {
+    configurable: true,
+    value: vi.fn(() => ({
+      playState: "running",
+      cancel: vi.fn(),
+      finished: Promise.resolve(),
+    })),
+  });
+
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  expect(button.style.getPropertyValue("transform-origin")).toBe(
+    "126.94% 126.95%",
+  );
+  expect(button.style.getPropertyPriority("transform-origin")).toBe(
+    "important",
+  );
+  expect(button.style.left).toBe("37%");
+  expect(button.style.top).toBe("62%");
+  expect(button.style.width).toBe("84px");
+  expect(button.style.height).toBe("52px");
+
+  cleanup();
+  expect(button.style.getPropertyValue("transform-origin")).toBe(
+    "126.94% 126.95%",
+  );
+  expect(button.style.getPropertyPriority("transform-origin")).toBe(
+    "important",
+  );
+});
+
+it.each(["rectangle", "circle"] as const)(
+  "keeps the %s click-button preset free of idle animation",
+  (buttonShape) => {
+    const button = document.createElement("button");
+    button.style.transform = "translate(-50%, -50%)";
+    button.setAttribute("data-putenggame-motion", "button-feedback");
+    button.setAttribute("data-putenggame-motion-mode", "visual");
+    button.setAttribute("data-putenggame-motion-duration", "0.1");
+    button.setAttribute("data-putenggame-motion-feedback", "hover-press");
+    button.setAttribute("data-putenggame-button-shape", buttonShape);
+    const animate = vi.fn();
+    Object.defineProperty(button, "animate", {
+      configurable: true,
+      value: animate,
+    });
+    const route = vi.fn();
+    button.addEventListener("click", route);
+    const cleanup = mountPlayableMotionElement(button, {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: () => "" },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    });
+
+    expect(animate).not.toHaveBeenCalled();
+    expect(button.style.transformOrigin).toBe("");
+
+    button.dispatchEvent(
+      new PointerEvent("pointerenter", { bubbles: true, pointerType: "mouse" }),
+    );
+    expect(button.style.transform).toBe("translate(-50%, -50%) scale(1.08)");
+    button.click();
+    expect(route).toHaveBeenCalledOnce();
+
+    cleanup();
+    expect(button.style.transformOrigin).toBe("");
+  },
+);
+
+it.each(["rectangle", "circle"] as const)(
+  "keeps the %s hint click-button press feedback after its first click",
+  async (buttonShape) => {
+    const button = document.createElement("button");
+    button.style.transform = "translate(-50%, -50%)";
+    button.setAttribute("data-putenggame-motion", "button-feedback");
+    button.setAttribute("data-putenggame-motion-mode", "visual");
+    button.setAttribute("data-putenggame-motion-duration", "0.1");
+    button.setAttribute(
+      "data-putenggame-motion-feedback",
+      "idle-pulse-hover-press",
+    );
+    button.setAttribute("data-putenggame-button-shape", buttonShape);
+    button.style.boxShadow = "0 0 2px rgb(0 0 0 / 20%)";
+    let playState: Animation["playState"] = "running";
+    const animation = {
+      get playState() {
+        return playState;
+      },
+      cancel: vi.fn(() => {
+        playState = "idle";
+      }),
+      pause: vi.fn(() => {
+        if (playState === "idle")
+          throw new Error("Cannot pause a cancelled animation");
+      }),
+      play: vi.fn(() => {
+        playState = "running";
+      }),
+      finished: Promise.resolve(),
+    } as unknown as Animation;
+    const animate = vi.fn(
+      (_frames: Keyframe[], _options: KeyframeAnimationOptions) => animation,
+    );
+    Object.defineProperty(button, "animate", {
+      configurable: true,
+      value: animate,
+    });
+    const route = vi.fn();
+    button.addEventListener("click", route);
+    const cleanup = mountPlayableMotionElement(button, {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: () => "" },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    });
+
+    expect(parsePlayableMotionConfig(button)?.feedback).toBe(
+      "idle-pulse-hover-press",
+    );
+    expect(animate).toHaveBeenCalledOnce();
+    expect(animate.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          transform: "translate(-50%, -50%) scale(1.06)",
+        }),
+      ]),
+    );
+    expect(
+      animate.mock.calls[0]?.[0].some((frame) => "boxShadow" in frame),
+    ).toBe(false);
+    expect(button.style.boxShadow).toBe("0 0 2px rgb(0 0 0 / 20%)");
+    button.click();
+    expect(animation.cancel).toHaveBeenCalledOnce();
+    expect(route).toHaveBeenCalledOnce();
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+    );
+    expect(button.style.transform).toBe(
+      "translate(-50%, -50%) scale(0.92)",
+    );
+    window.dispatchEvent(
+      new PointerEvent("pointerup", { pointerType: "mouse" }),
+    );
+    await Promise.resolve();
+    expect(button.style.transform).toBe("translate(-50%, -50%)");
+
+    cleanup();
+  },
+);
+
+it("keeps countdown progress without numeric text and gives the button press feedback", () => {
+  const button = document.createElement("button");
+  button.textContent = "倒计时";
+  button.style.transform = "translate(-50%, -50%)";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "countdown",
+    "data-putenggame-motion-mode": "visual",
+    "data-putenggame-motion-duration": "5",
+    "data-putenggame-motion-feedback": "hover-press",
+  }))
+    button.setAttribute(name, value);
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  expect(button.textContent).toBe("倒计时");
+  expect(button.querySelector("[data-putenggame-motion-label]")).toBeNull();
+  expect(button.querySelector("[data-putenggame-motion-fill]")).not.toBeNull();
+  expect(
+    button.querySelector("[data-putenggame-motion-fill]")?.parentElement
+      ?.style.height,
+  ).toBe("8%");
+
+  button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  expect(button.style.transform).toBe("translate(-50%, -50%) scale(0.92)");
+  window.dispatchEvent(new PointerEvent("pointerup"));
+  expect(button.style.transform).toBe("translate(-50%, -50%)");
+
+  cleanup();
+});
+
+it("renders a circular countdown as a shrinking ring instead of a horizontal bar", () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.spyOn(window.performance, "now").mockReturnValue(100);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const button = document.createElement("button");
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "countdown",
+    "data-putenggame-motion-mode": "visual",
+    "data-putenggame-motion-duration": "4",
+    "data-putenggame-button-shape": "circle",
+  }))
+    button.setAttribute(name, value);
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  const ring = button.querySelector("svg circle:last-child")!;
+  expect(ring).not.toBeNull();
+  expect(button.querySelector("[data-putenggame-motion-fill]")).toBeNull();
+  expect(ring.getAttribute("stroke-dashoffset")).toBe("0");
+
+  frames.shift()!(2100);
+  expect(ring.getAttribute("stroke-dashoffset")).toBe(
+    String((2 * Math.PI * 44) / 2),
+  );
+
+  cleanup();
+  vi.restoreAllMocks();
 });
 
 it("adds a circular bounce that pauses on hover and press", () => {
@@ -181,7 +467,7 @@ it("adds a circular bounce that pauses on hover and press", () => {
     ],
     expect.objectContaining({ iterations: Infinity, composite: "add" }),
   );
-  expect(button.style.transformOrigin).toBe("center center");
+  expect(button.style.transformOrigin).toBe("");
   button.dispatchEvent(
     new PointerEvent("pointerenter", {
       bubbles: true,
@@ -206,6 +492,69 @@ it("adds a circular bounce that pauses on hover and press", () => {
   expect(button.style.width).toBe("120px");
   expect(button.style.height).toBe("40px");
   expect(button.style.borderRadius).toBe("8px");
+});
+
+it("plays the hold-charge scale hint without an idle outer glow", async () => {
+  const button = document.createElement("button");
+  button.style.transform = "translate(-50%, -50%)";
+  button.style.boxShadow = "none";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "hold-charge",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "3",
+    "data-putenggame-motion-interaction": "hold",
+  }))
+    button.setAttribute(name, value);
+  document.body.append(button);
+
+  const animations: Array<{ cancel: ReturnType<typeof vi.fn>; playState: string }> = [];
+  const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => {
+    const animation = {
+      playState: "running",
+      finished: Promise.resolve(),
+      cancel: vi.fn(() => {
+        animation.playState = "idle";
+      }),
+    };
+    animations.push(animation);
+    return animation as unknown as Animation;
+  });
+  Object.defineProperty(button, "animate", { configurable: true, value: animate });
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  const keyframes = animate.mock.calls[0]![0] as Keyframe[];
+  expect(keyframes[1]).toMatchObject({
+    transform: "translate(-50%, -50%) scale(1.06)",
+  });
+  expect(keyframes.some((frame) => "boxShadow" in frame)).toBe(false);
+  expect(animate.mock.calls[0]![1]).toEqual(
+    expect.objectContaining({ iterations: Infinity }),
+  );
+
+  button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  expect(animations[0]!.cancel).toHaveBeenCalledOnce();
+  expect(button.style.transform).toBe("translate(-50%, -50%)");
+  expect(button.style.boxShadow).toBe("none");
+  button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  await Promise.resolve();
+  expect(animate).toHaveBeenCalledTimes(2);
+  expect(button.style.transform).toBe("translate(-50%, -50%)");
+
+  cleanup();
+  button.remove();
 });
 
 it("scales the replacement image and button hit area together without cropping", () => {
@@ -372,6 +721,61 @@ it("swaps the normal button image for the pressed image while held", () => {
   button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   expect(click).toHaveBeenCalledOnce();
   expect(button.textContent).toBe("开始");
+  cleanup();
+});
+
+it("shows hover feedback from XR pointer movement without treating touch as hover", () => {
+  const button = document.createElement("button");
+  button.setAttribute("data-putenggame-button-asset", "normal");
+  button.setAttribute("data-putenggame-button-pressed-asset", "pressed");
+  button.setAttribute("data-putenggame-motion", "button-feedback");
+  button.setAttribute("data-putenggame-motion-mode", "visual");
+  button.setAttribute("data-putenggame-motion-duration", "5");
+  button.setAttribute("data-putenggame-motion-feedback", "hover-press");
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: (id: string) => `/assets/${id}.png` },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+  const pressed = button.querySelector<HTMLElement>(
+    "[data-putenggame-button-pressed-image]",
+  )!;
+
+  const xrMove = new PointerEvent("pointermove", {
+    bubbles: true,
+    pointerType: "xr",
+    clientX: 20,
+    clientY: 20,
+  });
+  expect(xrMove.pointerType).toBe("xr");
+  expect(xrMove.bubbles).toBe(true);
+  button.dispatchEvent(xrMove);
+
+  expect(pressed.style.visibility).toBe("visible");
+  expect(button.style.transform).toContain("scale(1.08)");
+
+  button.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "xr" }));
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      pointerType: "touch",
+      clientX: 20,
+      clientY: 20,
+    }),
+  );
+
+  expect(pressed.style.visibility).toBe("hidden");
+  expect(button.style.transform).toBe("");
+
   cleanup();
 });
 
@@ -756,6 +1160,7 @@ it("drains countdown bars left to right and fills charge bars left to right", ()
     "data-putenggame-motion-mode": "interactive",
     "data-putenggame-motion-duration": "4",
     "data-putenggame-motion-timeout-duration": "8",
+    "data-putenggame-motion-feedback": "bounce-hover-press",
   }))
     charge.setAttribute(name, value);
   const chargeCleanup = mountPlayableMotionElement(charge, createContext());
@@ -765,9 +1170,276 @@ it("drains countdown bars left to right and fills charge bars left to right", ()
   expect(chargeFill.style.transformOrigin).toBe("left center");
   expect(chargeFill.style.transform).toBe("scaleX(0)");
   charge.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  frames.pop()!(2100);
+  expect(chargeFill.style.transform).toBe("scaleX(0.5)");
   frames.pop()!(4100);
   expect(chargeFill.style.transform).toBe("scaleX(1)");
   chargeCleanup();
+  vi.restoreAllMocks();
+});
+
+it("renders a circular hold-charge button with a growing ring and no bar", () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.spyOn(window.performance, "now").mockReturnValue(100);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const button = document.createElement("button");
+  button.style.transform = "translate(-50%, -50%)";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "hold-charge",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "4",
+    "data-putenggame-motion-timeout-duration": "8",
+    "data-putenggame-motion-interaction": "hold",
+    "data-putenggame-button-shape": "circle",
+    "data-putenggame-button-asset": "base",
+    "data-putenggame-motion-feedback": "bounce-hover-press",
+  }))
+    button.setAttribute(name, value);
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: (id: string) => `/assets/${id}.png` },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  const ring = button.querySelector<SVGCircleElement>("svg circle:last-child")!;
+  expect(ring).not.toBeNull();
+  expect(ring.style.visibility).toBe("hidden");
+  expect(button.querySelector("[data-putenggame-motion-fill]")).toBeNull();
+  expect(button.style.width).toBe("5em");
+  expect(button.style.height).toBe("5em");
+
+  button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  frames.pop()!(2100);
+  expect(
+    Number(ring.getAttribute("stroke-dasharray")?.split(" ")[0]),
+  ).toBeCloseTo((2 * Math.PI * 44) / 2);
+  expect(ring.style.visibility).toBe("visible");
+  expect(button.style.transform).toBe("translate(-50%, -50%)");
+  expect(button.style.width).toBe("5em");
+  expect(button.style.height).toBe("5em");
+
+  button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  expect(ring.style.visibility).toBe("hidden");
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+it("replaces the circular hold-charge track with its selected progress image", () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.spyOn(window.performance, "now").mockReturnValue(100);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const button = document.createElement("button");
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "hold-charge",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "4",
+    "data-putenggame-motion-interaction": "hold",
+    "data-putenggame-button-shape": "circle",
+    "data-putenggame-motion-bar-asset": "progress-image",
+    "data-putenggame-motion-bar-asset-scale": "125",
+    "data-putenggame-motion-bar-asset-x": "4",
+  }))
+    button.setAttribute(name, value);
+  const cleanup = mountPlayableMotionElement(
+    button,
+    {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: (id: string) => `/assets/${id}.png` },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    },
+  );
+
+  const image = button.querySelector<SVGImageElement>(
+    "svg image[data-putenggame-motion-bar]",
+  )!;
+  expect(image).not.toBeNull();
+  expect(image.getAttribute("href")).toContain("/assets/progress-image.png");
+  expect(image.ownerSVGElement?.style.transform).toBe("");
+  const progress = button.querySelector<SVGPathElement>(
+    "svg mask path[data-putenggame-motion-progress-mask]",
+  )!;
+  expect(progress).not.toBeNull();
+  expect(progress.getAttribute("d")).toBe("");
+  expect(progress.style.visibility).toBe("hidden");
+
+  button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  frames.pop()!(1100);
+  expect(progress.getAttribute("d")).toContain(
+    "M 50 50 L 50 -50 A 100 100 0 0 1 150 50 Z",
+  );
+  frames.pop()!(2100);
+  expect(progress.style.visibility).toBe("visible");
+  expect(progress.getAttribute("d")).toContain("A 100 100 0 0 1 50 150");
+  expect(progress.getAttribute("d")).not.toContain("A 40 40");
+  expect(image.getAttribute("width")).toBe("125");
+  expect(image.getAttribute("x")).toBe("-9.14");
+  expect(image.getAttribute("y")).toBe("-12.5");
+  expect(image.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+
+  button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  expect(progress.style.visibility).toBe("hidden");
+  expect(progress.getAttribute("d")).toBe("");
+
+  button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  frames.pop()!(4100);
+  expect(progress.style.visibility).toBe("visible");
+  expect(progress.getAttribute("d")).toContain(
+    "A 100 100 0 0 1 50 150 A 100 100 0 0 1 50 -50",
+  );
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+it.each([-82, -77])(
+  "keeps a circular hold-charge progress image visible with legacy rail offset %i",
+  (offsetY) => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window.performance, "now").mockReturnValue(100);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const button = document.createElement("button");
+    for (const [name, value] of Object.entries({
+      "data-putenggame-motion": "hold-charge",
+      "data-putenggame-motion-mode": "interactive",
+      "data-putenggame-motion-duration": "5",
+      "data-putenggame-button-shape": "circle",
+      "data-putenggame-motion-bar-asset": "4",
+      "data-putenggame-motion-bar-asset-scale": "103",
+      "data-putenggame-motion-bar-asset-x": "-1",
+      "data-putenggame-motion-bar-asset-y": String(offsetY),
+    }))
+      button.setAttribute(name, value);
+    const cleanup = mountPlayableMotionElement(button, {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: (id: string) => `/assets/${id}.png` },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    });
+
+    const image = button.querySelector<SVGImageElement>(
+      "svg image[data-putenggame-motion-bar]",
+    )!;
+    const progress = button.querySelector<SVGPathElement>(
+      "svg mask path[data-putenggame-motion-progress-mask]",
+    )!;
+    expect(image.getAttribute("x")).toBe("-2.34");
+    expect(image.getAttribute("y")).toBe(
+      String(Number((-1.5 + offsetY * 0.036).toFixed(3))),
+    );
+
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    frames.pop()!(1350);
+    expect(progress.style.visibility).toBe("visible");
+    expect(progress.getAttribute("d")).toContain(
+      "M 50 50 L 50 -50 A 100 100 0 0 1 150 50",
+    );
+    cleanup();
+    vi.restoreAllMocks();
+  },
+);
+
+it("keeps a delayed circular charge button usable and repeatable after it appears", () => {
+  const frames: FrameRequestCallback[] = [];
+  let now = 100;
+  vi.spyOn(window.performance, "now").mockImplementation(() => now);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const button = document.createElement("button");
+  button.style.scale = "1.8";
+  button.setAttribute("data-playable-timing-hidden", "");
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "hold-charge",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "4",
+    "data-putenggame-motion-timeout-duration": "8",
+    "data-putenggame-button-shape": "circle",
+    "data-putenggame-motion-bar-asset": "4",
+    "data-putenggame-motion-bar-asset-scale": "103",
+  }))
+    button.setAttribute(name, value);
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: (id: string) => `/assets/${id}.png` },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+  const progress = button.querySelector<SVGPathElement>(
+    "svg mask path[data-putenggame-motion-progress-mask]",
+  )!;
+  const image = button.querySelector<SVGImageElement>(
+    "svg image[data-putenggame-motion-bar]",
+  )!;
+  const svg = image.ownerSVGElement!;
+  expect(button.style.scale).toBe("1.8");
+  expect(svg.style.width).toBe("100%");
+  expect(svg.style.height).toBe("100%");
+
+  frames.pop()!(116);
+  now = 10_116;
+  frames.pop()!(now);
+  button.removeAttribute("data-playable-timing-hidden");
+
+  const chargeOnce = () => {
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    now += 2_000;
+    frames.pop()!(now);
+    expect(progress.style.visibility).toBe("visible");
+    expect(progress.getAttribute("d")).toContain("A 100 100 0 0 1");
+    button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(progress.style.visibility).toBe("hidden");
+  };
+  chargeOnce();
+  chargeOnce();
+
+  cleanup();
   vi.restoreAllMocks();
 });
 
@@ -811,10 +1483,88 @@ it("renders a selected progress image inside the independently animated bar fill
   expect(image.style.transform).toBe("translate(12%, -8%) scale(1.75)");
   const fill = image.parentElement!;
   expect(fill.style.transformOrigin).toBe("right center");
+  expect(fill.parentElement?.style.background).toBe("transparent");
   frames.shift()!(4100);
   expect(fill.style.transform).toBe("scaleX(0)");
   cleanup();
   vi.restoreAllMocks();
+});
+
+it("keeps the progress rail inside the button and orders it above or below its label", () => {
+  const mount = (barLayer: "bottom" | "top") => {
+    const button = document.createElement("button");
+    button.textContent = "Charge";
+    for (const [name, value] of Object.entries({
+      "data-putenggame-motion": "hold-charge",
+      "data-putenggame-motion-mode": "interactive",
+      "data-putenggame-motion-duration": "3",
+      "data-putenggame-motion-interaction": "hold",
+      "data-putenggame-motion-bar-layer": barLayer,
+      "data-putenggame-button-asset": "button-image",
+    }))
+      button.setAttribute(name, value);
+    const cleanup = mountPlayableMotionElement(button, {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: () => "" },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    }, "/assets/button-image.png");
+    return { button, cleanup };
+  };
+
+  const bottom = mount("bottom");
+  const bottomOverlay = bottom.button.querySelector<HTMLElement>(
+    "[data-putenggame-motion-ui]",
+  )!;
+  const label = bottom.button.querySelector<HTMLElement>(
+    "[data-putenggame-button-label]",
+  )!;
+  expect(bottomOverlay.style.zIndex).toBe("-2");
+  expect(
+    bottom.button.querySelector<HTMLElement>(
+      "[data-putenggame-button-asset-image]",
+    )?.style.zIndex,
+  ).toBe("-1");
+  expect(label.style.zIndex).toBe("1");
+  expect(parsePlayableMotionConfig(bottom.button)?.barLayer).toBe("bottom");
+  bottom.cleanup();
+  expect(bottom.button.textContent).toBe("Charge");
+  expect(
+    bottom.button.querySelector("[data-putenggame-button-label]"),
+  ).toBeNull();
+
+  const top = mount("top");
+  expect(
+    top.button.querySelector<HTMLElement>("[data-putenggame-motion-ui]")
+      ?.style.zIndex,
+  ).toBe("2");
+  top.cleanup();
+});
+
+it("uses the same circular progress asset frame for editor previews and playback", async () => {
+  const { circularHoldChargeAssetFrame } = await import(
+    "../src/shared/playable-motion.js"
+  );
+  expect(
+    circularHoldChargeAssetFrame({
+      scale: 125,
+      offsetX: 4,
+      offsetY: -12,
+    }),
+  ).toEqual({
+    x: -9.14,
+    y: -12.932,
+    width: 125,
+    height: 125,
+  });
 });
 
 it("recognizes repeated clicks as the configured success action", () => {
@@ -991,7 +1741,7 @@ it("plays hover-grow and press-shrink without changing the authored element scal
   expect(button.style.scale).toBe("1.5");
 });
 
-it("keeps feedback centered when the editor sets an important compensation origin", () => {
+it("keeps feedback centered without changing the editor's transform origin", () => {
   const button = document.createElement("button");
   button.style.transform = "translate(-50%, -50%)";
   button.setAttribute("data-putenggame-motion", "button-feedback");
@@ -1007,10 +1757,8 @@ it("keeps feedback centered when the editor sets an important compensation origi
       const y = compensation ? Number(compensation[2]) : 0;
       const origin = button.style.getPropertyValue("transform-origin");
       const isScaled = /scale\(1\.08\)|scale\(0\.92\)/.test(transform);
-      const shiftX =
-        origin === "center center" && isScaled ? 20 : 0;
-      const shiftY =
-        origin === "center center" && isScaled ? 10 : 0;
+      const shiftX = origin === "80% 40%" && isScaled ? 20 : 0;
+      const shiftY = origin === "80% 40%" && isScaled ? 10 : 0;
       return {
         x: 150 + shiftX + x,
         y: 130 + shiftY + y,
@@ -1043,9 +1791,11 @@ it("keeps feedback centered when the editor sets an important compensation origi
     new PointerEvent("pointerenter", { pointerType: "mouse" }),
   );
 
-  expect(button.style.getPropertyValue("transform-origin")).toBe("center center");
+  expect(button.style.getPropertyValue("transform-origin")).toBe("80% 40%");
   expect(button.style.getPropertyPriority("transform-origin")).toBe("important");
-  expect(button.style.transform).toContain("translate(-20px, -10px)");
+  expect(button.style.transform).toMatch(
+    /^translate\(-20px,\s*-10px\) translate\(-50%, -50%\) scale\(1\.08\)$/,
+  );
   let rect = button.getBoundingClientRect();
   expect(rect.left + rect.width / 2).toBe(200);
   expect(rect.top + rect.height / 2).toBe(150);
@@ -1059,6 +1809,7 @@ it("keeps feedback centered when the editor sets an important compensation origi
 
   window.dispatchEvent(new PointerEvent("pointerup"));
   expect(button.style.transform).toContain("scale(1.08)");
+  expect(button.style.getPropertyValue("transform-origin")).toBe("80% 40%");
 
   button.dispatchEvent(
     new PointerEvent("pointerleave", { pointerType: "mouse" }),
@@ -1068,6 +1819,78 @@ it("keeps feedback centered when the editor sets an important compensation origi
   expect(button.style.transform).toBe("translate(-50%, -50%)");
 
   cleanup();
+});
+
+it("compensates idle pulse position while retaining an authored transform origin", () => {
+  const button = document.createElement("button");
+  button.style.transform = "translate(-50%, -50%)";
+  button.style.setProperty("transform-origin", "80% 40%", "important");
+  button.setAttribute("data-putenggame-motion", "button-feedback");
+  button.setAttribute("data-putenggame-motion-mode", "visual");
+  button.setAttribute("data-putenggame-motion-duration", "0.1");
+  button.setAttribute(
+    "data-putenggame-motion-feedback",
+    "idle-pulse-hover-press",
+  );
+  Object.defineProperty(button, "getBoundingClientRect", {
+    value: () => {
+      const transform = button.style.transform;
+      const compensation =
+        /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(transform);
+      const x = compensation ? Number(compensation[1]) : 0;
+      const y = compensation ? Number(compensation[2]) : 0;
+      const scaled = transform.includes("scale(1.06)");
+      const shiftX = scaled ? 20 : 0;
+      const shiftY = scaled ? 10 : 0;
+      return {
+        left: 150 + shiftX + x,
+        top: 130 + shiftY + y,
+        right: 250 + shiftX + x,
+        bottom: 170 + shiftY + y,
+        width: 100,
+        height: 40,
+      } as DOMRect;
+    },
+  });
+  const animate = vi.fn(
+    (_frames: Keyframe[], _options: KeyframeAnimationOptions) => ({
+      playState: "running",
+      cancel: vi.fn(),
+      finished: Promise.resolve(),
+    }),
+  );
+  Object.defineProperty(button, "animate", {
+    configurable: true,
+    value: animate,
+  });
+
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  expect(button.style.getPropertyValue("transform-origin")).toBe("80% 40%");
+  expect(button.style.getPropertyPriority("transform-origin")).toBe("important");
+  expect(animate.mock.calls[0]?.[0]).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        transform:
+          "translate(-20px, -10px) translate(-50%, -50%) scale(1.06)",
+      }),
+    ]),
+  );
+  cleanup();
+  expect(button.style.getPropertyValue("transform-origin")).toBe("80% 40%");
 });
 
 it("routes only the configured swipe direction to its success exit", () => {
@@ -1487,6 +2310,466 @@ it("allows both directions on the selected axis for two-way swipe buttons", () =
   cleanup();
 });
 
+it("moves a floating swipe button along its hidden directional track", () => {
+  const button = document.createElement("button");
+  button.style.left = "50%";
+  button.style.top = "50%";
+  button.style.transform = "translate(-50%, -50%)";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "1",
+    "data-putenggame-motion-interaction": "swipe-up",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-swipe-behavior": "one-way",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  const emit = vi.fn(async () => {});
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit,
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: 140,
+      clientY: 100,
+    }),
+  );
+  expect(button.style.left).toBe("50%");
+  expect(button.style.top).toBe("50%");
+  button.dispatchEvent(
+    new PointerEvent("pointerup", {
+      pointerId: 1,
+      clientX: 140,
+      clientY: 100,
+    }),
+  );
+  expect(emit).not.toHaveBeenCalled();
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 60,
+    }),
+  );
+  expect(button.style.top).toBe("calc(50% - 40px)");
+  expect(button.style.left).toBe("50%");
+
+  button.dispatchEvent(
+    new PointerEvent("pointerup", {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 60,
+    }),
+  );
+  expect(emit).toHaveBeenCalledWith("success");
+  cleanup();
+  expect(button.style.top).toBe("50%");
+  expect(button.style.left).toBe("50%");
+});
+
+it("moves a floating two-way swipe button on its selected axis", () => {
+  const button = document.createElement("button");
+  button.style.left = "50%";
+  button.style.top = "50%";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "1",
+    "data-putenggame-motion-interaction": "swipe-left",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-swipe-behavior": "two-way",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  const emit = vi.fn(async () => {});
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit,
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 60,
+    }),
+  );
+  expect(button.style.left).toBe("50%");
+  expect(button.style.top).toBe("50%");
+  button.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1 }));
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 2,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 2,
+      clientX: 140,
+      clientY: 100,
+    }),
+  );
+  expect(button.style.left).toBe("calc(50% + 40px)");
+  expect(button.style.top).toBe("50%");
+  button.dispatchEvent(
+    new PointerEvent("pointerup", {
+      pointerId: 2,
+      clientX: 140,
+      clientY: 100,
+    }),
+  );
+  expect(emit).toHaveBeenCalledWith("success");
+  cleanup();
+});
+
+it("limits a floating swipe to the displayed arrow length", () => {
+  const surface = document.createElement("div");
+  const root = surface.attachShadow({ mode: "open" });
+  const button = document.createElement("button");
+  root.append(button);
+  button.style.left = "50%";
+  button.style.top = "50%";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "1",
+    "data-putenggame-motion-interaction": "swipe-up",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  const emit = vi.fn(async () => {});
+  const cleanup = mountPlayableMotionElement(button, {
+    root,
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit,
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+  vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    right: 300,
+    bottom: 200,
+    width: 300,
+    height: 200,
+  } as DOMRect);
+  vi.spyOn(button, "getBoundingClientRect").mockReturnValue({
+    left: 110,
+    top: 60,
+    right: 190,
+    bottom: 140,
+    width: 80,
+    height: 80,
+  } as DOMRect);
+  Object.defineProperty(button, "offsetWidth", { configurable: true, value: 80 });
+  Object.defineProperty(button, "offsetHeight", { configurable: true, value: 80 });
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 5,
+    }),
+  );
+  expect(button.style.top).toBe("calc(50% - 95px)");
+  expect(emit).not.toHaveBeenCalled();
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: 150,
+      clientY: -20,
+    }),
+  );
+  expect(button.style.top).toBe("calc(50% - 96px)");
+  button.dispatchEvent(
+    new PointerEvent("pointerup", {
+      pointerId: 1,
+      clientX: 150,
+      clientY: 0,
+    }),
+  );
+  expect(emit).toHaveBeenCalledWith("success");
+  cleanup();
+});
+
+it("disables a floating swipe button after its first successful swipe", () => {
+  const button = document.createElement("button");
+  button.style.left = "50%";
+  button.style.top = "50%";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "10",
+    "data-putenggame-motion-interaction": "swipe-up",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  const emit = vi.fn(async () => {});
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit,
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+  const swipe = (pointerId: number) => {
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerId,
+        clientX: 100,
+        clientY: 100,
+      }),
+    );
+    button.dispatchEvent(
+      new PointerEvent("pointermove", {
+        pointerId,
+        clientX: 100,
+        clientY: 60,
+      }),
+    );
+    button.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerId,
+        clientX: 100,
+        clientY: 60,
+      }),
+    );
+  };
+
+  swipe(1);
+  expect(emit).toHaveBeenCalledTimes(1);
+  expect(button.style.top).toBe("calc(50% - 40px)");
+  swipe(2);
+  expect(emit).toHaveBeenCalledTimes(1);
+  expect(button.style.top).toBe("calc(50% - 40px)");
+  cleanup();
+});
+
+it("pulses floating swipe buttons while idle and stops the hint after success", async () => {
+  const button = document.createElement("button");
+  button.style.left = "50%";
+  button.style.top = "50%";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "10",
+    "data-putenggame-motion-interaction": "swipe-up",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  document.body.append(button);
+  const animations: Array<{ cancel: ReturnType<typeof vi.fn>; playState: string }> = [];
+  const animate = vi.fn((_frames: Keyframe[], _options: KeyframeAnimationOptions) => {
+    const animation = {
+      playState: "running",
+      finished: Promise.resolve(),
+      cancel: vi.fn(() => {
+        animation.playState = "idle";
+      }),
+    };
+    animations.push(animation);
+    return animation as unknown as Animation;
+  });
+  Object.defineProperty(button, "animate", { configurable: true, value: animate });
+  const emit = vi.fn(async () => {});
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit,
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  expect(animate).toHaveBeenCalledOnce();
+  expect(animate.mock.calls[0]![0][1]).toEqual(
+    expect.objectContaining({
+      transform: "scale(1.06)",
+      boxShadow: "0 0 0.45em 0.16em currentColor",
+    }),
+  );
+
+  const swipe = (pointerId: number, distance: number) => {
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerId,
+        clientX: 100,
+        clientY: 100,
+      }),
+    );
+    button.dispatchEvent(
+      new PointerEvent("pointermove", {
+        pointerId,
+        clientX: 100,
+        clientY: 100 - distance,
+      }),
+    );
+    button.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerId,
+        clientX: 100,
+        clientY: 100 - distance,
+      }),
+    );
+    button.dispatchEvent(
+      new PointerEvent("pointerleave", {
+        pointerId,
+        pointerType: "mouse",
+      }),
+    );
+  };
+
+  swipe(1, 20);
+  await Promise.resolve();
+  expect(animations[0]!.cancel).toHaveBeenCalledOnce();
+  expect(animate).toHaveBeenCalledTimes(2);
+  swipe(2, 40);
+  await Promise.resolve();
+  expect(emit).toHaveBeenCalledOnce();
+  expect(animate).toHaveBeenCalledTimes(2);
+
+  cleanup();
+  button.remove();
+  vi.restoreAllMocks();
+});
+
+it("hides a floating swipe button after success when the preset requests it", () => {
+  const button = document.createElement("button");
+  button.style.left = "50%";
+  button.style.top = "50%";
+  button.style.visibility = "visible";
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "swipe-button",
+    "data-putenggame-motion-mode": "interactive",
+    "data-putenggame-motion-duration": "10",
+    "data-putenggame-motion-interaction": "swipe-up",
+    "data-putenggame-motion-swipe-style": "floating",
+    "data-putenggame-motion-disappear-after-swipe": "true",
+    "data-putenggame-motion-signal": "success",
+  }))
+    button.setAttribute(name, value);
+  expect(parsePlayableMotionConfig(button)?.disappearAfterSwipe).toBe(true);
+  const cleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+
+  button.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 60,
+    }),
+  );
+  button.dispatchEvent(
+    new PointerEvent("pointerup", {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 60,
+    }),
+  );
+
+  expect(button.style.visibility).toBe("hidden");
+  cleanup();
+  expect(button.style.visibility).toBe("visible");
+});
+
 it("hides swipe decorations for floating buttons but keeps the base image", () => {
   const button = document.createElement("button");
   button.style.background = "red";
@@ -1735,6 +3018,7 @@ it("inserts a source-backed button preset with an independently connectable sign
       ringAssetId: "ring-image",
       ringAssetScale: 135,
       barAssetId: "progress-image",
+      barLayer: "bottom",
       ringFill: "deplete",
       ringRotation: "clockwise",
     },
@@ -1769,6 +3053,9 @@ it("inserts a source-backed button preset with an independently connectable sign
   );
   expect(inserted?.html).toContain(
     'data-putenggame-motion-bar-asset="progress-image"',
+  );
+  expect(inserted?.html).toContain(
+    'data-putenggame-motion-bar-layer="bottom"',
   );
   expect(
     insertPlayableButtonPreset(
@@ -1915,4 +3202,252 @@ it("inserts the ripple-hint preset without visible button text", () => {
   );
   expect(inserted?.html).toMatch(/<\/button>/);
   expect(inserted?.html).not.toContain(">扩散提示</button>");
+});
+
+it("stores a press effect and its attachment point on the button preset", () => {
+  const inserted = insertPlayableButtonPreset(
+    "<main></main>",
+    "nodes/start/index.html",
+    "putenggame-button-burst",
+    "next",
+    "继续",
+    {
+      kind: "button-feedback",
+      mode: "visual",
+      duration: 0.1,
+      feedback: "hover-press",
+      pressEffect: "green-particle-burst",
+      effectColor: "#3478f6",
+      effectAnchorX: 24,
+      effectAnchorY: 73,
+      effectOffsetX: 8,
+      effectOffsetY: -4,
+    },
+  );
+  const host = document.createElement("div");
+  host.innerHTML = inserted!.html;
+  const button = host.querySelector("button")!;
+
+  expect(button.getAttribute("data-putenggame-motion-press-effect")).toBe(
+    "green-particle-burst",
+  );
+  expect(parsePlayableMotionConfig(button)).toEqual(
+    expect.objectContaining({
+      pressEffect: "green-particle-burst",
+      effectColor: "#3478f6",
+      effectAnchorX: 24,
+      effectAnchorY: 73,
+      effectOffsetX: 8,
+      effectOffsetY: -4,
+    }),
+  );
+  button.setAttribute("data-putenggame-motion-effect-anchor-x", "101");
+  expect(parsePlayableMotionConfig(button)).toBeUndefined();
+  button.setAttribute("data-putenggame-motion-effect-anchor-x", "24");
+  button.setAttribute("data-putenggame-motion-effect-color", "blue");
+  expect(parsePlayableMotionConfig(button)).toBeUndefined();
+  button.setAttribute("data-putenggame-motion-effect-color", "#3478f6");
+  button.setAttribute("data-putenggame-motion-effect-offset-x", "501");
+  expect(parsePlayableMotionConfig(button)).toBeUndefined();
+});
+
+it("plays the particle burst from the button anchor, supports repeat presses, and cleans up", () => {
+  const originalAnimate = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "animate",
+  );
+  const animations: { cancel: ReturnType<typeof vi.fn> }[] = [];
+  Object.defineProperty(HTMLElement.prototype, "animate", {
+    configurable: true,
+    value: vi.fn(() => {
+      const animation = { cancel: vi.fn() };
+      animations.push(animation);
+      return animation as unknown as Animation;
+    }),
+  });
+
+  const button = document.createElement("button");
+  button.style.position = "absolute";
+  button.style.overflow = "hidden";
+  const originalBox = {
+    x: 40,
+    y: 20,
+    left: 40,
+    top: 20,
+    right: 160,
+    bottom: 68,
+    width: 120,
+    height: 48,
+    toJSON: () => ({}),
+  };
+  Object.assign(button, {
+    getBoundingClientRect: () => originalBox as DOMRect,
+  });
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "countdown",
+    "data-putenggame-motion-mode": "visual",
+    "data-putenggame-motion-duration": "5",
+    "data-putenggame-motion-press-effect": "green-particle-burst",
+    "data-putenggame-motion-effect-color": "#3478f6",
+    "data-putenggame-motion-effect-anchor-x": "24",
+    "data-putenggame-motion-effect-anchor-y": "73",
+    "data-putenggame-motion-effect-offset-x": "8",
+    "data-putenggame-motion-effect-offset-y": "-4",
+  }))
+    button.setAttribute(name, value);
+  const clickHandler = vi.fn();
+  button.addEventListener("click", clickHandler);
+  const context = {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  };
+
+  let cleanup = () => {};
+  try {
+    cleanup = mountPlayableMotionElement(button, context);
+    const mountedStyle = button.style.cssText;
+    const mountedChildren = button.childNodes.length;
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+      }),
+    );
+    const burst = document.body.querySelector<HTMLElement>(
+      "[data-putenggame-particle-burst]",
+    )!;
+    expect(burst.style.position).toBe("fixed");
+    expect(burst.style.left).toBe("76.8px");
+    expect(burst.style.top).toBe("51.04px");
+    expect(burst.style.pointerEvents).toBe("none");
+    expect(
+      [...burst.querySelectorAll<HTMLElement>("*")].some((part) =>
+        part.style.background.replaceAll(" ", "").includes("52,120,246"),
+      ),
+    ).toBe(true);
+    expect(
+      [...burst.querySelectorAll<HTMLElement>("*")].some((part) =>
+        part.style.borderColor.replaceAll(" ", "").includes("52,120,246"),
+      ),
+    ).toBe(true);
+    expect(
+      [...burst.querySelectorAll<HTMLElement>("*")].every(
+        (part) => part.style.pointerEvents === "none",
+      ),
+    ).toBe(true);
+    expect(burst.querySelectorAll("span").length).toBeGreaterThanOrEqual(19);
+    expect(button.childNodes.length).toBe(mountedChildren);
+    expect(button.style.cssText).toBe(mountedStyle);
+    expect(button.getBoundingClientRect()).toEqual(originalBox);
+
+    button.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 1 }),
+    );
+    expect(clickHandler).toHaveBeenCalledOnce();
+    expect(
+      document.body.querySelectorAll("[data-putenggame-particle-burst]").length,
+    ).toBe(1);
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+      }),
+    );
+    expect(
+      document.body.querySelectorAll("[data-putenggame-particle-burst]").length,
+    ).toBe(2);
+
+    button.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        key: "Enter",
+      }),
+    );
+    button.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, detail: 0 }),
+    );
+    expect(clickHandler).toHaveBeenCalledTimes(2);
+    expect(
+      document.body.querySelectorAll("[data-putenggame-particle-burst]").length,
+    ).toBe(3);
+
+    button.disabled = true;
+    button.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        isPrimary: true,
+      }),
+    );
+    expect(
+      document.body.querySelectorAll("[data-putenggame-particle-burst]").length,
+    ).toBe(3);
+
+    button.style.setProperty("--unrelated-style", "kept");
+    const styleBeforeCleanup = button.style.cssText;
+    cleanup();
+    expect(
+      document.body.querySelector("[data-putenggame-particle-burst]"),
+    ).toBeNull();
+    expect(button.style.cssText).toBe(styleBeforeCleanup);
+    expect(button.style.position).toBe("absolute");
+    expect(button.style.overflow).toBe("hidden");
+    expect(animations.length).toBeGreaterThanOrEqual(60);
+    expect(animations.every((animation) => animation.cancel.mock.calls.length === 1)).toBe(true);
+  } finally {
+    cleanup();
+    if (originalAnimate)
+      Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+    else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  }
+});
+
+it("does not mount button press effects on non-button elements", () => {
+  const element = document.createElement("div");
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "countdown",
+    "data-putenggame-motion-mode": "visual",
+    "data-putenggame-motion-duration": "5",
+    "data-putenggame-motion-press-effect": "green-particle-burst",
+  }))
+    element.setAttribute(name, value);
+  const context = {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  };
+
+  const cleanup = mountPlayableMotionElement(element, context);
+  element.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      isPrimary: true,
+    }),
+  );
+  expect(
+    document.body.querySelector("[data-putenggame-particle-burst]"),
+  ).toBeNull();
+  cleanup();
 });

@@ -1,6 +1,6 @@
-# Contributing to OhMyGame
+# Contributing to puteng game
 
-OhMyGame is in beta. Bug reports, documentation improvements, small fixes,
+puteng game is in beta. Bug reports, documentation improvements, small fixes,
 plugins, and feedback from making real games are welcome.
 
 This guide covers the path from choosing work to getting a PR reviewed.

@@ -175,7 +175,7 @@ export class LocalPluginStore {
     if (!path.isAbsolute(sourcePath)) throw new LocalPluginError("Plugin directory must be an absolute path");
     const source = path.resolve(sourcePath);
     if (pathsOverlap(source, this.#pluginsDirectory)) {
-      throw new LocalPluginError("Plugin source must be outside OhMyGame's managed plugin directory");
+      throw new LocalPluginError("Plugin source must be outside puteng game's managed plugin directory");
     }
     if (!replacementId && provenance.type === "directory" && path.resolve(provenance.path) !== source) {
       throw new LocalPluginError("Plugin directory provenance does not match its source");
@@ -401,7 +401,7 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   try {
     value = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw new LocalPluginError(`OhMyGame Plugin manifest not found at ${PLUGIN_MANIFEST_PATH}`);
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw new LocalPluginError(`puteng game Plugin manifest not found at ${PLUGIN_MANIFEST_PATH}`);
     throw new LocalPluginError(`Could not read plugin manifest: ${errorMessage(cause)}`);
   }
   if (!isPluginManifest(value)) throw new LocalPluginError("Plugin manifest is invalid");

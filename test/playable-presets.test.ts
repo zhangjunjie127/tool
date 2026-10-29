@@ -8,7 +8,6 @@ import {
   createNodeCodebase,
   createPlayableStarterCodebase,
   readNodeCodebase,
-  writeNodeCodebase,
 } from "../src/daemon/playable-codebase.js";
 import { validatePlayableProject } from "../src/daemon/playable-project.js";
 import { PLAYABLE_PRESETS, PLAYABLE_PRESET_IDS, playablePreset } from "../src/daemon/playable-presets.js";
@@ -61,13 +60,37 @@ describe("Playable Presets", () => {
       "&lt;script&gt;&quot;x&quot;",
     );
   });
+
+  it("provides a reusable player-settings Scene with a separate back/reset/save flow", () => {
+    const preset = playablePreset("game-settings")!;
+    const source = preset.source("Settings");
+
+    expect(preset.signals).toEqual([]);
+    expect(preset.story).toEqual({ hidden: true });
+    expect(source.html).toContain('data-setting="videoVolume"');
+    expect(source.html).toContain('data-setting="subtitleFontSize"');
+    expect(source.javascript).toContain("context.settings.save()");
+    expect(source.javascript).toContain("context.settings.reset()");
+    expect(source.javascript).toContain("context.settings.discard()");
+    expect(source.javascript).toContain("context.navigation.back()");
+    expect(source.javascript).toContain("context.transcription.available");
+    expect(source.javascript).toContain("const readCueDraft = () =>");
+    expect(source.javascript).toContain("const otherVideoCues =");
+    expect(source.javascript).toContain("cueList.contains(document.activeElement)");
+    expect(source.javascript).toContain("Speech transcription provider connected");
+    expect(source.javascript).toContain("Could not save settings.");
+    expect(source.javascript).toContain("Could not return.");
+  });
 });
 
 /** Just enough DOM for playScene: elements with children, attributes, and listeners. */
 class FakeElement {
   children: FakeElement[] = [];
   parentElement?: FakeElement;
-  listeners = new Map<string, (event?: { currentTarget: FakeElement }) => unknown>();
+  listeners = new Map<
+    string,
+    (event?: { currentTarget: FakeElement; target?: { closest?: (selector: string) => unknown } }) => unknown
+  >();
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   [key: string]: unknown;
@@ -85,10 +108,18 @@ class FakeElement {
     }
     return null;
   }
-  addEventListener(type: string, listener: (event?: { currentTarget: FakeElement }) => unknown) { this.listeners.set(type, listener); }
+  addEventListener(type: string, listener: (event?: { currentTarget: FakeElement; target?: { closest?: (selector: string) => unknown } }) => unknown) { this.listeners.set(type, listener); }
   removeEventListener(type: string) { this.listeners.delete(type); }
   setAttribute(name: string, value: string) { this.attributes[name] = value; }
-  click() { return this.listeners.get("click")?.({ currentTarget: this }); }
+  closest(selector: string) {
+    return this.attributes.interactive === "true" &&
+      selector.includes(this.tagName.toLowerCase())
+      ? this
+      : null;
+  }
+  click(target: { closest?: (selector: string) => unknown } = this) {
+    return this.listeners.get("click")?.({ currentTarget: this, target });
+  }
   remove() { this.removed = true; }
   focus() {}
   play() { return Promise.resolve(); }
@@ -113,7 +144,14 @@ async function mountScene(attributes: Record<string, string>) {
   };
   try {
     const cleanup = playScene(context, { signal: "next" }) as () => void;
-    return { scene, backdrop, emitted, cleanup, click: () => scene.listeners.get("click")!() };
+    return {
+      scene,
+      backdrop,
+      emitted,
+      cleanup,
+      click: (target?: FakeElement) =>
+        scene.listeners.get("click")!({ currentTarget: scene, target: target ?? scene }),
+    };
   } finally {
     globalThis.document = previous;
   }
@@ -131,12 +169,14 @@ async function loadSceneModule() {
 }
 
 describe("playScene", () => {
-  it("plays the background video and emits the Signal once when it ends or the player clicks", async () => {
+  it("plays a background video and only advances after a single-play video ends", async () => {
     const { scene, backdrop, emitted, click, cleanup } = await mountScene({ "data-asset": "opening", "data-type": "video" });
     const video = backdrop.children[0]!;
     expect(video).toMatchObject({ tagName: "video", src: "blob:opening" });
     expect(video.loop).toBe(false);
     expect(scene.children).toEqual([backdrop]);
+    click();
+    expect(emitted).toEqual([]);
     video.listeners.get("ended")!();
     click();
     expect(emitted).toEqual(["next"]);
@@ -159,6 +199,18 @@ describe("playScene", () => {
     cleanup();
   });
 
+  it("does not let a button click bubble into the scene-level continue action", async () => {
+    const { backdrop, emitted, click } = await mountScene({
+      "data-asset": "opening",
+      "data-type": "video",
+      "data-loop": "true",
+    });
+    click(new FakeElement("button", { interactive: "true" }));
+    expect(emitted).toEqual([]);
+    backdrop.children[0]!.listeners.get("ended")!();
+    expect(emitted).toEqual(["next"]);
+  });
+
   it("shows a background image the player clicks past", async () => {
     const { backdrop, emitted, click } = await mountScene({ "data-asset": "still", "data-type": "image" });
     expect(backdrop.children[0]).toMatchObject({ tagName: "img", src: "blob:still" });
@@ -170,6 +222,12 @@ describe("playScene", () => {
     const { scene, backdrop } = await mountScene({});
     expect(backdrop.children).toEqual([]);
     expect(scene.children).toEqual([backdrop]);
+  });
+
+  it("does not add cinematic letterbox bars over the Scene", () => {
+    const css = PLAYABLE_PROJECT_STYLE_FILES["shared/style/components.css"]!;
+    expect(css).not.toContain(".has-backdrop::before");
+    expect(css).not.toContain(".has-backdrop::after");
   });
 });
 

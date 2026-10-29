@@ -109,12 +109,19 @@ describe("Node compiler", () => {
     expect(result.nodes.menu!.javascript).toContain("REQUIRE_BRANCH");
   });
 
-  it("rejects source files that are symlinks outside the workspace", async () => {
+  it("rejects source files that are symlinks outside the workspace", async ({ skip }) => {
     const { root, workspace, graph } = await createCompilerWorkspace();
     const outside = path.join(root, "outside.html");
     await writeFile(outside, "<main>outside</main>");
     await rm(path.join(workspace, "nodes", "menu", "index.html"));
-    await symlink(outside, path.join(workspace, "nodes", "menu", "index.html"));
+    try {
+      await symlink(outside, path.join(workspace, "nodes", "menu", "index.html"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP")
+        skip("The current environment does not allow creating symbolic links");
+      throw error;
+    }
 
     await expect(compileNodeGraph(workspace, graph)).rejects.toMatchObject({
       code: "path-outside-workspace",
@@ -153,12 +160,19 @@ describe("Node compiler", () => {
     );
   });
 
-  it("rejects symlinked media imported from outside the workspace", async () => {
+  it("rejects symlinked media imported from outside the workspace", async ({ skip }) => {
     const { root, workspace, graph } = await createCompilerWorkspace();
     const outside = path.join(root, "outside.svg");
     await writeFile(outside, '<svg xmlns="http://www.w3.org/2000/svg"/>');
     await rm(path.join(workspace, "shared", "pixel.svg"));
-    await symlink(outside, path.join(workspace, "shared", "pixel.svg"));
+    try {
+      await symlink(outside, path.join(workspace, "shared", "pixel.svg"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP")
+        skip("The current environment does not allow creating symbolic links");
+      throw error;
+    }
 
     await expect(compileNodeGraph(workspace, graph)).rejects.toMatchObject({
       code: "path-outside-workspace",
@@ -203,7 +217,7 @@ describe("Node compiler", () => {
     await writeFile(outside, '<svg xmlns="http://www.w3.org/2000/svg"/>');
     await writeFile(
       path.join(workspace, "nodes", "menu", "style.css"),
-      `.menu { background: url("${outside}"); }\n`,
+      `.menu { background: url("${outside.replaceAll("\\", "/")}"); }\n`,
     );
 
     await expect(compileNodeGraph(workspace, graph)).rejects.toMatchObject({

@@ -5,7 +5,7 @@ import { record } from "./driver-context.js";
 const REQUEST_TIMEOUT_MS = 60_000;
 export const CODEX_CLIENT = {
   name: "ohmygame",
-  title: "OhMyGame",
+  title: "puteng game",
   version: "1",
 };
 

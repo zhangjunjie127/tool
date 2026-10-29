@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addPlayableGraphAsset,
   addPlayableNodeAsset,
   deletePlayableButtonSignals,
   deletePlayableSignal,
@@ -122,6 +123,24 @@ describe("Playable editor graph changes", () => {
     );
   });
 
+  it("removes an orphaned failure exit from a button without a numbered signal", () => {
+    const graph = createNodeGraphFixture();
+    graph.nodes[0]!.signals.push({
+      id: "button-failure",
+      label: "Continue game",
+    });
+
+    const repaired = removeOrphanedPlayableButtonSignals(
+      graph,
+      "menu",
+      '<main><button data-putenggame-button-action="continue">Continue</button></main>',
+    );
+
+    expect(
+      repaired.nodes[0]!.signals.map((signal) => signal.id),
+    ).not.toContain("button-failure");
+  });
+
   it("restores generated button exits that exist in HTML but not in the graph", () => {
     const graph = createNodeGraphFixture();
     const repaired = removeOrphanedPlayableButtonSignals(
@@ -179,6 +198,26 @@ describe("Playable editor graph changes", () => {
     expect(graph.nodes.find((node) => node.id === "lobby")?.assets).toEqual(["theme"]);
   });
 
+  it("declares a graph-wide Asset without adding it to a Scene", () => {
+    const graph = createNodeGraphFixture();
+    const added = addPlayableGraphAsset(graph, {
+      name: "settings.png",
+      type: "image",
+      source: { kind: "library", assetId: "library-settings" },
+    });
+    expect(added.assetId).toBe("settings");
+    expect(added.graph.assets.settings).toEqual({
+      type: "image",
+      source: { kind: "library", assetId: "library-settings" },
+    });
+    expect(added.graph.nodes).toEqual(graph.nodes);
+    expect(addPlayableGraphAsset(added.graph, {
+      name: "duplicate.png",
+      type: "image",
+      source: { kind: "library", assetId: "library-settings" },
+    })).toMatchObject({ assetId: "settings" });
+  });
+
   it("drops an Asset from the graph only when nothing declares it", () => {
     const graph = createNodeGraphFixture();
     const removed = removePlayableNodeAsset(graph, "menu", "background");
@@ -199,6 +238,32 @@ describe("Playable editor graph changes", () => {
     expect(playableRuntimeKey({ ...definition, graph: renamed, graphSignature: "b" })).toBe(playableRuntimeKey(definition));
     const retargeted = { ...graph, edges: graph.edges.map((edge) => edge.source.signal === "start" ? { ...edge, targetNodeId: "archive" } : edge) };
     expect(playableRuntimeKey({ ...definition, graph: retargeted })).not.toBe(playableRuntimeKey(definition));
+  });
+
+  it("keeps the preview running when only the game settings button changes", () => {
+    const graph = createNodeGraphFixture();
+    const definition = { version: 1, graph, compiled: {}, graphSignature: "a" } as unknown as NodePlayerDefinition;
+    const withSettingsButton = {
+      ...graph,
+      assets: {
+        ...graph.assets,
+        settings: {
+          type: "image" as const,
+          source: { kind: "library" as const, assetId: "library-settings" },
+        },
+      },
+      settingsButton: { x: 0.04, y: 0.08, iconAssetId: "settings" },
+    };
+
+    expect(
+      playableRuntimeKey({ ...definition, graph: withSettingsButton }),
+    ).toBe(playableRuntimeKey(definition));
+    expect(
+      playableRuntimeKey({
+        ...definition,
+        graph: { ...withSettingsButton, settingsButton: { x: 0.6, y: 0.7, iconAssetId: "settings" } },
+      }),
+    ).toBe(playableRuntimeKey(definition));
   });
 
   it("hashes what a Node thumbnail shows", () => {

@@ -46,11 +46,11 @@ import { isPluginIcon, isPluginManifest, pluginCollection, PLUGIN_MANIFEST_PATH 
 import { PLUGIN_ICON_MAX_BYTES } from "../shared/plugin-icons.js";
 import { readPluginIconAsset, validatePluginIconImage } from "./plugin-icons.js";
 
-const SETUP_PROMPT = `You create and edit native OhMyGame plugins in this Plugin Builder workspace.
+const SETUP_PROMPT = `You create and edit native puteng game plugins in this Plugin Builder workspace.
 ${PLUGIN_AUTHORING_RULES}
 Read existing files before editing. Use read/write/edit/bash to author files, then plugin_manage prepare with input {path: "relative/plugin-directory"} to validate and refresh the preview; correct reported errors. Omit id in plugin_manage to read, configure or test the current draft. Never modify credentials or session files. The user installs or updates the reviewed draft from the preview. Report its actual state and required input, concisely and in the user's language.`;
 
-const CONFIGURE_PROMPT = `You help users understand, configure and diagnose the selected OhMyGame plugin. Use plugin_manage read and read-skill to inspect it before suggesting changes. Configure only this plugin's nonsecret fields and MCP templates, and test its connections. Explain changes and required input. Never ask for secrets in chat; direct the user to the configuration form or OAuth controls. Do not author or install packages. Match the user's language.`;
+const CONFIGURE_PROMPT = `You help users understand, configure and diagnose the selected puteng game plugin. Use plugin_manage read and read-skill to inspect it before suggesting changes. Configure only this plugin's nonsecret fields and MCP templates, and test its connections. Explain changes and required input. Never ask for secrets in chat; direct the user to the configuration form or OAuth controls. Do not author or install packages. Match the user's language.`;
 
 type SetupRuntimeState = PluginSetupSummary & { busy: boolean; configurationId: string; error?: string; draftPath?: string; installedRevision?: string; baseRevision?: string; editSource?: PluginAuthoringSource; checks?: PluginDraft["checks"] };
 

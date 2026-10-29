@@ -520,7 +520,7 @@ export async function writeCommit(
   unreadable: string[],
   objects?: ObjectVerifier,
 ): Promise<string> {
-  const signature = `OhMyGame <checkpoints@ohmygame.local> ${Math.floor(Date.now() / 1000)} +0000`;
+  const signature = `puteng game <checkpoints@ohmygame.local> ${Math.floor(Date.now() / 1000)} +0000`;
   const text = `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author ${signature}\ncommitter ${signature}\n\n${messageFor(unreadable)}`;
   return await writeObject(gitdir, "commit", Buffer.from(text), objects);
 }

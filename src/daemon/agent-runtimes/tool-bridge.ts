@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Check, Errors } from "typebox/value";
 import type { NativeToolResult } from "./native-session.js";
 
-/** The MCP server name the agents know OhMyGame's tools under. */
+/** The MCP server name the agents know puteng game's tools under. */
 export const BRIDGE_SERVER_NAME = "ohmygame";
 
 /** Pi's own file and shell tools: every coding agent brings its own, so these are never offered. */
@@ -27,7 +27,7 @@ export interface BridgeTool {
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 /**
- * OhMyGame's tools for a coding agent: canvas, media generation, game
+ * puteng game's tools for a coding agent: canvas, media generation, game
  * checks, playtesting, questions and the plugin MCP servers (through the
  * same `mcp` tool Pi uses, so plugin credentials stay in the daemon). The
  * handlers are the ones Pi runs; this only answers MCP and runs them.
@@ -48,7 +48,7 @@ export class ToolBridge {
     return [...this.#tools.keys()];
   }
 
-  /** Limits the tools to those OhMyGame's mode allows, such as planning's read-only set. */
+  /** Limits the tools to those puteng game's mode allows, such as planning's read-only set. */
   setActive(names: readonly string[]): void {
     this.#active = new Set(names);
   }
@@ -149,7 +149,7 @@ export class ToolBridge {
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: BRIDGE_SERVER_NAME, version: "1" },
             instructions:
-              "OhMyGame's tools for this game project: canvas checks, image, video, 3D and audio generation, game playtesting and plugin services. Use them instead of writing your own replacements.",
+              "puteng game's tools for this game project: canvas checks, image, video, 3D and audio generation, game playtesting and plugin services. Use them instead of writing your own replacements.",
           },
         };
       case "ping":

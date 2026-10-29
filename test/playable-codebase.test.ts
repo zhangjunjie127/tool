@@ -129,7 +129,46 @@ describe("Playable codebase", () => {
     ).resolves.toBeDefined();
     expect(
       await readFile(path.join(workspace, PROJECT_STYLE_MIGRATION_FILE), "utf8"),
-    ).toBe('{\n  "version": 1\n}\n');
+    ).toBe('{\n  "version": 2\n}\n');
+  });
+
+  it("removes only the legacy letterbox rule when opening an existing project", async () => {
+    const workspace = await temporaryWorkspace();
+    await createNodeCodebase(
+      workspace,
+      createPlayableStarterCodebase("Letterbox migration", {
+        width: 1280,
+        height: 720,
+      }),
+    );
+    const stylePath = path.join(workspace, "shared/style/components.css");
+    const customRule = ".has-backdrop > :not(.backdrop) { color: red; }\n";
+    await writeFile(
+      stylePath,
+      [
+        ".has-backdrop::before,",
+        ".has-backdrop::after { content: ''; height: var(--letterbox); background: #000; }",
+        ".has-backdrop::before { top: 0; }",
+        customRule,
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(workspace, PROJECT_STYLE_MIGRATION_FILE),
+      '{\n  "version": 1\n}\n',
+    );
+
+    await openNodeCodebaseDetail(workspace);
+
+    const migratedStyle = await readFile(stylePath, "utf8");
+    expect(migratedStyle).not.toContain("height: var(--letterbox)");
+    expect(migratedStyle).toContain(".has-backdrop::before { top: 0; }");
+    expect(migratedStyle).toContain(customRule.trim());
+    expect(
+      await readFile(
+        path.join(workspace, PROJECT_STYLE_MIGRATION_FILE),
+        "utf8",
+      ),
+    ).toBe('{\n  "version": 2\n}\n');
   });
 
   it("preserves customized Project Style files and does not repeat the migration", async () => {
@@ -276,6 +315,12 @@ describe("Playable codebase", () => {
     const codebase = await readNodeCodebase(workspace);
     codebase.graph.title = "Revised";
     codebase.editorLayout.nodes.start = { x: 240, y: 320 };
+    codebase.editorLayout.sceneGuides = {
+      start: [
+        { id: "horizontal-1", axis: "horizontal", position: 0.35 },
+        { id: "vertical-1", axis: "vertical", position: 0.72 },
+      ],
+    };
     await writeNodeCodebase(workspace, codebase);
     await expect(readNodeCodebase(workspace)).resolves.toEqual(codebase);
 
@@ -458,7 +503,7 @@ describe("Playable codebase", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("rejects source writes through a symlinked workspace directory", async () => {
+  it("rejects source writes through a symlinked workspace directory", async ({ skip }) => {
     const workspace = await temporaryWorkspace();
     const outside = await temporaryWorkspace();
     await createNodeCodebase(
@@ -466,7 +511,14 @@ describe("Playable codebase", () => {
       createStarterCodebaseWithScene("Story", { width: 1280, height: 720 }),
     );
     await rm(path.join(workspace, "nodes/start"), { recursive: true });
-    await symlink(outside, path.join(workspace, "nodes/start"), "dir");
+    try {
+      await symlink(outside, path.join(workspace, "nodes/start"), "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP")
+        skip("The current environment does not allow creating symbolic links");
+      throw error;
+    }
     const codebase = await readNodeCodebase(workspace).catch(() => (
       createStarterCodebaseWithScene("Story", { width: 1280, height: 720 })
     ));

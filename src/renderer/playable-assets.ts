@@ -9,8 +9,12 @@ export async function loadPlayableAssets(
   projectId: string,
   graph: NodeGraph,
   cache?: Map<string, Blob>,
+  assetIds?: readonly string[],
 ): Promise<Record<string, Blob>> {
-  const assets = await mapConcurrent(Object.entries(graph.assets), 4, async ([id, asset]) => {
+  const entries = assetIds
+    ? assetIds.flatMap((id) => graph.assets[id] ? [[id, graph.assets[id]!] as const] : [])
+    : Object.entries(graph.assets);
+  const assets = await mapConcurrent(entries, 4, async ([id, asset]) => {
     const key = sourceKey(asset.source);
     const cached = cache?.get(key);
     if (cached) return [id, cached] as const;

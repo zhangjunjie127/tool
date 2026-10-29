@@ -96,7 +96,7 @@ describe("plugin protocol", () => {
       name: "godot",
       displayName: "Godot",
       description: "Connect the agent to the Godot editor",
-      marketplace: { id: "ohmygame", displayName: "OhMyGame" },
+      marketplace: { id: "ohmygame", displayName: "puteng game" },
       source: { type: "builtIn" },
       installed: true,
       enabled: true,

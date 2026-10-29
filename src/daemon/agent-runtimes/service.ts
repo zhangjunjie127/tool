@@ -53,11 +53,11 @@ import { OpenCodeDriver } from "./opencode.js";
 const STATUS_TTL_MS = 60_000;
 
 /**
- * Coding agents see OhMyGame's tools under their CLI's MCP names and follow
+ * Coding agents see puteng game's tools under their CLI's MCP names and follow
  * their own planning habits, such as plan files; Pi needs neither line.
  */
 const NATIVE_INSTRUCTIONS =
-  "OhMyGame's own tools (canvas checks, image, video, 3D and audio generation, game playtesting, questionnaire, update_plan and plugin services) come from its ohmygame tool server; your CLI may name them with a prefix such as mcp__ohmygame__ or ohmygame_. In a planning turn, record the plan with update_plan before you finish, rather than writing a plan file or only describing it. The Skills your CLI lists are readable where it lists them, even outside the workspace: read a Skill's files directly when a request calls for it.";
+  "puteng game's own tools (canvas checks, image, video, 3D and audio generation, game playtesting, questionnaire, update_plan and plugin services) come from its ohmygame tool server; your CLI may name them with a prefix such as mcp__ohmygame__ or ohmygame_. In a planning turn, record the plan with update_plan before you finish, rather than writing a plan file or only describing it. The Skills your CLI lists are readable where it lists them, even outside the workspace: read a Skill's files directly when a request calls for it.";
 const MODELS_TTL_MS = 10 * 60_000;
 const MODELS_WAIT_MS = 6_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -77,7 +77,7 @@ export interface NativeSessionRequest {
   contextWindow?: number;
   workspacePath: string;
   sessionManager: SessionManager;
-  /** OhMyGame's tools for the project, as Pi gets them. */
+  /** puteng game's tools for the project, as Pi gets them. */
   tools: ToolDefinition[];
   pluginMcp?: {
     config: EffectiveMcpConfig;
@@ -98,8 +98,8 @@ export interface NativeSessionRequest {
 }
 
 /**
- * The coding agents OhMyGame can run conversations with. Nothing here runs
- * until something asks: choosing OhMyGame's own agent never starts or probes
+ * The coding agents puteng game can run conversations with. Nothing here runs
+ * until something asks: choosing puteng game's own agent never starts or probes
  * a CLI, and a slow or broken CLI only delays its own status and models.
  */
 export class AgentRuntimeService {
@@ -665,7 +665,7 @@ export class AgentRuntimeService {
       if (version && !versionAtLeast(version, definition.minimumVersion)) {
         diagnostics.push({
           code: "version-unsupported",
-          message: `${definition.name} ${version} is older than ${definition.minimumVersion}, the oldest version OhMyGame supports. Update it to continue.`,
+          message: `${definition.name} ${version} is older than ${definition.minimumVersion}, the oldest version puteng game supports. Update it to continue.`,
         });
       }
       if (auth.status === "signed-out")

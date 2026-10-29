@@ -53,11 +53,11 @@ When the request already has one clear domain, use that specialist directly. For
 - Use React Three Fiber when the project already uses React or the user explicitly wants a React-hosted 3D scene.
 - Use raw Canvas or WebGL when the user asks for it or the game's small scope makes an engine unnecessary.
 
-## OhMyGame Contract
+## puteng game Contract
 
 - Follow the workspace's `AGENTS.md`. In an existing project, preserve its build tool and output layout unless the user requests a migration.
-- Keep preview commands runnable. When publishing is in scope, produce static output supported by OhMyGame.
+- Keep preview commands runnable. When publishing is in scope, produce static output supported by puteng game.
 - Make the game responsive inside an iframe without horizontal overflow.
-- Use OhMyGame media tools when they fit the task; generated assets still need integration and in-game verification.
+- Use puteng game media tools when they fit the task; generated assets still need integration and in-game verification.
 - Do not leave a development server running after the turn.
 - Verify in proportion to the change. Never claim visual or gameplay checks that were not actually performed.

@@ -636,7 +636,7 @@ describe("Claude Code adapter", () => {
     }
     expect(clis).toEqual([]);
   });
-  it("streams a turn, answers OhMyGame's tools over its pipe and asks before risky commands", async () => {
+  it("streams a turn, answers puteng game's tools over its pipe and asks before risky commands", async () => {
     const pending = new Map<
       string,
       (response: Record<string, unknown>) => void
@@ -730,7 +730,7 @@ describe("Claude Code adapter", () => {
           ],
         },
       });
-      // OhMyGame's own tool needs no permission and runs in the daemon.
+      // puteng game's own tool needs no permission and runs in the daemon.
       expect(
         await ask(cli, {
           subtype: "can_use_tool",
@@ -969,7 +969,7 @@ describe("Codex adapter", () => {
     expect(methods).not.toContain("turn/start");
   });
 
-  it("registers every OhMyGame tool when a thread starts in planning, so later turns can use them", async () => {
+  it("registers every puteng game tool when a thread starts in planning, so later turns can use them", async () => {
     const threads: Array<Record<string, unknown>> = [];
     fakeCli((message, cli) => {
       if (typeof message.method !== "string" || message.id === undefined)
@@ -1438,7 +1438,7 @@ describe("Codex adapter", () => {
     expect(recorded.asked).toEqual([]);
   });
 
-  it("runs a turn on a thread with OhMyGame's tools and asks before anything its sandbox would stop", async () => {
+  it("runs a turn on a thread with puteng game's tools and asks before anything its sandbox would stop", async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> =
       [];
     const pending = new Map<
@@ -1595,7 +1595,7 @@ describe("Codex adapter", () => {
       },
       permissions: expect.stringMatching(/^ohmygame-/),
       developerInstructions: "Project instructions",
-      // Only the workspace's own AGENTS.md counts, as for OhMyGame's own agent.
+      // Only the workspace's own AGENTS.md counts, as for puteng game's own agent.
       config: {
         "mcp_servers.personal.enabled": false,
         notify: [],

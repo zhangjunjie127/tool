@@ -81,7 +81,7 @@ describePublishContract("remote publish", () => {
     expect(await readFile(path.join(runtime.publishData, "artifacts", published.deployment.id, PUBLISH_GAME_COVER_PATH))).toEqual(cover);
     expect(await readdir(path.join(runtime.publishData, "artifacts", published.deployment.id))).not.toContain(".env");
     expect((await runtime.daemon.inject({ method: "GET", url: "/community/games" })).json()).toEqual([
-      { ...published.game, author: { id: "publisher", displayName: "OhMyGame Creator" } },
+      { ...published.game, author: { id: "publisher", displayName: "puteng game Creator" } },
     ]);
     expect((await runtime.daemon.inject({ method: "POST", url: `/community/game/${published.game.id}/viewer`, payload: { accessToken: token } })).statusCode).toBe(404);
     expect((await runtime.daemon.inject({ method: "PUT", url: `/community/game/${published.game.id}/like`, payload: { accessToken: token, liked: true } })).statusCode).toBe(404);

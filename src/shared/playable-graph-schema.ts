@@ -133,6 +133,16 @@ export const PLAYABLE_GRAPH_SCHEMA = {
         },
       },
     },
+    settingsButton: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y"],
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1 },
+        y: { type: "number", minimum: 0, maximum: 1 },
+        iconAssetId: { $ref: "#/$defs/identifier" },
+      },
+    },
     nodes: {
       type: "array",
       maxItems: 500,
@@ -146,6 +156,7 @@ export const PLAYABLE_GRAPH_SCHEMA = {
           source,
           assets: assetIds,
           signals,
+          videoEndAutoAdvance: { type: "boolean" },
           story: {
             type: "object",
             additionalProperties: false,

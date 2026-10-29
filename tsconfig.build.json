@@ -4,7 +4,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "types": ["node", "webxr"]
   },
   "include": ["src/daemon/**/*.ts", "src/desktop/**/*.ts", "src/desktop/**/*.cts", "src/shared/**/*.ts"]
 }

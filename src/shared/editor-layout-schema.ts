@@ -18,6 +18,23 @@ export const EDITOR_LAYOUT_SCHEMA = {
         },
       },
     },
+    sceneGuides: {
+      type: "object",
+      additionalProperties: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "axis", "position"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 120 },
+            axis: { enum: ["horizontal", "vertical"] },
+            position: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
+      },
+    },
     viewport: {
       type: "object",
       additionalProperties: false,

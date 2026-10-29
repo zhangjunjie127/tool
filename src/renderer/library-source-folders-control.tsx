@@ -1,22 +1,25 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Film, FolderOpen, Image as ImageIcon, X } from "./icons.js";
+import { Film, FolderOpen, Image as ImageIcon, LoaderCircle, RefreshCw, X } from "./icons.js";
 import type { LibrarySourceFolderCategory, LibrarySourceFolders } from "../shared/contracts.js";
-import { readLanguage, translateText } from "./i18n.js";
+import { readLanguage, t, translateText } from "./i18n.js";
 
 export function LibrarySourceFoldersControl({
   folders,
   onChoose,
+  onRefresh,
   categories: visibleCategories,
   compact = false,
 }: {
   folders: LibrarySourceFolders;
   onChoose: (category: LibrarySourceFolderCategory) => void;
   onClear: (category: LibrarySourceFolderCategory) => void;
+  onRefresh?: () => Promise<void>;
   categories?: readonly LibrarySourceFolderCategory[];
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [position, setPosition] = useState<{ left: number; top: number }>();
   const trigger = useRef<HTMLButtonElement>(null);
   const language = readLanguage();
@@ -31,6 +34,7 @@ export function LibrarySourceFoldersControl({
   const shownCategories = visibleCategories
     ? categories.filter(({ id }) => visibleCategories.includes(id))
     : categories;
+  const hasSelectedFolder = shownCategories.some(({ id }) => folders[id]);
   const popover = open ? (
     <section
       className={`library-folder-popover${compact ? " is-compact-popup" : ""}`}
@@ -94,6 +98,22 @@ export function LibrarySourceFoldersControl({
   ) : null;
   return (
     <div className={`library-source-folders${compact ? " is-compact" : ""}`}>
+      {onRefresh ? (
+        <button
+          className="library-folder-refresh"
+          type="button"
+          title={t("library.refreshLocalAssets")}
+          aria-label={t("library.refreshLocalAssets")}
+          disabled={refreshing || !hasSelectedFolder}
+          onClick={() => {
+            if (refreshing) return;
+            setRefreshing(true);
+            void onRefresh().catch(() => undefined).finally(() => setRefreshing(false));
+          }}
+        >
+          {refreshing ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
+        </button>
+      ) : null}
       <button
         ref={trigger}
         className="library-folder-trigger"

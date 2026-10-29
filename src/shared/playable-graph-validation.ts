@@ -13,6 +13,7 @@ export interface NodeGraphValidationIssue {
     | "missing-signal"
     | "duplicate-route"
     | "missing-asset"
+    | "invalid-settings-button-asset"
     | "missing-file"
     | "file-list-required"
     | "unconnected-signal"
@@ -146,6 +147,17 @@ export function validateNodeGraph(
         "missing-file",
         `/assets/${pointer(assetId)}/source/path`,
         `Asset "${assetId}" references missing file "${asset.source.path}".`,
+      );
+    }
+  }
+  if (graph.settingsButton?.iconAssetId) {
+    const icon = graph.assets[graph.settingsButton.iconAssetId];
+    if (!icon || icon.type !== "image") {
+      issue(
+        issues,
+        "invalid-settings-button-asset",
+        "/settingsButton/iconAssetId",
+        `Settings button Asset "${graph.settingsButton.iconAssetId}" must reference an image in graph.assets.`,
       );
     }
   }

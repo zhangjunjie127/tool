@@ -54,7 +54,7 @@ try {
   try {
     await ensureOhMyGamePiEnvironment(piAgentDirectory);
   } catch (error) {
-    console.warn("Could not initialize the OhMyGame Pi environment; continuing without managed MCP configuration.", error);
+    console.warn("Could not initialize the puteng game Pi environment; continuing without managed MCP configuration.", error);
   }
   app = createApp({
     dataDirectory,

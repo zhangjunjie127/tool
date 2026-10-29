@@ -77,6 +77,37 @@ describe("Library provenance and project filters", () => {
     expect(await list(app)).toHaveLength(1);
   });
 
+  it("removes missing browser-folder assets while retaining other Library assets", async () => {
+    const app = await setup();
+    const source = {
+      name: "scene.png",
+      mediaType: "image/png",
+      category: "image",
+      sourceKey: "browser-folder:image:scene.png",
+      modifiedAt: "2026-10-18T10:00:00.000Z",
+    };
+    const imported = await app.inject({
+      method: "POST",
+      url: `/library/assets/source-sync?${new URLSearchParams(source)}`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const uploaded = await upload(app);
+
+    const reconciled = await app.inject({
+      method: "PUT",
+      url: "/library/assets/source-sync/browser/image",
+      payload: { sourceKeys: [] },
+    });
+    expect(reconciled.statusCode, reconciled.body).toBe(204);
+    expect(await list(app)).toEqual([expect.objectContaining({ id: uploaded.id, origin: "uploaded" })]);
+    expect((await app.inject({
+      method: "GET",
+      url: `/library/assets/${imported.json<LibraryAsset>().id}/content`,
+    })).statusCode).toBe(404);
+  });
+
   it("accepts and refreshes browser-synced videos larger than the default request limit", async () => {
     const app = await setup();
     const source = {
@@ -199,6 +230,7 @@ describe("Library provenance and project filters", () => {
     });
     expect(cleared.statusCode, cleared.body).toBe(200);
     expect(cleared.json()).not.toHaveProperty("image");
+    expect((await list(app)).map(({ category }) => category)).toEqual(["video"]);
     expect((await app.inject({ method: "PUT", url: "/library/source-folders/ui", payload: { path: path.join(fixtures.at(-1)!.directory, "videos") } })).statusCode).toBe(400);
   });
 

@@ -27,6 +27,16 @@ export type PlayableMotionInteraction =
   | "swipe-any"
   | "hold";
 
+export const PLAYABLE_BUTTON_PRESS_EFFECTS = [
+  {
+    id: "green-particle-burst",
+    labelKey: "playableWorkbench.greenParticleBurst",
+  },
+] as const;
+export type PlayableButtonPressEffect =
+  (typeof PLAYABLE_BUTTON_PRESS_EFFECTS)[number]["id"];
+export const PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR = "#a2ff32";
+
 export interface PlayableMotionConfig {
   kind: PlayableMotionKind;
   mode: PlayableMotionMode;
@@ -43,12 +53,25 @@ export interface PlayableMotionConfig {
   barAssetScale?: number;
   barAssetOffsetX?: number;
   barAssetOffsetY?: number;
+  barLayer?: "bottom" | "top";
   swipeAssetId?: string;
   swipeStyle?: "base" | "floating";
   swipeBehavior?: PlayableSwipeBehavior;
+  disappearAfterSwipe?: boolean;
   ringFill?: "deplete" | "reveal";
   ringRotation?: "clockwise" | "counterclockwise" | "none";
-  feedback?: "hover-press" | "bounce-hover-press" | "ripple-hint" | "none";
+  pressEffect?: PlayableButtonPressEffect;
+  effectColor?: string;
+  effectAnchorX?: number;
+  effectAnchorY?: number;
+  effectOffsetX?: number;
+  effectOffsetY?: number;
+  feedback?:
+    | "hover-press"
+    | "idle-pulse-hover-press"
+    | "bounce-hover-press"
+    | "ripple-hint"
+    | "none";
 }
 
 export const PLAYABLE_MOTION_ATTRIBUTES = {
@@ -66,11 +89,19 @@ export const PLAYABLE_MOTION_ATTRIBUTES = {
   barAssetScale: "data-putenggame-motion-bar-asset-scale",
   barAssetOffsetX: "data-putenggame-motion-bar-asset-x",
   barAssetOffsetY: "data-putenggame-motion-bar-asset-y",
+  barLayer: "data-putenggame-motion-bar-layer",
   swipeAsset: "data-putenggame-motion-swipe-asset",
   swipeStyle: "data-putenggame-motion-swipe-style",
   swipeBehavior: "data-putenggame-motion-swipe-behavior",
+  disappearAfterSwipe: "data-putenggame-motion-disappear-after-swipe",
   ringFill: "data-putenggame-motion-ring-fill",
   ringRotation: "data-putenggame-motion-ring-rotation",
+  pressEffect: "data-putenggame-motion-press-effect",
+  effectColor: "data-putenggame-motion-effect-color",
+  effectAnchorX: "data-putenggame-motion-effect-anchor-x",
+  effectAnchorY: "data-putenggame-motion-effect-anchor-y",
+  effectOffsetX: "data-putenggame-motion-effect-offset-x",
+  effectOffsetY: "data-putenggame-motion-effect-offset-y",
   feedback: "data-putenggame-motion-feedback",
   buttonShape: "data-putenggame-button-shape",
   continueWithoutInput: "data-putenggame-continue-without-input",
@@ -86,7 +117,15 @@ export const PLAYABLE_MOTION_ATTRIBUTES = {
 
 const PLAYABLE_MOTION_PAUSE_EVENT = "putenggame:motion-pause";
 const PLAYABLE_MOTION_RESUME_EVENT = "putenggame:motion-resume";
+const PLAYABLE_MOTION_SUCCESS_EVENT = "putenggame:motion-success";
+export const PLAYABLE_MOTION_TIMING_UPDATE_EVENT =
+  "putenggame:motion-timing-update";
+export const PLAYABLE_MOTION_HOLDING_ATTRIBUTE =
+  "data-putenggame-motion-holding";
 const PLAYABLE_MULTI_CLICK_GAP_MS = 600;
+let playableMotionMaskSequence = 0;
+export const PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID =
+  "putenggame-editor-feedback";
 
 export const PLAYABLE_BUTTON_PRESET_STYLE = {
   border: "1px solid rgba(226, 242, 255, .9)",
@@ -233,6 +272,32 @@ export function parsePlayableMotionConfig(
   const ringRotation = element.getAttribute(
     PLAYABLE_MOTION_ATTRIBUTES.ringRotation,
   );
+  const pressEffect = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.pressEffect,
+  );
+  const effectColor = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.effectColor,
+  );
+  const effectAnchorXValue = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.effectAnchorX,
+  );
+  const effectAnchorYValue = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.effectAnchorY,
+  );
+  const effectAnchorX =
+    effectAnchorXValue === null ? undefined : Number(effectAnchorXValue);
+  const effectAnchorY =
+    effectAnchorYValue === null ? undefined : Number(effectAnchorYValue);
+  const effectOffsetXValue = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.effectOffsetX,
+  );
+  const effectOffsetYValue = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.effectOffsetY,
+  );
+  const effectOffsetX =
+    effectOffsetXValue === null ? undefined : Number(effectOffsetXValue);
+  const effectOffsetY =
+    effectOffsetYValue === null ? undefined : Number(effectOffsetYValue);
   const feedback = element.getAttribute(
     PLAYABLE_MOTION_ATTRIBUTES.feedback,
   );
@@ -263,6 +328,7 @@ export function parsePlayableMotionConfig(
   );
   const barAssetOffsetY =
     barAssetOffsetYValue === null ? undefined : Number(barAssetOffsetYValue);
+  const barLayer = element.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.barLayer);
   const swipeAssetId = element.getAttribute(
     PLAYABLE_MOTION_ATTRIBUTES.swipeAsset,
   );
@@ -271,6 +337,9 @@ export function parsePlayableMotionConfig(
   );
   const swipeBehavior = element.getAttribute(
     PLAYABLE_MOTION_ATTRIBUTES.swipeBehavior,
+  );
+  const disappearAfterSwipe = element.getAttribute(
+    PLAYABLE_MOTION_ATTRIBUTES.disappearAfterSwipe,
   );
   if (
     (interaction !== null && !MOTION_INTERACTIONS.has(interaction)) ||
@@ -283,8 +352,30 @@ export function parsePlayableMotionConfig(
       ringRotation !== "clockwise" &&
       ringRotation !== "counterclockwise" &&
       ringRotation !== "none") ||
+    (pressEffect !== null &&
+      !PLAYABLE_BUTTON_PRESS_EFFECTS.some(
+        (effect) => effect.id === pressEffect,
+      )) ||
+    (effectColor !== null && !/^#[\da-f]{6}$/i.test(effectColor)) ||
+    (effectAnchorXValue !== null &&
+      (!Number.isInteger(effectAnchorX) ||
+        effectAnchorX! < 0 ||
+        effectAnchorX! > 100)) ||
+    (effectAnchorYValue !== null &&
+      (!Number.isInteger(effectAnchorY) ||
+        effectAnchorY! < 0 ||
+        effectAnchorY! > 100)) ||
+    (effectOffsetXValue !== null &&
+      (!Number.isInteger(effectOffsetX) ||
+        effectOffsetX! < -500 ||
+        effectOffsetX! > 500)) ||
+    (effectOffsetYValue !== null &&
+      (!Number.isInteger(effectOffsetY) ||
+        effectOffsetY! < -500 ||
+        effectOffsetY! > 500)) ||
     (feedback !== null &&
       feedback !== "hover-press" &&
+      feedback !== "idle-pulse-hover-press" &&
       feedback !== "bounce-hover-press" &&
       feedback !== "ripple-hint" &&
       feedback !== "none") ||
@@ -293,6 +384,7 @@ export function parsePlayableMotionConfig(
       buttonShape !== "circle") ||
     (kind === "button-feedback" &&
       feedback !== "hover-press" &&
+      feedback !== "idle-pulse-hover-press" &&
       feedback !== "bounce-hover-press" &&
       feedback !== "ripple-hint") ||
     (ringAssetId !== null && !/^[a-z0-9._-]{1,120}$/i.test(ringAssetId)) ||
@@ -313,6 +405,7 @@ export function parsePlayableMotionConfig(
       (!Number.isInteger(barAssetOffsetY) ||
         barAssetOffsetY! < -100 ||
         barAssetOffsetY! > 100)) ||
+    (barLayer !== null && barLayer !== "bottom" && barLayer !== "top") ||
     (swipeAssetId !== null &&
       !/^[a-z0-9._-]{1,120}$/i.test(swipeAssetId)) ||
     (swipeStyle !== null &&
@@ -320,7 +413,8 @@ export function parsePlayableMotionConfig(
       swipeStyle !== "floating") ||
     (swipeBehavior !== null &&
       swipeBehavior !== "one-way" &&
-      swipeBehavior !== "two-way")
+      swipeBehavior !== "two-way") ||
+    (disappearAfterSwipe !== null && disappearAfterSwipe !== "true")
   )
     return undefined;
   return {
@@ -340,6 +434,7 @@ export function parsePlayableMotionConfig(
     ...(barAssetScale === undefined ? {} : { barAssetScale }),
     ...(barAssetOffsetX === undefined ? {} : { barAssetOffsetX }),
     ...(barAssetOffsetY === undefined ? {} : { barAssetOffsetY }),
+    ...(barLayer ? { barLayer: barLayer as "bottom" | "top" } : {}),
     ...(swipeAssetId ? { swipeAssetId } : {}),
     ...(swipeStyle
       ? { swipeStyle: swipeStyle as "base" | "floating" }
@@ -347,6 +442,7 @@ export function parsePlayableMotionConfig(
     ...(swipeBehavior
       ? { swipeBehavior: swipeBehavior as PlayableSwipeBehavior }
       : {}),
+    ...(disappearAfterSwipe === "true" ? { disappearAfterSwipe: true } : {}),
     ...(ringFill ? { ringFill: ringFill as "deplete" | "reveal" } : {}),
     ...(ringRotation
       ? {
@@ -356,10 +452,19 @@ export function parsePlayableMotionConfig(
             | "none",
         }
       : {}),
+    ...(pressEffect
+      ? { pressEffect: pressEffect as PlayableButtonPressEffect }
+      : {}),
+    ...(effectColor ? { effectColor: effectColor.toLowerCase() } : {}),
+    ...(effectAnchorX === undefined ? {} : { effectAnchorX }),
+    ...(effectAnchorY === undefined ? {} : { effectAnchorY }),
+    ...(effectOffsetX === undefined ? {} : { effectOffsetX }),
+    ...(effectOffsetY === undefined ? {} : { effectOffsetY }),
     ...(feedback
       ? {
           feedback: feedback as
             | "hover-press"
+            | "idle-pulse-hover-press"
             | "bounce-hover-press"
             | "ripple-hint"
             | "none",
@@ -683,6 +788,14 @@ export function mountPlayableMotionElement(
   const pressedAssetId = element.getAttribute(
     PLAYABLE_MOTION_ATTRIBUTES.pressedAsset,
   );
+  const holdChargePrompt = config?.kind === "hold-charge";
+  const idleClickPrompt =
+    config?.kind === "button-feedback" &&
+    config.feedback === "idle-pulse-hover-press";
+  const floatingSwipePrompt =
+    config?.kind === "swipe-button" &&
+    (config.swipeStyle === "floating" ||
+      (!config.swipeStyle && config.buttonShape === "circle"));
   if (assetId || pressedAssetId) {
     try {
       cleanups.push(
@@ -691,7 +804,10 @@ export function mountPlayableMotionElement(
           assetId ? (assetUrl ?? context.assets.url(assetId)) : undefined,
           pressedAssetUrl ??
             (pressedAssetId ? context.assets.url(pressedAssetId) : undefined),
-          config?.feedback === "hover-press" ||
+          holdChargePrompt ||
+            floatingSwipePrompt ||
+            config?.feedback === "hover-press" ||
+            idleClickPrompt ||
             config?.feedback === "bounce-hover-press",
         ),
       );
@@ -700,7 +816,20 @@ export function mountPlayableMotionElement(
     }
   }
   if (config) {
-    if (
+    if (config.pressEffect && element.tagName.toLowerCase() === "button")
+      cleanups.push(mountPlayableButtonPressEffect(element, config));
+    if (floatingSwipePrompt || holdChargePrompt || idleClickPrompt) {
+      cleanups.push(
+        mountPlayableFeedback(
+          element,
+          false,
+          true,
+          idleClickPrompt,
+          floatingSwipePrompt,
+          holdChargePrompt || floatingSwipePrompt,
+        ),
+      );
+    } else if (
       config.feedback === "hover-press" ||
       config.feedback === "bounce-hover-press"
     )
@@ -770,6 +899,242 @@ function mountPlayableRippleHint(element: HTMLElement): () => void {
     animations.forEach((animation) => animation.cancel());
     element.querySelectorAll("[data-putenggame-ripple-hint]").forEach((ring) => ring.remove());
     element.style.position = previousPosition;
+  };
+}
+
+function mountPlayableButtonPressEffect(
+  element: HTMLElement,
+  config: PlayableMotionConfig,
+): () => void {
+  const view = element.ownerDocument.defaultView;
+  const host = element.ownerDocument.body;
+  if (!view || !host || !config.pressEffect) return () => {};
+
+  const bursts = new Set<HTMLElement>();
+  const animations = new Set<Animation>();
+  const timers = new Set<number>();
+  let currentBurstAnimations: Animation[] | undefined;
+  const now = () => view.performance.now();
+  let lastPointerAt = Number.NEGATIVE_INFINITY;
+  let lastKeyboardAt = Number.NEGATIVE_INFINITY;
+
+  const animate = (
+    target: HTMLElement,
+    frames: Keyframe[],
+    options: KeyframeAnimationOptions,
+  ) => {
+    const animation = target.animate(frames, options);
+    animations.add(animation);
+    currentBurstAnimations?.push(animation);
+  };
+
+  const play = () => {
+    if (
+      view.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
+      (element instanceof view.HTMLButtonElement && element.disabled) ||
+      element.getAttribute("aria-disabled") === "true"
+    )
+      return;
+
+    const anchorX = config.effectAnchorX ?? 50;
+    const anchorY = config.effectAnchorY ?? 50;
+    const effectColor =
+      config.effectColor ?? PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR;
+    const colorWithAlpha = (alpha: number) => {
+      const red = Number.parseInt(effectColor.slice(1, 3), 16);
+      const green = Number.parseInt(effectColor.slice(3, 5), 16);
+      const blue = Number.parseInt(effectColor.slice(5, 7), 16);
+      return `rgba(${red},${green},${blue},${alpha})`;
+    };
+    const rect = element.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height, 48);
+    const radius = Math.min(Math.max(size * 1.3, 58), 150);
+    const burst = element.ownerDocument.createElement("span");
+    burst.dataset.putenggameParticleBurst = config.pressEffect!;
+    burst.setAttribute("aria-hidden", "true");
+    Object.assign(burst.style, {
+      position: "fixed",
+      left: `${rect.left + (rect.width * anchorX) / 100 + (config.effectOffsetX ?? 0)}px`,
+      top: `${rect.top + (rect.height * anchorY) / 100 + (config.effectOffsetY ?? 0)}px`,
+      width: "0",
+      height: "0",
+      overflow: "visible",
+      pointerEvents: "none",
+      zIndex: "2147483647",
+      contain: "layout style",
+    });
+    host.append(burst);
+    bursts.add(burst);
+    const burstAnimations: Animation[] = [];
+    currentBurstAnimations = burstAnimations;
+
+    const addPart = (styles: Partial<CSSStyleDeclaration>) => {
+      const part = element.ownerDocument.createElement("span");
+      Object.assign(part.style, {
+        position: "absolute",
+        left: "0",
+        top: "0",
+        display: "block",
+        pointerEvents: "none",
+        ...styles,
+      });
+      burst.append(part);
+      return part;
+    };
+
+    const makeRing = (delay: number, color: string, width: number) => {
+      const ring = addPart({
+        width: `${radius * 0.38}px`,
+        height: `${radius * 0.38}px`,
+        marginLeft: `${-radius * 0.19}px`,
+        marginTop: `${-radius * 0.19}px`,
+        boxSizing: "border-box",
+        border: `${width}px solid ${color}`,
+        borderRadius: "50%",
+        boxShadow: `0 0 ${width * 5}px ${color}`,
+        opacity: "0",
+      });
+      animate(
+        ring,
+        [
+          { opacity: 0, transform: "scale(.18)" },
+          { opacity: 0.92, offset: 0.14, transform: "scale(.46)" },
+          { opacity: 0.48, offset: 0.46, transform: "scale(1.55)" },
+          { opacity: 0, transform: "scale(3.2)" },
+        ],
+        {
+          duration: 690,
+          delay,
+          easing: "cubic-bezier(.12,.72,.24,1)",
+          fill: "both",
+        },
+      );
+    };
+
+    makeRing(0, effectColor, 2);
+    makeRing(75, colorWithAlpha(0.92), 1.5);
+
+    const haze = addPart({
+      width: `${radius * 0.82}px`,
+      height: `${radius * 0.82}px`,
+      marginLeft: `${-radius * 0.41}px`,
+      marginTop: `${-radius * 0.41}px`,
+      borderRadius: "50%",
+      background: `radial-gradient(circle, rgba(255,255,255,.9) 0%, ${colorWithAlpha(0.48)} 22%, ${colorWithAlpha(0.12)} 48%, transparent 72%)`,
+      filter: "blur(2px)",
+      opacity: "0",
+    });
+    animate(
+      haze,
+      [
+        { opacity: 0, transform: "scale(.24)" },
+        { opacity: 0.86, offset: 0.13, transform: "scale(.7)" },
+        { opacity: 0, transform: "scale(2.65)" },
+      ],
+      { duration: 570, easing: "ease-out", fill: "both" },
+    );
+
+    for (let index = 0; index < 16; index += 1) {
+      const angle = (Math.PI * 2 * index) / 16 + (index % 3) * 0.045;
+      const distance = radius * (0.75 + ((index * 11) % 17) / 22);
+      const particleSize = 2 + (index % 4) * 1.2;
+      const particle = addPart({
+        width: `${particleSize}px`,
+        height: `${particleSize}px`,
+        marginLeft: `${-particleSize / 2}px`,
+        marginTop: `${-particleSize / 2}px`,
+        borderRadius: index % 5 === 0 ? "1px" : "50%",
+        background: index % 4 === 0 ? "#fff" : effectColor,
+        boxShadow: `0 0 7px 2px ${colorWithAlpha(0.72)}`,
+      });
+      const travelX = Math.cos(angle) * distance;
+      const travelY = Math.sin(angle) * distance;
+      animate(
+        particle,
+        [
+          {
+            opacity: 0,
+            transform: `translate(0,0) scale(.25) rotate(0deg)`,
+          },
+          {
+            opacity: 1,
+            offset: 0.16,
+            transform: `translate(${travelX * 0.18}px,${travelY * 0.18}px) scale(1) rotate(45deg)`,
+          },
+          {
+            opacity: 0,
+            transform: `translate(${travelX}px,${travelY}px) scale(.08) rotate(190deg)`,
+          },
+        ],
+        {
+          duration: 520 + (index % 6) * 55,
+          delay: (index % 7) * 8,
+          easing: "cubic-bezier(.12,.76,.21,1)",
+          fill: "both",
+        },
+      );
+    }
+
+    const core = addPart({
+      width: `${Math.max(14, size * 0.24)}px`,
+      height: `${Math.max(14, size * 0.24)}px`,
+      marginLeft: `${-Math.max(14, size * 0.24) / 2}px`,
+      marginTop: `${-Math.max(14, size * 0.24) / 2}px`,
+      background: `radial-gradient(circle, #fff 0%, ${colorWithAlpha(0.85)} 34%, ${colorWithAlpha(0.95)} 62%, transparent 76%)`,
+      filter: `drop-shadow(0 0 7px ${effectColor}) drop-shadow(0 0 18px ${colorWithAlpha(0.8)})`,
+      clipPath:
+        "polygon(50% 0,61% 38%,100% 50%,61% 62%,50% 100%,39% 62%,0 50%,39% 38%)",
+    });
+    animate(
+      core,
+      [
+        { opacity: 0, transform: "scale(.15) rotate(-20deg)" },
+        { opacity: 1, offset: 0.18, transform: "scale(1.25) rotate(0deg)" },
+        { opacity: 0, transform: "scale(2.2) rotate(28deg)" },
+      ],
+      { duration: 390, easing: "cubic-bezier(.16,.8,.24,1)", fill: "both" },
+    );
+
+    currentBurstAnimations = undefined;
+    const timer = view.setTimeout(() => {
+      burst.remove();
+      bursts.delete(burst);
+      timers.delete(timer);
+      for (const animation of burstAnimations) animations.delete(animation);
+    }, 900);
+    timers.add(timer);
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.isPrimary === false || event.button !== 0) return;
+    lastPointerAt = now();
+    play();
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
+    lastKeyboardAt = now();
+    play();
+  };
+  const onClick = (event: MouseEvent) => {
+    if (
+      event.detail !== 0 ||
+      now() - lastPointerAt < 1000 ||
+      now() - lastKeyboardAt < 300
+    )
+      return;
+    play();
+  };
+  element.addEventListener("pointerdown", onPointerDown, true);
+  element.addEventListener("keydown", onKeyDown, true);
+  element.addEventListener("click", onClick, true);
+
+  return () => {
+    element.removeEventListener("pointerdown", onPointerDown, true);
+    element.removeEventListener("keydown", onKeyDown, true);
+    element.removeEventListener("click", onClick, true);
+    for (const timer of timers) view.clearTimeout(timer);
+    for (const animation of animations) animation.cancel();
+    for (const burst of bursts) burst.remove();
   };
 }
 
@@ -887,13 +1252,24 @@ function mountPlayableButtonAsset(
     scaleHeld = shouldScale;
   };
   const onPointerEnter = (event: PointerEvent) => {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType === "touch") return;
     hovered = true;
     updatePressedState();
   };
   const onPointerLeave = (event: PointerEvent) => {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType === "touch") return;
     hovered = false;
+    updatePressedState();
+  };
+  const onPointerMove = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
+    const target = event.target;
+    const isOver =
+      event.composedPath().includes(element) ||
+      target === element ||
+      (target instanceof view!.Node && element.contains(target));
+    if (hovered === isOver) return;
+    hovered = isOver;
     updatePressedState();
   };
   const onPointerDown = () => {
@@ -927,6 +1303,7 @@ function mountPlayableButtonAsset(
       element.style.transition = "scale 120ms ease";
     element.addEventListener("pointerenter", onPointerEnter);
     element.addEventListener("pointerleave", onPointerLeave);
+    element.addEventListener("pointermove", onPointerMove);
     element.addEventListener("pointerdown", onPointerDown, true);
     view?.addEventListener("pointerup", onPointerUp, true);
     view?.addEventListener("pointercancel", onPointerUp, true);
@@ -956,6 +1333,7 @@ function mountPlayableButtonAsset(
     pressedLayer?.remove();
     element.removeEventListener("pointerenter", onPointerEnter);
     element.removeEventListener("pointerleave", onPointerLeave);
+    element.removeEventListener("pointermove", onPointerMove);
     element.removeEventListener("pointerdown", onPointerDown, true);
     view?.removeEventListener("pointerup", onPointerUp, true);
     view?.removeEventListener("pointercancel", onPointerUp, true);
@@ -986,14 +1364,16 @@ function mountPlayableButtonAsset(
 function mountPlayableFeedback(
   element: HTMLElement,
   bounce = false,
+  idlePrompt = false,
+  stopOnClick = false,
+  idleGlow = false,
+  suppressPressScale = false,
 ): () => void {
   const view = element.ownerDocument.defaultView;
   if (!view) return () => {};
   const previousTransform = element.style.transform;
   const previousTransition = element.style.transition;
-  const previousTransformOrigin = element.style.transformOrigin;
-  const previousTransformOriginPriority =
-    element.style.getPropertyPriority("transform-origin");
+  const previousBoxShadow = element.style.boxShadow;
   const previousShape = bounce
     ? {
         width: element.style.width,
@@ -1014,69 +1394,146 @@ function mountPlayableFeedback(
       aspectRatio: "1",
     });
   }
-  const animation = bounce
-    ? element.animate(
-        [
-          { transform: "scale(1)" },
-          { transform: "scale(1.08)" },
-          { transform: "scale(1)" },
-        ],
-        {
-          duration: 850,
-          iterations: Infinity,
-          easing: "ease-in-out",
-          composite: "add",
-        },
-      )
-    : undefined;
-  const baseTransform =
-    previousTransform || view.getComputedStyle(element).transform;
+  let animation: Animation | undefined;
+  let idlePromptStopped = false;
+  let idlePromptDisposed = false;
   let hovered = false;
   let pressed = false;
-  let feedbackOrigin:
-    | { value: string; priority: string }
-    | undefined;
   let feedbackCenter: { x: number; y: number } | undefined;
+  const baseTransform =
+    previousTransform || view.getComputedStyle(element).transform;
+  const centeredTransform = (
+    transform: string,
+    center: { x: number; y: number },
+  ) => {
+    const currentTransform = element.style.getPropertyValue("transform");
+    const currentTransformPriority =
+      element.style.getPropertyPriority("transform");
+    const currentTransition = element.style.getPropertyValue("transition");
+    const currentTransitionPriority =
+      element.style.getPropertyPriority("transition");
+    element.style.setProperty("transition", "none", "important");
+    element.style.setProperty(
+      "transform",
+      transform,
+      currentTransformPriority,
+    );
+    let rect: DOMRect;
+    try {
+      rect = element.getBoundingClientRect();
+    } finally {
+      element.style.setProperty(
+        "transform",
+        currentTransform,
+        currentTransformPriority,
+      );
+      element.style.setProperty(
+        "transition",
+        currentTransition,
+        currentTransitionPriority,
+      );
+    }
+    const offsetX = center.x - (rect.left + rect.width / 2);
+    const offsetY = center.y - (rect.top + rect.height / 2);
+    return Math.abs(offsetX) < 0.01 && Math.abs(offsetY) < 0.01
+      ? transform
+      : `translate(${offsetX}px, ${offsetY}px) ${transform}`.trim();
+  };
+  const playIdlePrompt = () => {
+    if (
+      !idlePrompt ||
+      idlePromptStopped ||
+      idlePromptDisposed ||
+      view.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const idleRect = element.getBoundingClientRect();
+    const idleCenter = {
+      x: idleRect.left + idleRect.width / 2,
+      y: idleRect.top + idleRect.height / 2,
+    };
+    const idleScale = centeredTransform(
+      `${baseTransform === "none" ? "" : baseTransform} scale(1.06)`.trim(),
+      idleCenter,
+    );
+    animation = element.animate(
+      [
+        {
+          transform: `${baseTransform} scale(1)`.trim(),
+          ...(idleGlow ? { boxShadow: previousBoxShadow } : {}),
+        },
+        {
+          transform: idleScale,
+          ...(idleGlow
+            ? { boxShadow: "0 0 0.45em 0.16em currentColor" }
+            : {}),
+        },
+        {
+          transform: `${baseTransform} scale(1)`.trim(),
+          ...(idleGlow ? { boxShadow: previousBoxShadow } : {}),
+        },
+      ],
+      {
+        duration: 1200,
+        iterations: Infinity,
+        easing: "ease-in-out",
+        composite: "replace",
+      },
+    );
+    void animation.finished.catch(() => {});
+    animation.id = PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID;
+  };
+  if (idlePrompt) {
+    playIdlePrompt();
+  } else if (bounce) {
+    animation = element.animate(
+      [
+        { transform: "scale(1)" },
+        { transform: "scale(1.08)" },
+        { transform: "scale(1)" },
+      ],
+      {
+        duration: 850,
+        iterations: Infinity,
+        easing: "ease-in-out",
+        composite: "add",
+      },
+    );
+  }
+  if (animation) animation.id = PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID;
+  const stopIdlePrompt = (permanent = false) => {
+    if (!idlePrompt) return;
+    if (permanent) idlePromptStopped = true;
+    if (animation && animation.playState !== "idle") animation.cancel();
+    animation = undefined;
+    element.style.transform = previousTransform;
+    element.style.boxShadow = previousBoxShadow;
+    feedbackCenter = undefined;
+  };
   const update = () => {
-    const factor = pressed ? 0.92 : hovered ? 1.08 : 1;
+    if (idlePrompt) {
+      if (idlePromptDisposed) return;
+      if (!idlePromptStopped && !pressed && !hovered) {
+        if (!animation || animation.playState === "idle") playIdlePrompt();
+        return;
+      }
+      if (!idlePromptStopped) stopIdlePrompt();
+    }
+    const factor = pressed && !suppressPressScale ? 0.92 : hovered ? 1.08 : 1;
     if (factor === 1) {
       element.style.transform = previousTransform;
-      if (feedbackOrigin) {
-        element.style.setProperty(
-          "transform-origin",
-          feedbackOrigin.value,
-          feedbackOrigin.priority,
-        );
-        feedbackOrigin = undefined;
-        feedbackCenter = undefined;
-      }
+      feedbackCenter = undefined;
     } else {
-      if (!feedbackOrigin) {
+      if (!feedbackCenter) {
         const rect = element.getBoundingClientRect();
         feedbackCenter = {
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         };
-        feedbackOrigin = {
-          value: element.style.getPropertyValue("transform-origin"),
-          priority: element.style.getPropertyPriority("transform-origin"),
-        };
       }
-      element.style.setProperty(
-        "transform-origin",
-        "center center",
-        "important",
-      );
       const scaledTransform =
         `${baseTransform === "none" ? "" : baseTransform} scale(${factor})`.trim();
-      element.style.transform = scaledTransform;
-      const rect = element.getBoundingClientRect();
-      const offsetX = feedbackCenter!.x - (rect.left + rect.width / 2);
-      const offsetY = feedbackCenter!.y - (rect.top + rect.height / 2);
-      element.style.transform =
-        Math.abs(offsetX) < 0.01 && Math.abs(offsetY) < 0.01
-          ? scaledTransform
-          : `translate(${offsetX}px, ${offsetY}px) ${scaledTransform}`.trim();
+      element.style.transform = centeredTransform(scaledTransform, feedbackCenter);
     }
     if (animation) {
       if (hovered || pressed) animation.pause();
@@ -1084,13 +1541,24 @@ function mountPlayableFeedback(
     }
   };
   const enter = (event: PointerEvent) => {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType === "touch") return;
     hovered = true;
     update();
   };
   const leave = (event: PointerEvent) => {
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType === "touch") return;
     hovered = false;
+    update();
+  };
+  const move = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
+    const target = event.target;
+    const isOver =
+      event.composedPath().includes(element) ||
+      target === element ||
+      (target instanceof view.Node && element.contains(target));
+    if (hovered === isOver) return;
+    hovered = isOver;
     update();
   };
   const down = () => {
@@ -1099,7 +1567,8 @@ function mountPlayableFeedback(
   };
   const up = () => {
     pressed = false;
-    update();
+    if (idlePrompt) queueMicrotask(update);
+    else update();
   };
   const keyDown = (event: KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") down();
@@ -1107,6 +1576,8 @@ function mountPlayableFeedback(
   const keyUp = (event: KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") up();
   };
+  const onClick = () => stopIdlePrompt(true);
+  const onMotionSuccess = () => stopIdlePrompt(true);
   const transition =
     previousTransition || view.getComputedStyle(element).transition || "";
   element.style.transition = transition.includes("transform")
@@ -1114,29 +1585,38 @@ function mountPlayableFeedback(
     : transition
       ? `${transition}, transform 120ms ease`
       : "transform 120ms ease";
-  element.style.transformOrigin = "center center";
   element.addEventListener("pointerenter", enter);
   element.addEventListener("pointerleave", leave);
+  element.addEventListener("pointermove", move);
   element.addEventListener("pointerdown", down, true);
-  view.addEventListener("pointerup", up);
-  view.addEventListener("pointercancel", up);
+  element.addEventListener("click", onClick, true);
+  view.addEventListener("pointerup", up, idlePrompt);
+  view.addEventListener("pointercancel", up, idlePrompt);
   element.addEventListener("keydown", keyDown);
   element.addEventListener("keyup", keyUp);
+  if (idlePrompt)
+    element.addEventListener(PLAYABLE_MOTION_SUCCESS_EVENT, onMotionSuccess);
+  if (stopOnClick)
+    element.addEventListener("click", onClick, true);
   return () => {
+    idlePromptDisposed = true;
     element.removeEventListener("pointerenter", enter);
     element.removeEventListener("pointerleave", leave);
+    element.removeEventListener("pointermove", move);
     element.removeEventListener("pointerdown", down, true);
-    view.removeEventListener("pointerup", up);
-    view.removeEventListener("pointercancel", up);
+    if (stopOnClick) element.removeEventListener("click", onClick, true);
+    view.removeEventListener("pointerup", up, idlePrompt);
+    view.removeEventListener("pointercancel", up, idlePrompt);
     element.removeEventListener("keydown", keyDown);
     element.removeEventListener("keyup", keyUp);
+    if (idlePrompt)
+      element.removeEventListener(
+        PLAYABLE_MOTION_SUCCESS_EVENT,
+        onMotionSuccess,
+      );
     element.style.transform = previousTransform;
+    element.style.boxShadow = previousBoxShadow;
     element.style.transition = previousTransition;
-    element.style.setProperty(
-      "transform-origin",
-      previousTransformOrigin,
-      previousTransformOriginPriority,
-    );
     animation?.cancel();
     if (previousShape) Object.assign(element.style, previousShape);
   };
@@ -1212,6 +1692,53 @@ export function updatePlayableButtonLabelScale(button: HTMLElement): void {
   label.style.scale = `${100 / x} ${100 / y}`;
 }
 
+function circularProgressMaskPath(progress: number): string {
+  if (progress <= 0) return "";
+  if (progress >= 1)
+    return "M 50 50 L 50 -50 A 100 100 0 0 1 50 150 A 100 100 0 0 1 50 -50 Z";
+  const angle = progress * Math.PI * 2;
+  const coordinate = (value: number) => String(Number(value.toFixed(3)));
+  const outerX = coordinate(50 + 100 * Math.sin(angle));
+  const outerY = coordinate(50 - 100 * Math.cos(angle));
+  const largeArc = progress > 0.5 ? 1 : 0;
+  return `M 50 50 L 50 -50 A 100 100 0 ${largeArc} 1 ${outerX} ${outerY} Z`;
+}
+
+function circularHoldChargeAssetOffset(
+  axis: "x" | "y",
+  offset: number | undefined,
+): number {
+  if (!offset) return 0;
+  // Preserve the old offset units: percentages of the bottom progress rail,
+  // not percentages of the full circular button.
+  return offset * (axis === "x" ? 0.84 : 0.036);
+}
+
+export function circularHoldChargeAssetFrame({
+  scale,
+  offsetX,
+  offsetY,
+}: {
+  scale: number;
+  offsetX?: number;
+  offsetY?: number;
+}): { x: number; y: number; width: number; height: number } {
+  const width = 100 * (scale / 100);
+  const height = width;
+  return {
+    x: Number(
+      ((100 - width) / 2 +
+        circularHoldChargeAssetOffset("x", offsetX)).toFixed(3),
+    ),
+    y: Number(
+      ((100 - height) / 2 +
+        circularHoldChargeAssetOffset("y", offsetY)).toFixed(3),
+    ),
+    width,
+    height,
+  };
+}
+
 function mountMotion(
   element: HTMLElement,
   config: PlayableMotionConfig,
@@ -1242,6 +1769,36 @@ function mountMotion(
   const previousCursor = element.style.cursor;
   const previousTouchAction = element.style.touchAction;
   const previousUserSelect = element.style.userSelect;
+  const previousIsolation = element.style.isolation;
+  const previousVisibility = element.style.visibility;
+  const previousLeft = element.style.left;
+  const previousTop = element.style.top;
+  const existingBottomLayerLabel = element.querySelector<HTMLElement>(
+    "[data-putenggame-button-label]",
+  );
+  const bottomLayerLabel =
+    config.barLayer === "bottom"
+      ? existingBottomLayerLabel ?? wrapButtonLabel(element)
+      : undefined;
+  const previousBottomLayerLabelStyle = bottomLayerLabel
+    ? {
+        position: bottomLayerLabel.style.position,
+        zIndex: bottomLayerLabel.style.zIndex,
+      }
+    : undefined;
+  if (bottomLayerLabel) {
+    bottomLayerLabel.style.position = "relative";
+    bottomLayerLabel.style.zIndex = "1";
+  }
+  const hasButtonBaseAsset = Boolean(
+    element.querySelector("[data-putenggame-button-asset-image]"),
+  );
+  if (hasButtonBaseAsset && config.barLayer)
+    element.style.isolation = "isolate";
+  const floatingSwipe =
+    config.kind === "swipe-button" &&
+    (config.swipeStyle === "floating" ||
+      (!config.swipeStyle && config.buttonShape === "circle"));
   const previousRingShape =
     config.kind === "progress-ring"
       ? {
@@ -1276,12 +1833,21 @@ function mountMotion(
     display: "grid",
     placeItems: "center",
     pointerEvents: "none",
-    zIndex: "1",
+    zIndex:
+      config.barLayer === "bottom"
+        ? "-2"
+        : config.barLayer === "top"
+          ? "2"
+          : "1",
     font: "inherit",
   });
   const fillsFromLeft =
     config.mode === "interactive" &&
     (config.kind === "hold-charge" || config.interaction === "hold");
+  const circularCountdown =
+    config.kind === "countdown" && config.buttonShape === "circle";
+  const circularHoldCharge =
+    config.kind === "hold-charge" && config.buttonShape === "circle";
   const track = element.ownerDocument.createElement("span");
   Object.assign(track.style, {
     position: "relative",
@@ -1296,8 +1862,13 @@ function mountMotion(
   overlay.append(track);
   let ring: SVGCircleElement | undefined;
   let ringImage: HTMLImageElement | undefined;
-  if (config.kind === "progress-ring") {
-    if (resolvedRingAssetUrl) {
+  let ringMaskPath: SVGPathElement | undefined;
+  if (
+    config.kind === "progress-ring" ||
+    circularCountdown ||
+    circularHoldCharge
+  ) {
+    if (config.kind === "progress-ring" && resolvedRingAssetUrl) {
       ringImage = element.ownerDocument.createElement("img");
       ringImage.dataset.putenggameMotionRing = "";
       ringImage.src = resolvedRingAssetUrl;
@@ -1314,45 +1885,108 @@ function mountMotion(
           "conic-gradient(from 0deg, #000 0deg, transparent 0deg)",
       });
       track.append(ringImage);
-    } else if (!element.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset)) {
-    const svg = element.ownerDocument.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "svg",
-    );
-    svg.setAttribute("viewBox", "0 0 100 100");
-    Object.assign(svg.style, {
-      position: "absolute",
-      inset: "0",
-      width: "100%",
-      height: "100%",
-      transform: "rotate(-90deg)",
-    });
-    const background = element.ownerDocument.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "circle",
-    );
-    background.setAttribute("cx", "50");
-    background.setAttribute("cy", "50");
-    background.setAttribute("r", "44");
-    background.setAttribute("fill", "none");
-    background.setAttribute("stroke", "currentColor");
-    background.setAttribute("stroke-opacity", "0.24");
-    background.setAttribute("stroke-width", "8");
-    ring = element.ownerDocument.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "circle",
-    );
-    ring.setAttribute("cx", "50");
-    ring.setAttribute("cy", "50");
-    ring.setAttribute("r", "44");
-    ring.setAttribute("fill", "none");
-    ring.setAttribute("stroke", "currentColor");
-    ring.setAttribute("stroke-width", "8");
-    ring.setAttribute("stroke-dasharray", String(2 * Math.PI * 44));
-    ring.setAttribute("stroke-dashoffset", "0");
-    ring.setAttribute("stroke-linecap", "round");
-    svg.append(background, ring);
-    track.append(svg);
+    } else if (circularHoldCharge && resolvedBarAssetUrl) {
+      const svg = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg",
+      );
+      svg.setAttribute("viewBox", "0 0 100 100");
+      Object.assign(svg.style, {
+        position: "absolute",
+        inset: "0",
+        width: "100%",
+        height: "100%",
+      });
+      const maskId = `putenggame-motion-mask-${++playableMotionMaskSequence}`;
+      const defs = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "defs",
+      );
+      const mask = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "mask",
+      );
+      mask.id = maskId;
+      mask.setAttribute("maskUnits", "userSpaceOnUse");
+      mask.setAttribute("x", "0");
+      mask.setAttribute("y", "0");
+      mask.setAttribute("width", "100");
+      mask.setAttribute("height", "100");
+      ringMaskPath = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "path",
+      );
+      ringMaskPath.dataset.putenggameMotionProgressMask = "";
+      ringMaskPath.setAttribute("fill", "white");
+      ringMaskPath.setAttribute("fill-rule", "evenodd");
+      ringMaskPath.style.visibility = "hidden";
+      mask.append(ringMaskPath);
+      defs.append(mask);
+      const image = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "image",
+      );
+      image.setAttribute("data-putenggame-motion-bar", "");
+      image.setAttribute("href", resolvedBarAssetUrl);
+      const frame = circularHoldChargeAssetFrame({
+        scale: config.barAssetScale ?? 100,
+        offsetX: config.barAssetOffsetX,
+        offsetY: config.barAssetOffsetY,
+      });
+      image.setAttribute(
+        "x",
+        String(frame.x),
+      );
+      image.setAttribute("y", String(frame.y));
+      image.setAttribute("width", String(frame.width));
+      image.setAttribute("height", String(frame.height));
+      image.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      image.setAttribute("mask", `url(#${maskId})`);
+      svg.append(defs, image);
+      track.append(svg);
+    } else if (
+      circularCountdown ||
+      circularHoldCharge ||
+      !element.hasAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset)
+    ) {
+      const svg = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg",
+      );
+      svg.setAttribute("viewBox", "0 0 100 100");
+      Object.assign(svg.style, {
+        position: "absolute",
+        inset: "0",
+        width: "100%",
+        height: "100%",
+        transform: "rotate(-90deg)",
+      });
+      const background = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "circle",
+      );
+      background.setAttribute("cx", "50");
+      background.setAttribute("cy", "50");
+      background.setAttribute("r", "44");
+      background.setAttribute("fill", "none");
+      background.setAttribute("stroke", "currentColor");
+      background.setAttribute("stroke-opacity", "0.24");
+      background.setAttribute("stroke-width", "8");
+      ring = element.ownerDocument.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "circle",
+      );
+      ring.setAttribute("cx", "50");
+      ring.setAttribute("cy", "50");
+      ring.setAttribute("r", "44");
+      ring.setAttribute("fill", "none");
+      ring.setAttribute("stroke", "currentColor");
+      ring.setAttribute("stroke-width", "8");
+      ring.setAttribute("stroke-dasharray", String(2 * Math.PI * 44));
+      ring.setAttribute("stroke-dashoffset", "0");
+      ring.setAttribute("stroke-linecap", "round");
+      svg.append(background, ring);
+      track.append(svg);
     }
   } else if (config.kind === "swipe-button") {
     const swipeDirection =
@@ -1366,9 +2000,6 @@ function mountMotion(
     const startsAtHighPosition =
       swipeDirection === "swipe-left" || swipeDirection === "swipe-up";
     const twoWaySwipe = config.swipeBehavior === "two-way";
-    const floatingSwipe =
-      config.swipeStyle === "floating" ||
-      (!config.swipeStyle && config.buttonShape === "circle");
     const rail = element.ownerDocument.createElement("span");
     rail.dataset.putenggameSwipeRail = "";
     Object.assign(rail.style, {
@@ -1415,9 +2046,11 @@ function mountMotion(
       left: "8%",
       right: "8%",
       bottom: "0.2em",
-      height: "0.18em",
+      height: config.kind === "countdown" ? "8%" : "0.18em",
       borderRadius: "999px",
-      background: "color-mix(in srgb, currentColor 28%, transparent)",
+      background: resolvedBarAssetUrl
+        ? "transparent"
+        : "color-mix(in srgb, currentColor 28%, transparent)",
       overflow: "hidden",
     });
     const fill = element.ownerDocument.createElement("span");
@@ -1451,12 +2084,6 @@ function mountMotion(
     }
     rail.append(fill);
     track.append(rail);
-    if (config.kind === "countdown") {
-      const label = element.ownerDocument.createElement("span");
-      label.dataset.putenggameMotionLabel = "";
-      label.textContent = String(Math.ceil(config.duration));
-      track.append(label);
-    }
   }
   element.append(overlay);
 
@@ -1523,6 +2150,59 @@ function mountMotion(
         ? 88
         : 12;
   let swipeStartPositionValue = swipeStartPosition;
+  const floatingBaseLeft = previousLeft || computedStyle.left || "50%";
+  const floatingBaseTop = previousTop || computedStyle.top || "50%";
+  let floatingOffsetX = 0;
+  let floatingOffsetY = 0;
+  let floatingPointerStartOffsetX = 0;
+  let floatingPointerStartOffsetY = 0;
+  let floatingPointerStartCenter: { x: number; y: number } | undefined;
+  const setFloatingSwipeOffset = (x: number, y: number) => {
+    floatingOffsetX = x;
+    floatingOffsetY = y;
+    const xOffset = Math.abs(x);
+    const yOffset = Math.abs(y);
+    element.style.left =
+      x === 0
+        ? floatingBaseLeft
+        : `calc(${floatingBaseLeft} ${x < 0 ? "-" : "+"} ${xOffset}px)`;
+    element.style.top =
+      y === 0
+        ? floatingBaseTop
+        : `calc(${floatingBaseTop} ${y < 0 ? "-" : "+"} ${yOffset}px)`;
+  };
+  const clientToElementScale = () => {
+    const rect = element.getBoundingClientRect();
+    return {
+      x: rect.width > 0 && element.offsetWidth > 0
+        ? rect.width / element.offsetWidth
+        : 1,
+      y: rect.height > 0 && element.offsetHeight > 0
+        ? rect.height / element.offsetHeight
+        : 1,
+    };
+  };
+  const floatingSwipeEndpoint = (direction: string) => {
+    const center = floatingPointerStartCenter;
+    if (!center) return undefined;
+    const bounds = element.getBoundingClientRect();
+    const arrowLength = Math.max(bounds.width, bounds.height) * 1.2;
+    if (!arrowLength) return undefined;
+    const scale = clientToElementScale();
+    const delta =
+      direction === "swipe-left"
+        ? { x: -arrowLength, y: 0 }
+        : direction === "swipe-right"
+          ? { x: arrowLength, y: 0 }
+          : direction === "swipe-up"
+            ? { x: 0, y: -arrowLength }
+            : { x: 0, y: arrowLength };
+    return {
+      distance: arrowLength,
+      x: floatingPointerStartOffsetX + delta.x / scale.x,
+      y: floatingPointerStartOffsetY + delta.y / scale.y,
+    };
+  };
   const swipeTravelDistance = () => {
     const railRect = swipeRail?.getBoundingClientRect();
     const railSize = verticalSwipe ? railRect?.height ?? 0 : railRect?.width ?? 0;
@@ -1539,7 +2219,13 @@ function mountMotion(
     config.ringFill === "reveal" || fillsFromLeft;
   const ringCircumference = 2 * Math.PI * 44;
   const setRingProgress = (progress: number) => {
+    if (ringMaskPath) {
+      ringMaskPath.setAttribute("d", circularProgressMaskPath(progress));
+      ringMaskPath.style.visibility = progress > 0 ? "visible" : "hidden";
+    }
     if (ring) {
+      if (circularHoldCharge)
+        ring.style.visibility = progress > 0 ? "visible" : "hidden";
       ring.setAttribute(
         "stroke-dasharray",
         ringReveals
@@ -1585,6 +2271,7 @@ function mountMotion(
   const finish = () => {
     if (finished) return;
     finished = true;
+    setHolding(false);
     if (config.mode === "visual") emit(config.signal);
     else if (config.timeoutSignal && context.navigation.connected(config.timeoutSignal))
       void context.navigation.fail(config.timeoutSignal).catch(() => {});
@@ -1592,6 +2279,10 @@ function mountMotion(
   const succeed = () => {
     if (finished) return;
     finished = true;
+    setHolding(false);
+    element.dispatchEvent(new view.Event(PLAYABLE_MOTION_SUCCESS_EVENT));
+    if (config.kind === "swipe-button" && config.disappearAfterSwipe)
+      element.style.visibility = "hidden";
     if (
       config.signal &&
       element.getAttribute("data-signal") === config.signal
@@ -1609,7 +2300,7 @@ function mountMotion(
     const stage = element.closest<HTMLElement>(
       "[data-putenggame-awaiting-input]",
     );
-    if (stage) {
+    if (stage || element.hasAttribute("data-playable-timing-hidden")) {
       pausedAt ??= now;
       frame = view.requestAnimationFrame(tick);
       return;
@@ -1660,16 +2351,38 @@ function mountMotion(
         Math.max(0, Math.ceil(config.duration * (1 - progress))),
       );
   };
+  const setHolding = (next: boolean) => {
+    if (holding === next) return;
+    holding = next;
+    if (next)
+      element.setAttribute(PLAYABLE_MOTION_HOLDING_ATTRIBUTE, "");
+    else element.removeAttribute(PLAYABLE_MOTION_HOLDING_ATTRIBUTE);
+    element.dispatchEvent(
+      new view.Event(PLAYABLE_MOTION_TIMING_UPDATE_EVENT, {
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  };
   const pressStart = (event: Event) => {
     if (
       config.mode !== "interactive" ||
       (config.kind !== "hold-charge" && config.interaction !== "hold")
     )
       return;
+    const now = view.performance.now();
+    if (
+      pausedAt !== undefined &&
+      !element.closest("[data-putenggame-awaiting-input]") &&
+      !element.hasAttribute("data-playable-timing-hidden")
+    ) {
+      started += now - pausedAt;
+      pausedAt = undefined;
+    }
     event.preventDefault();
     event.stopImmediatePropagation();
-    holding = true;
-    holdStarted = view.performance.now();
+    setHolding(true);
+    holdStarted = now;
     if (typeof PointerEvent !== "undefined" && event instanceof PointerEvent) {
       try {
         element.setPointerCapture(event.pointerId);
@@ -1697,14 +2410,15 @@ function mountMotion(
       (config.kind !== "hold-charge" && config.interaction !== "hold")
     )
       return;
+    if (dispatchingSuccessClick) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!holding || finished) return;
-    holding = false;
     const holdElapsed = Math.min(
       durationMs,
       view.performance.now() - holdStarted,
     );
+    setHolding(false);
     if (holdElapsed >= durationMs) succeed();
     else if (config.kind === "hold-charge") {
       setProgress(0);
@@ -1713,6 +2427,15 @@ function mountMotion(
   const pointerDown = (event: PointerEvent) => {
     pointerStart = { x: event.clientX, y: event.clientY };
     pointerPressedAt = view.performance.now();
+    floatingPointerStartOffsetX = floatingOffsetX;
+    floatingPointerStartOffsetY = floatingOffsetY;
+    if (floatingSwipe) {
+      const bounds = element.getBoundingClientRect();
+      floatingPointerStartCenter = {
+        x: bounds.left + bounds.width / 2,
+        y: bounds.top + bounds.height / 2,
+      };
+    }
     if (swipeThumb) {
       const currentPosition = Number.parseFloat(
         swipeThumb.style[swipePositionProperty],
@@ -1733,6 +2456,7 @@ function mountMotion(
   const pointerMove = (event: PointerEvent) => {
     if (
       !pointerStart ||
+      finished ||
       config.mode !== "interactive" ||
       config.kind !== "swipe-button"
     )
@@ -1758,6 +2482,27 @@ function mountMotion(
         ? Math.abs(dy)
         : Math.abs(dx)
       : 0;
+    if (floatingSwipe) {
+      if (!canMove) return;
+      const scale = clientToElementScale();
+      const endpoint = floatingSwipeEndpoint(direction);
+      const nextX =
+        floatingPointerStartOffsetX + (verticalSwipe ? 0 : dx / scale.x);
+      const nextY =
+        floatingPointerStartOffsetY + (verticalSwipe ? dy / scale.y : 0);
+      const clampToEndpoint = (value: number, start: number, end: number) =>
+        end < start
+          ? Math.max(end, Math.min(start, value))
+          : Math.min(end, Math.max(start, value));
+      setFloatingSwipeOffset(
+        endpoint && !verticalSwipe
+          ? clampToEndpoint(nextX, floatingPointerStartOffsetX, endpoint.x)
+          : nextX,
+        endpoint && verticalSwipe
+          ? clampToEndpoint(nextY, floatingPointerStartOffsetY, endpoint.y)
+          : nextY,
+      );
+    }
     const railRect = swipeRail?.getBoundingClientRect();
     const railSize = verticalSwipe ? railRect?.height ?? 0 : railRect?.width ?? 0;
     const progress = Math.min(
@@ -1784,6 +2529,7 @@ function mountMotion(
     if (!pointerStart || config.mode !== "interactive") return;
     const dx = event.clientX - pointerStart.x;
     const dy = event.clientY - pointerStart.y;
+    pointerMove(event);
     pointerStart = undefined;
     const expected = config.interaction;
     if (!expected?.startsWith("swipe-")) return;
@@ -1797,22 +2543,39 @@ function mountMotion(
         : dy < 0
           ? "swipe-up"
           : "swipe-down";
+    const endpoint = floatingSwipe
+      ? floatingSwipeEndpoint(direction)
+      : undefined;
     const canComplete = twoWaySwipe
       ? verticalSwipe
         ? direction === "swipe-up" || direction === "swipe-down"
         : direction === "swipe-left" || direction === "swipe-right"
       : direction === swipeDirection;
+    const swipeDistance = floatingSwipe
+      ? verticalSwipe
+        ? Math.abs(dy)
+        : Math.abs(dx)
+      : Math.hypot(dx, dy);
     if (
       canComplete &&
-      Math.hypot(dx, dy) >=
-        (expected === "swipe-any" ? swipeTravelDistance() : 40)
+      swipeDistance >=
+        (expected === "swipe-any"
+          ? swipeTravelDistance()
+          : endpoint?.distance ?? 40)
     ) {
       succeed();
     }
+    floatingPointerStartCenter = undefined;
   };
   const pointerCancel = () => {
+    if (floatingSwipe)
+      setFloatingSwipeOffset(
+        floatingPointerStartOffsetX,
+        floatingPointerStartOffsetY,
+      );
     pointerStart = undefined;
     pointerPressedAt = undefined;
+    floatingPointerStartCenter = undefined;
   };
   const click = (event: Event) => {
     if (config.mode !== "interactive" || config.kind === "hold-charge") return;
@@ -1889,6 +2652,7 @@ function mountMotion(
 
   return () => {
     view.cancelAnimationFrame(frame);
+    setHolding(false);
     element.removeEventListener("click", click, true);
     element.removeEventListener("dblclick", doubleClick, true);
     element.removeEventListener("pointerdown", pointerDown, true);
@@ -1903,10 +2667,22 @@ function mountMotion(
     element.removeEventListener("pointercancel", pressEnd, true);
     element.removeEventListener("click", pressEnd, true);
     overlay.remove();
+    if (bottomLayerLabel && previousBottomLayerLabelStyle) {
+      bottomLayerLabel.style.position = previousBottomLayerLabelStyle.position;
+      bottomLayerLabel.style.zIndex = previousBottomLayerLabelStyle.zIndex;
+      if (!existingBottomLayerLabel)
+        unwrapButtonLabel(bottomLayerLabel);
+    }
     element.style.position = previousPosition;
     element.style.cursor = previousCursor;
     element.style.touchAction = previousTouchAction;
     element.style.userSelect = previousUserSelect;
+    element.style.isolation = previousIsolation;
+    element.style.visibility = previousVisibility;
+    if (floatingSwipe) {
+      element.style.left = previousLeft;
+      element.style.top = previousTop;
+    }
     if (previousRingShape) Object.assign(element.style, previousRingShape);
   };
 }
@@ -1970,6 +2746,9 @@ function motionAttributes(config: PlayableMotionConfig): string {
     ...(config.barAssetOffsetY === undefined
       ? []
       : [`${PLAYABLE_MOTION_ATTRIBUTES.barAssetOffsetY}="${config.barAssetOffsetY}"`]),
+    ...(config.barLayer
+      ? [`${PLAYABLE_MOTION_ATTRIBUTES.barLayer}="${config.barLayer}"`]
+      : []),
     ...(config.swipeAssetId
       ? [
           `${PLAYABLE_MOTION_ATTRIBUTES.swipeAsset}="${escapeAttribute(config.swipeAssetId)}"`,
@@ -1983,12 +2762,45 @@ function motionAttributes(config: PlayableMotionConfig): string {
           `${PLAYABLE_MOTION_ATTRIBUTES.swipeBehavior}="${config.swipeBehavior}"`,
         ]
       : []),
+    ...(config.disappearAfterSwipe
+      ? [`${PLAYABLE_MOTION_ATTRIBUTES.disappearAfterSwipe}="true"`]
+      : []),
     ...(config.ringFill
       ? [`${PLAYABLE_MOTION_ATTRIBUTES.ringFill}="${config.ringFill}"`]
       : []),
     ...(config.ringRotation
       ? [
           `${PLAYABLE_MOTION_ATTRIBUTES.ringRotation}="${config.ringRotation}"`,
+        ]
+      : []),
+    ...(config.pressEffect
+      ? [
+          `${PLAYABLE_MOTION_ATTRIBUTES.pressEffect}="${config.pressEffect}"`,
+        ]
+      : []),
+    ...(config.effectColor
+      ? [
+          `${PLAYABLE_MOTION_ATTRIBUTES.effectColor}="${config.effectColor}"`,
+        ]
+      : []),
+    ...(config.effectAnchorX === undefined
+      ? []
+      : [
+          `${PLAYABLE_MOTION_ATTRIBUTES.effectAnchorX}="${config.effectAnchorX}"`,
+        ]),
+    ...(config.effectAnchorY === undefined
+      ? []
+      : [
+          `${PLAYABLE_MOTION_ATTRIBUTES.effectAnchorY}="${config.effectAnchorY}"`,
+        ]),
+    ...(config.effectOffsetX
+      ? [
+          `${PLAYABLE_MOTION_ATTRIBUTES.effectOffsetX}="${config.effectOffsetX}"`,
+        ]
+      : []),
+    ...(config.effectOffsetY
+      ? [
+          `${PLAYABLE_MOTION_ATTRIBUTES.effectOffsetY}="${config.effectOffsetY}"`,
         ]
       : []),
     ...(config.feedback

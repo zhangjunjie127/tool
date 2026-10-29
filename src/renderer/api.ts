@@ -251,7 +251,7 @@ export async function deleteProject(projectId: string): Promise<void> {
   composerDrafts.deleteProject(projectId);
 }
 
-/** Conversations list coding agents' models too; canvas text and other one-off generation use OhMyGame's own models only. */
+/** Conversations list coding agents' models too; canvas text and other one-off generation use puteng game's own models only. */
 export async function listModels(options: { agentRuntimes?: boolean } = {}): Promise<AgentModelCatalog> {
   return request(options.agentRuntimes ? "/models?runtimes=1" : "/models");
 }
@@ -648,8 +648,14 @@ export async function publishProject(projectId: string, accessToken: string, met
   return request(`/projects/${projectId}/publish`, { method: "POST", body: JSON.stringify(body) });
 }
 
-export async function buildInteractiveStory(projectId: string, version?: string): Promise<Blob> {
-  const response = await fetch(apiUrl(`/projects/${projectId}/interactive-story/build`), {
+export type InteractiveStoryExportFormat = "playable" | "editable" | "pico-web" | "pico-apk";
+
+export async function buildInteractiveStory(
+  projectId: string,
+  format: InteractiveStoryExportFormat = "playable",
+  version?: string,
+): Promise<Blob> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/interactive-story/build?format=${format}`), {
     method: "POST",
     headers: projectRuntimeHeaders(projectId, version),
   });
@@ -824,6 +830,16 @@ export async function listLibraryAssets(): Promise<LibraryAssetSummary[]> {
 
 export async function listLibrarySourceFolders(): Promise<LibrarySourceFolders> {
   return request("/library/source-folders");
+}
+
+export async function reconcileBrowserLibraryFolder(
+  category: LibrarySourceFolderCategory,
+  sourceKeys: string[],
+): Promise<void> {
+  await request(`/library/assets/source-sync/browser/${category}`, {
+    method: "PUT",
+    body: JSON.stringify({ sourceKeys }),
+  });
 }
 
 export async function setLibrarySourceFolder(

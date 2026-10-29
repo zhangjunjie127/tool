@@ -425,7 +425,7 @@ app.on("activate", () => {
   if (!daemon || mainWindow || quitting) return;
   openMainWindow().catch((error) => {
     console.error(error);
-    dialog.showErrorBox("OhMyGame could not open a window", error instanceof Error ? error.message : String(error));
+    dialog.showErrorBox("puteng game could not open a window", error instanceof Error ? error.message : String(error));
   });
 });
 app.on("before-quit", (event) => {
@@ -519,7 +519,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(error);
-  if (app.isReady()) dialog.showErrorBox("OhMyGame could not start", message);
+  if (app.isReady()) dialog.showErrorBox("puteng game could not start", message);
   await stopServices();
   app.exit(1);
 }

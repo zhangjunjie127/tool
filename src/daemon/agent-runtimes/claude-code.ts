@@ -48,7 +48,7 @@ interface PendingTurn {
   signal: AbortSignal;
   blocks: Map<string, "text" | "thinking">;
   streamed: Set<string>;
-  /** Tool calls OhMyGame allowed, which Claude Code runs next; one may be allowed before its call is reported. */
+  /** Tool calls puteng game allowed, which Claude Code runs next; one may be allowed before its call is reported. */
   started: Set<string>;
   readOnly: boolean;
   /** The latest model request's usage, which is what the context holds; the result's usage adds up every request. */
@@ -57,7 +57,7 @@ interface PendingTurn {
 
 /**
  * Claude Code over its stream-json protocol, with one long-lived process per
- * session. Messages go in on stdin, which stays open for later turns. OhMyGame's tools are an
+ * session. Messages go in on stdin, which stays open for later turns. puteng game's tools are an
  * in-process MCP server answered over the same pipe, and permission requests
  * come back on it too: no port, no token, no file in the workspace.
  */
@@ -275,7 +275,7 @@ export class ClaudeCodeDriver implements NativeDriver {
         JSON.stringify({
           name: "ohmygame",
           version: "1.0.0",
-          description: "OhMyGame Skills for this project",
+          description: "puteng game Skills for this project",
         }),
       );
       if ((await stageSkills(context.skillDirectories, skills)).length)
@@ -291,7 +291,7 @@ export class ClaudeCodeDriver implements NativeDriver {
 
   /**
    * Planning runs in Claude's default mode, not its own plan mode: that mode
-   * steers Claude to write a plan file and call ExitPlanMode, while OhMyGame
+   * steers Claude to write a plan file and call ExitPlanMode, while puteng game
    * takes the plan through update_plan. The hook keeps the turn read-only,
    * and default mode sends any edit the hook did not see to can_use_tool.
    */
@@ -606,7 +606,7 @@ export class ClaudeCodeDriver implements NativeDriver {
           hookEventName: "PreToolUse",
           permissionDecision: decision === "deny" ? "deny" : "allow",
           permissionDecisionReason:
-            decision === "deny" ? reason : "Approved by OhMyGame",
+            decision === "deny" ? reason : "Approved by puteng game",
         },
       };
     }
@@ -626,7 +626,7 @@ export class ClaudeCodeDriver implements NativeDriver {
       if (!turn || turn.signal.aborted)
         return { behavior: "deny", message: "No turn is running" };
       const mcp = record(request.mcp_server);
-      // OhMyGame's own tools need no permission; the daemon runs them.
+      // puteng game's own tools need no permission; the daemon runs them.
       if (mcp?.name === BRIDGE_SERVER_NAME)
         return { behavior: "allow", updatedInput: input };
       const toolName = String(request.tool_name ?? "tool");
@@ -649,7 +649,7 @@ export class ClaudeCodeDriver implements NativeDriver {
 
   /**
    * Claude Code reports a tool call and then its result, with nothing when the
-   * tool begins. It runs a tool as soon as OhMyGame allows it, so that is when
+   * tool begins. It runs a tool as soon as puteng game allows it, so that is when
    * the call is shown as running: a long command or build is visible, and can
    * be stopped, while it runs.
    */
@@ -670,12 +670,12 @@ export class ClaudeCodeDriver implements NativeDriver {
       tool.startsWith(`mcp__${BRIDGE_SERVER_NAME}__`) ||
       CLAUDE_OWN_TOOLS.has(tool)
     )
-      return { decision: "allow", reason: "Approved by OhMyGame" };
+      return { decision: "allow", reason: "Approved by puteng game" };
     if (tool === "ExitPlanMode")
       return {
         decision: "deny",
         reason:
-          "OhMyGame reviews plans itself: record the plan with update_plan and end your reply.",
+          "puteng game reviews plans itself: record the plan with update_plan and end your reply.",
       };
     const details = claudeApproval(
       tool,
@@ -690,7 +690,7 @@ export class ClaudeCodeDriver implements NativeDriver {
         tool === "Bash" &&
         judgeApproval(details, planningPolicy(this.context.policy)) === "allow";
       return readCommand
-        ? { decision: "allow", reason: "Approved by OhMyGame" }
+        ? { decision: "allow", reason: "Approved by puteng game" }
         : {
             decision: "deny",
             reason: PLANNING_DENIAL,
@@ -766,7 +766,7 @@ const CLAUDE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
  * OS. Protected roots are unreadable; the workspace and this session's
  * staged Skills stay readable even when they lie inside one, and writes keep
  * the sandbox's default of the workspace and temporary files. Commands
- * cannot opt out, and OhMyGame still decides which ones run. Where the
+ * cannot opt out, and puteng game still decides which ones run. Where the
  * sandbox is not available, such as Linux without bubblewrap, the strict
  * approval policy applies. When the policy relies on confinement, startup
  * must fail instead of silently running commands without it.
@@ -799,7 +799,7 @@ export function claudeSandboxSettings(context: DriverContext): {
         // Installs fill the package caches; those in the home folder are not writable here.
         allowWrite: [temporary],
       },
-      // Builds and installs need the network, as they do for OhMyGame's own agent.
+      // Builds and installs need the network, as they do for puteng game's own agent.
       network: { allowedDomains: ["*"] },
     },
   };
@@ -827,7 +827,7 @@ function userMessage(input: NativeTurnInput): Record<string, unknown> {
   };
 }
 
-/** OhMyGame's tools by their own names; Claude Code's file and shell tools by Pi's. */
+/** puteng game's tools by their own names; Claude Code's file and shell tools by Pi's. */
 export function claudeToolCall(
   name: string,
   input: Record<string, unknown>,

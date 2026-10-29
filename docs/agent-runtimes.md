@@ -56,7 +56,7 @@ replace a driver's transport without changing orchestration or persistence.
 
 ## Selection, settings, and discovery
 
-Configure CLIs under **Settings → Agents**, next to OhMyGame's own agent, and
+Configure CLIs under **Settings → Agents**, next to puteng game's own agent, and
 choose native models in the existing conversation model picker. Agents is its
 own settings section rather than a group in Providers & Models: a provider
 supplies models and credentials for every capability, while an agent runs the
@@ -178,7 +178,7 @@ permission profiles, dynamic tools and turns are per thread, and Skill roots
 are the one server-wide setting. A conversation that leaves interrupts its
 own turn and releases the server, which stops with the last. OpenCode keeps
 one server per conversation: it registers MCP servers for the whole instance,
-so a shared server would offer every conversation the others' OhMyGame tools,
+so a shared server would offer every conversation the others' puteng game tools,
 and its configuration is per process. Check abort before spawning and again before delivery. Interrupt waits are
 bounded and fall back to stopping the process group. A turn must settle on
 spawn failure, close, transport loss, timeout, and cancellation, including
@@ -204,7 +204,7 @@ Check required capabilities and refuse unsafe fallbacks. Direct protocols keep
 the installed executable. The Claude Agent SDK was evaluated (0.3.302) and not
 adopted: its platform package bundles a full Claude Code binary of about
 268 MB per platform, it adds three peer dependencies, and each SDK release is
-built for one CLI release, while OhMyGame drives whichever supported CLI the
+built for one CLI release, while puteng game drives whichever supported CLI the
 person installed. Reconsider when the SDK can drive an installed CLI across a
 version range without its bundled binary; a driver's transport can change
 without changing orchestration or persistence.
@@ -239,7 +239,7 @@ interactive transports or a permission fallback.
 
 ## Tools, plugins, and Skills
 
-Expose one daemon-owned OhMyGame tool surface using `createAgentTools` and the
+Expose one daemon-owned puteng game tool surface using `createAgentTools` and the
 existing canvas/media/preview services. Proxy active plugin MCP through the
 existing plugin adapter, hosted in a model-less Pi session. It does not run a
 second model loop. Effective plugin capabilities and project-type rules remain
@@ -268,13 +268,13 @@ A native language model is not an image, video, or 3D model.
 Approvals ship with each adapter, including exact command/path/access/network
 information and `allow`, `allow-session`, or `deny`. Keep terminal outcomes in
 the timeline; deny pending requests on stop and allow retry after an HTTP error.
-Cache conversation grants in OhMyGame, widening them only to the reviewed
+Cache conversation grants in puteng game, widening them only to the reviewed
 command or read-folder scope shown on the card. Do not issue broad native
 command-prefix grants.
 
 The shared policy resolves symlinks and missing descendants, accounts for
 custom CLI credential roots, and denies direct requests for credential homes,
-OhMyGame data, other projects, or ancestors that expose them. Workspace file
+puteng game data, other projects, or ancestors that expose them. Workspace file
 operations and a small set of simple read commands may proceed; external paths,
 builds, interpreters, Git, compound commands, and unknown scopes need approval.
 A runtime whose commands all run in its OS sandbox (`sandboxedCommands`, Claude
@@ -350,7 +350,7 @@ and Chinese; prompts sent to agents remain English.
 
 ## Delivery status and release gate
 
-The three adapters have Full integration scope: OhMyGame tools, approval UI,
+The three adapters have Full integration scope: puteng game tools, approval UI,
 resume/rebuild, manual/native compaction, queued continuation, usage where
 reported, and checkpoint recovery. Full describes implemented scope, not a
 promise of identical native features or completed platform acceptance. There
@@ -388,7 +388,7 @@ the workspace unchanged. OpenCode 1.18.33 / `mimo-v2.6-flash-free` passed the
 same extended workflow after its fixes. That acceptance found and fixed: tools never shown as
 running, subagents and shells that ran in the background past the turn, Claude's
 own plan-file workflow in place of `update_plan`, planning that could not
-search, OhMyGame tools deferred behind Claude's tool search, OpenCode
+search, puteng game tools deferred behind Claude's tool search, OpenCode
 subagents refused in planning, and bare OpenCode rejections that ended the
 planning loop. Codex 0.163.0 (the first stable release with named
 permission profiles) / `gpt-6-luna` passed the same extended workflow after
@@ -396,7 +396,7 @@ one more fix: it reads `AGENTS.md` from every folder between the Git root and
 the workspace through the permission profile, so a workspace inside another
 repository failed to start a thread. `project_root_markers = []` makes the
 workspace its own root, so only the workspace's `AGENTS.md` is read, as for
-OhMyGame's own agent. The same run showed that the profile's minimal system
+puteng game's own agent. The same run showed that the profile's minimal system
 access left the person's toolchains unreadable, so Node, npm, Git and Python
 could not start inside Codex's sandbox. Profiles now grant the folders on the
 commands' PATH and their installations (never the home folder), the macOS

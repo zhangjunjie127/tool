@@ -24,7 +24,8 @@ const GRAPH_SCHEMA_FILE = "schemas/graph.schema.json";
 const LAYOUT_SCHEMA_FILE = "schemas/editor-layout.schema.json";
 const PROJECT_STYLE_FILES = Object.keys(PLAYABLE_PROJECT_STYLE_FILES);
 const PROJECT_STYLE_MIGRATION_FILE = "schemas/project-style.version.json";
-const PROJECT_STYLE_MIGRATION_CONTENT = '{\n  "version": 1\n}\n';
+const PROJECT_STYLE_MIGRATION_VERSION = 2;
+const PROJECT_STYLE_MIGRATION_CONTENT = '{\n  "version": 2\n}\n';
 const codebaseOperations = new Map<string, Promise<void>>();
 
 export class NodeCodebaseError extends Error {
@@ -53,7 +54,7 @@ This workspace is the source of truth for an PutengGame Playable Nodes project.
 - A Node may use only Assets listed in its \`assets\` array. Resolve them with \`context.assets.url(assetId)\`.
 - Build every screen with the Project Style in \`shared/style/\`: import \`shared/style/components.css\` from a Node's CSS and use its tokens and classes. Add a token or component there instead of hard-coding values in a Node, and restyle the game by changing \`shared/style/\` first.
 - A Node's background is one \`<div class="backdrop" data-media="backdrop" data-asset="ID" data-type="video|image">\` inside a \`.has-backdrop\` container. The author sets \`data-asset\` and \`data-type\` from the editor, so keep exactly one such element in the Node's HTML and never replace it; to change the background, change those two attributes. Set \`data-loop="true"\` on the backdrop for looping video; otherwise it plays once and stops on its last frame. \`showBackdrop(context)\` from \`shared/style/components.js\` shows it, and returns \`{ video, cleanup }\`.
-- \`playScene(context, { signal })\` from the same file shows the background and emits the Signal when a single-play video ends or the player clicks. A looping video continues until the player clicks. The Blank Template uses it; change or replace it freely.
+- \`playScene(context, { signal })\` from the same file shows the background and emits the Signal when a single-play video ends. A looping video, image, or empty background can be clicked to continue. Clicks on controls never trigger the Scene-level action. The Blank Template uses it; change or replace it freely.
 - Use normal modules under \`shared/\` for code shared by Nodes. Imports must remain inside this workspace; project dependencies resolve from this project's own \`node_modules\`.
 - UI that appears on more than one Node, such as a top bar or a Home button, is a shared component under \`shared/components/\`. Each Node that shows it imports it, and declares and routes the Signals it emits like its own. There is no layer drawn over every Node; State carries whatever must continue across Nodes.
 - A Signal that is a way around the game rather than a step in the story, such as Home, Menu, or Settings, has \`"role": "navigation"\`. The editor names its target on the Exit instead of drawing a line; routing is the same.
@@ -306,12 +307,16 @@ async function migratePlayableProjectStyle(
     workspacePath,
     PROJECT_STYLE_MIGRATION_FILE,
   );
+  let version = 0;
   try {
-    await readFile(marker);
-    return;
+    const saved = JSON.parse(await readFile(marker, "utf8")) as {
+      version?: unknown;
+    };
+    if (typeof saved.version === "number") version = saved.version;
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
   }
+  if (version >= PROJECT_STYLE_MIGRATION_VERSION) return;
 
   const snapshot = await snapshotFiles(workspacePath, [
     ...PROJECT_STYLE_FILES,
@@ -326,6 +331,15 @@ async function migratePlayableProjectStyle(
         content,
       );
     }
+    const stylePath = "shared/style/components.css";
+    const resolvedStylePath = await resolveWorkspaceMutationPath(
+      workspacePath,
+      stylePath,
+    );
+    const style = await readFile(resolvedStylePath, "utf8");
+    const updatedStyle = removePlayableLetterboxBars(style);
+    if (updatedStyle !== style)
+      await writeTextAtomic(workspacePath, stylePath, updatedStyle);
     await writeTextAtomic(
       workspacePath,
       PROJECT_STYLE_MIGRATION_FILE,
@@ -335,6 +349,14 @@ async function migratePlayableProjectStyle(
     await restoreFiles(workspacePath, snapshot);
     throw cause;
   }
+}
+
+function removePlayableLetterboxBars(css: string): string {
+  return css.replace(
+    /\.has-backdrop::before\s*,\s*\.has-backdrop::after\s*\{[^{}]*\}/g,
+    (rule) =>
+      /height\s*:\s*var\(\s*--letterbox\s*\)/i.test(rule) ? "" : rule,
+  );
 }
 
 async function validateCodebase(

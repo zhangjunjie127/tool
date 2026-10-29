@@ -4,10 +4,13 @@ import {
   insertPlayableText,
   offsetOf,
   parsePlayableSourceLocation,
+  playableSourceLocationByCssPath,
   removePlayableElement,
+  removePlayableElementByCssPath,
   removePlayableTextPart,
   replacePlayableElementText,
 } from "../src/shared/playable-text-edit.js";
+import { setPlayableElementTranslate } from "../src/shared/playable-move.js";
 
 const html = [
   "<main>",
@@ -301,6 +304,57 @@ describe("removePlayableElement", () => {
         "p",
       ),
     ).toBeUndefined();
+  });
+
+  it("uses a stable element ID when a preview source location is stale", () => {
+    const source =
+      '<main><button id="first">Keep</button><button id="selected">Remove</button><button id="last">Keep</button></main>';
+
+    expect(
+      removePlayableElementByCssPath(
+        source,
+        "button#selected",
+        "button",
+      ),
+    ).toBe(
+      '<main><button id="first">Keep</button><button id="last">Keep</button></main>',
+    );
+    expect(
+      removePlayableElementByCssPath(source, "button#missing", "button"),
+    ).toBeUndefined();
+  });
+
+  it("resolves a moved element from its stable ID after earlier source edits", () => {
+    const source = [
+      "<main>",
+      '  <button id="first">Keep</button>',
+      '  <button id="inserted">New element</button>',
+      '  <button id="selected">Move</button>',
+      "</main>",
+    ].join("\n");
+
+    const location = playableSourceLocationByCssPath(
+      source,
+      "button#selected",
+      "button",
+    );
+    expect(location).toEqual({ line: 4, column: 3 });
+    expect(
+      setPlayableElementTranslate(
+        source,
+        location!,
+        "button",
+        { x: 8, y: -3 },
+      ),
+    ).toBe(
+      [
+        "<main>",
+        '  <button id="first">Keep</button>',
+        '  <button id="inserted">New element</button>',
+        '  <button style="translate: 8cqw -3cqh" id="selected">Move</button>',
+        "</main>",
+      ].join("\n"),
+    );
   });
 });
 

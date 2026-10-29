@@ -561,7 +561,7 @@ function localError(error: unknown): Response {
   return new Response(
     JSON.stringify({
       error: {
-        message: `OhMyGame: ${error instanceof Error ? error.message : String(error)}`,
+        message: `puteng game: ${error instanceof Error ? error.message : String(error)}`,
         type: "invalid_request_error",
         code: "ohmygame_deepseek_image_transport",
       },

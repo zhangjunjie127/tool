@@ -5,7 +5,7 @@ function prompt(project: Parameters<typeof appendSystemPromptForProject>[0]): st
   return appendSystemPromptForProject(project).join("\n\n");
 }
 
-describe("OhMyGame system prompt", () => {
+describe("puteng game system prompt", () => {
   it("preserves shared interaction guidance for every project type", () => {
     for (const type of ["general", "web-game", "godot-game", "interactive-story", "asset-canvas"] as const) {
       const text = prompt({ type });
@@ -25,7 +25,7 @@ describe("OhMyGame system prompt", () => {
 
     expect(text).toContain("create and evolve browser games");
     expect(text).toContain("smallest reliable change");
-    expect(text).toContain("OhMyGame owns the dev server");
+    expect(text).toContain("puteng game owns the dev server");
     expect(text).toContain("inside an iframe of any size");
     expect(text).toContain("__OHMYGAME_PLAYTEST__");
     expect(text).toContain("the workspace root");
@@ -89,6 +89,6 @@ describe("OhMyGame system prompt", () => {
     expect(text).toContain("<editor-context>");
     expect(text).toContain("drawing");
     expect(text).not.toContain("create and evolve browser games");
-    expect(text).not.toContain("OhMyGame owns the dev server");
+    expect(text).not.toContain("puteng game owns the dev server");
   });
 });

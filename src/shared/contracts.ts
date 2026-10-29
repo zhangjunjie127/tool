@@ -404,9 +404,9 @@ export interface ProjectState extends ProjectPreviewSettings {
   /** Device preset selected when a Web Game preview starts. */
   previewViewport?: PreviewViewport;
   mediaModelDefaults?: MediaModelDefaults;
-  /** Internal OhMyGame data kept separately from a user-selected workspace. */
+  /** Internal puteng game data kept separately from a user-selected workspace. */
   storagePath?: string;
-  /** Whether OhMyGame owns the workspace directory or only references it. */
+  /** Whether puteng game owns the workspace directory or only references it. */
   workspaceLocation?: "managed" | "external";
   /** False when a previously selected workspace is no longer available on disk. */
   workspaceAvailable?: boolean;

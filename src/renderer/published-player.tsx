@@ -85,6 +85,7 @@ function PublishedNodePlayer({ manifest }: { manifest: PublishedNodeManifest }) 
     definition={state.definition}
     assets={state.assets}
     saveKey={saveKey}
+    showPlaybackControls
     onSnapshot={onSnapshot}
   />;
 }

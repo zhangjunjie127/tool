@@ -52,7 +52,7 @@ Judge completeness by resolved decisions and their observable consequences, neve
 
 ## Save the design
 
-Save the design in a `.world/` directory at the workspace root. Hidden directories stay out of OhMyGame publish archives, so the design never ships with the world.
+Save the design in a `.world/` directory at the workspace root. Hidden directories stay out of puteng game publish archives, so the design never ships with the world.
 
 - `.world/request.md`: the user's original request, verbatim, with later revision requests appended.
 - `.world/expanded-prompt.md`: the self-contained design and the source of truth for the scene. Open with a short note separating what came from the user and what you inferred. If implementation forces a substantive design change, record the change and the reason rather than silently dropping it.

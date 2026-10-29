@@ -55,4 +55,36 @@ describe("Playable project settings dialog", () => {
     });
     expect(input!.checked).toBe(true);
   });
+
+  it.each(["editable", "pico-web", "pico-apk"] as const)(
+    "exports the selected %s format",
+    async (format) => {
+    const onExport = vi.fn(async () => {});
+    await act(async () =>
+      root.render(
+        <PlayableProjectSettingsDialog
+          project={{ name: "Test project" } as never}
+          graph={createNodeGraphFixture()}
+          backdropEffects={DEFAULT_PLAYABLE_BACKDROP_EFFECTS}
+          exporting={false}
+          canExport
+          onSave={vi.fn(async () => {})}
+          onExport={onExport}
+          onClose={vi.fn()}
+        />,
+      ),
+    );
+    const option = container.querySelector<HTMLInputElement>(
+      `input[type="radio"][value="${format}"]`,
+    );
+    expect(option).not.toBeNull();
+
+    await act(async () => {
+      option!.click();
+      container.querySelector<HTMLButtonElement>(".project-settings-browser")!.click();
+    });
+
+    expect(onExport).toHaveBeenCalledWith(format);
+    },
+  );
 });

@@ -797,7 +797,7 @@ describe("daemon", () => {
     expect(response.json().skills).toEqual([{ name: "godot", description: "Control Godot" }]);
   });
 
-  it("offers only configured OhMyGame media generation tools without a Plugin", async () => {
+  it("offers only configured puteng game media generation tools without a Plugin", async () => {
     const setActiveToolsByName = vi.fn();
     const prompt = vi.fn<CodingSession["prompt"]>(async () => {});
     const app = createApp({
@@ -2118,6 +2118,30 @@ describe("Playable Nodes projects", () => {
     expect(runtime).toMatchObject({ available: true, definition: { graph: { nodes: [] } } });
   });
 
+  it("exports an editable Interactive Story archive through the build endpoint", async () => {
+    const app = await createPlayableApp("ohmygame-playable-export-");
+    const project = (await app.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { name: "Export story", type: "interactive-story" },
+    })).json();
+    await addStartScene(app, project.id);
+
+    const exported = await app.inject({
+      method: "POST",
+      url: `/projects/${project.id}/interactive-story/build?format=editable`,
+    });
+    const unsupported = await app.inject({
+      method: "POST",
+        url: `/projects/${project.id}/interactive-story/build?format=not-a-format`,
+    });
+
+    expect(exported.statusCode).toBe(200);
+    expect(exported.headers["content-type"]).toContain("application/zip");
+    expect(exported.headers["content-disposition"]).toContain("editable.zip");
+    expect(unsupported.statusCode).toBe(400);
+  });
+
   it("lists Presets and adds a Node from one", async () => {
     const app = await createPlayableApp("ohmygame-playable-presets-");
     const project = (await app.inject({ method: "POST", url: "/projects", payload: { type: "interactive-story" } })).json();
@@ -2125,7 +2149,7 @@ describe("Playable Nodes projects", () => {
     const presets = await app.inject({ method: "GET", url: "/playable/presets" });
     expect(presets.statusCode).toBe(200);
     expect(presets.json().presets.map((preset: { id: string }) => preset.id)).toEqual([
-      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map", "affection",
+      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map", "affection", "game-settings",
     ]);
 
     const created = await app.inject({
@@ -2216,6 +2240,32 @@ describe("Playable Nodes projects", () => {
       method: "GET",
       url: `/projects/${project.id}/playable/codebase`,
     })).json()).toEqual(persistedCodebase);
+  });
+
+  it("reports a saved Playable codebase as successful when project metadata cannot be touched", async () => {
+    const app = await createPlayableApp("ohmygame-codebase-metadata-");
+    const project = (await app.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { name: "Story", type: "interactive-story" },
+    })).json();
+    await addStartScene(app, project.id);
+    const url = `/projects/${project.id}/playable/codebase`;
+    const codebase = (await app.inject({ method: "GET", url })).json();
+    codebase.sources = {
+      "nodes/start/node.js": "export function mount(context) { context.root.innerHTML = 'Deleted'; }\n",
+    };
+    const metadataPath = path.join(path.dirname(project.workspacePath), "project.json");
+    await rm(metadataPath);
+    await mkdir(metadataPath);
+
+    const updated = await app.inject({ method: "PUT", url, payload: codebase });
+    const persisted = await app.inject({ method: "GET", url });
+
+    expect(updated.statusCode).toBe(200);
+    expect(persisted.statusCode).toBe(200);
+    expect(await readFile(path.join(project.workspacePath, "nodes/start/node.js"), "utf8"))
+      .toBe(codebase.sources["nodes/start/node.js"]);
   });
 
   it("refuses a Playable codebase update made from an older revision", async () => {

@@ -64,7 +64,7 @@ async function preparePlugins(destination: string, expectedLockSha256: string): 
       } satisfies ResolvedPluginManifest;
       await inspectPluginBundle(source, {
         idPrefix: "ohmygame:",
-        marketplace: { id: "ohmygame", displayName: "OhMyGame" },
+        marketplace: { id: "ohmygame", displayName: "puteng game" },
         source: { type: "preinstalled", pluginId: entry.pluginId, releaseId: entry.releaseId },
       }, manifest);
       const archive = await createPluginArchive(source);

@@ -4,7 +4,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 // The referer is the app's permanent identity in OpenRouter rankings; do not change it.
 export const OPENROUTER_ATTRIBUTION_HEADERS: Readonly<Record<string, string>> = {
   "HTTP-Referer": "https://ohmygame.ai/",
-  "X-OpenRouter-Title": "OhMyGame",
+  "X-OpenRouter-Title": "puteng game",
   "X-OpenRouter-Categories": "game,native-app-builder",
 };
 
@@ -27,14 +27,14 @@ export function isOpenRouterModel(model: { provider?: string; baseUrl?: string }
   }
 }
 
-/** Adds OhMyGame attribution; headers the user configured keep precedence. */
+/** Adds puteng game attribution; headers the user configured keep precedence. */
 export function withOpenRouterAttribution(headers: Record<string, string>): Record<string, string> {
   const result = { ...headers };
   applyAttribution(result);
   return result;
 }
 
-/** Pi extension that attributes agent-session OpenRouter traffic to OhMyGame. */
+/** Pi extension that attributes agent-session OpenRouter traffic to puteng game. */
 export const openRouterAttributionExtension: ExtensionFactory = (pi) => {
   pi.on("before_provider_headers", (event, ctx) => {
     if (isOpenRouterModel(ctx.model)) applyAttribution(event.headers);

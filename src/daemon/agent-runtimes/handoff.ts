@@ -63,7 +63,7 @@ export function handoffSummary(
   );
   return [
     "<conversation-handoff>",
-    "This conversation began with another agent in OhMyGame. You are continuing it. Here is what was said so far; the workspace files show what was built. Do not redo finished work.",
+    "This conversation began with another agent in puteng game. You are continuing it. Here is what was said so far; the workspace files show what was built. Do not redo finished work.",
     ...(omitted > 0
       ? [`(${omitted} earlier turn${omitted === 1 ? "" : "s"} omitted)`]
       : []),
@@ -100,7 +100,7 @@ function userText(content: unknown): string {
             )
             .join("\n")
         : "";
-  // Private context OhMyGame attaches to a message is for the turn it was sent with.
+  // Private context puteng game attaches to a message is for the turn it was sent with.
   return text
     .replace(
       /<(workspace-file-references|local-attachments|editor-context)>[\s\S]*?<\/\1>/g,

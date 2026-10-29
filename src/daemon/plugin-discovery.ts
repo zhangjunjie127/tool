@@ -257,7 +257,7 @@ function rebasePaths(repositoryRoot: string, pluginRoot: string, value: Resolved
 
 async function readOhMyGameManifest(manifestPath: string): Promise<PluginManifest> {
   const value = await readJson(manifestPath);
-  if (!isPluginManifest(value)) throw new LocalPluginError("OhMyGame Plugin manifest is invalid");
+  if (!isPluginManifest(value)) throw new LocalPluginError("puteng game Plugin manifest is invalid");
   return value;
 }
 

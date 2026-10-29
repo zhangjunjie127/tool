@@ -25,7 +25,12 @@ vi.doMock(path.resolve("src/renderer/editor-canvas.tsx"), async original => ({
 }));
 vi.doMock(path.resolve("src/renderer/api.ts"), async original => ({
   ...(await original<typeof import("../src/renderer/api.js")>()),
+  getNodeRuntime: async () => ({
+    available: true,
+    definition: structuredClone(currentDefinition),
+  }),
   getNodeCodebase: async () => ({ ...structuredClone(codebase), revision: "disk" }),
+  getPlayableBackdropEffects: async () => ({ vignette: true, grain: true }),
   listPlayablePresets: async () => ({ presets: [] }),
   listPlayableThumbnails: async () => structuredClone(manifest),
   getPlayableValidation: async () => ({ issues: [], definition: structuredClone(currentDefinition) }),

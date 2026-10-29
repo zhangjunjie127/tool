@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.webp" alt="OhMyGame — the open-source studio for making games with AI" width="100%" />
+<img src="docs/assets/banner-puteng.webp" alt="puteng game — the open-source studio for making games with AI" width="100%" />
 
 **Your own one-person game studio.** Everything you need to make games with AI, in one app. Bring your own key.
 
@@ -25,13 +25,13 @@ https://github.com/user-attachments/assets/4d5805fe-92a2-40b4-a232-c7452f9a796a
 </div>
 
 > [!NOTE]
-> 🚧 OhMyGame is in beta. Expect rough edges. Join us and let's build it together!
+> 🚧 puteng game is in beta. Expect rough edges. Join us and let's build it together!
 
 ## What it is
 
 Making a game takes design docs, 2D art, 3D models, video, code, and somewhere
 to put it when it's done. Today those live in five or six different tools.
-OhMyGame puts them in one app: describe your game, and the agent designs it,
+puteng game puts them in one app: describe your game, and the agent designs it,
 makes the assets, builds it, plays it to check it works, and publishes it to a
 link you can share.
 
@@ -81,19 +81,19 @@ https://github.com/user-attachments/assets/5a35964d-87b3-4153-8b1b-fc6deced5bb3
 
 ### 🔗 Publish: one link, playable anywhere
 
-Sign in and publish: OhMyGame builds your game and gives it a link anyone can
+Sign in and publish: puteng game builds your game and gives it a link anyone can
 play in the browser. Republishing updates the same link. Published games are
 listed in the in-app Community, where you can play what others have made.
 
 ## What you can make
 
-Three games our team made with OhMyGame:
+Three games our team made with puteng game:
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/showcase/interactive-film.webp" alt="Interactive film made with OhMyGame: a monkey warrior dodges a sword strike" width="100%" /></td>
-    <td width="33%"><img src="docs/assets/showcase/island-builder.webp" alt="Island builder made with OhMyGame: building a workshop on a floating dock" width="100%" /></td>
-    <td width="33%"><img src="docs/assets/showcase/deckbuilding-roguelike.webp" alt="Deckbuilding roguelike made with OhMyGame: playing cards in a gothic battle" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/interactive-film.webp" alt="Interactive film made with puteng game: a monkey warrior dodges a sword strike" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/island-builder.webp" alt="Island builder made with puteng game: building a workshop on a floating dock" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/deckbuilding-roguelike.webp" alt="Deckbuilding roguelike made with puteng game: playing cards in a gothic battle" width="100%" /></td>
   </tr>
   <tr>
     <td align="center">Interactive film</td>
@@ -120,7 +120,7 @@ saves, and navigation. The architecture and authoring model are documented in
 [Playable Nodes](docs/playable-nodes/README.md).
 
 <!-- TODO(asset): screenshot or GIF, Node Graph with two finished screens,
-made with OhMyGame. Leave out until there is a real one. -->
+made with puteng game. Leave out until there is a real one. -->
 
 ### 🎲 General games: any engine or stack
 
@@ -138,7 +138,7 @@ game? Choose Web Game**: it is tuned for the browser.
 
 The idea that holds this together: one agent drives every part of the studio.
 
-**1 · A full Pi agent with a GUI.** OhMyGame runs
+**1 · A full Pi agent with a GUI.** puteng game runs
 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with its
 full toolset and persistent sessions, in a GUI built for watching results
 rather than reading diffs. Close the app, come back, and the project,
@@ -158,7 +158,7 @@ and play the result in one conversation.
 
 ## Any model, your keys
 
-OhMyGame does not lock you into one model or charge per run.
+puteng game does not lock you into one model or charge per run.
 
 - **Coding models from 40+ providers** through Pi, including Anthropic,
   OpenAI, Google, DeepSeek, Qwen, Kimi, GLM, MiniMax, xAI, Mistral, Groq,
@@ -167,7 +167,7 @@ OhMyGame does not lock you into one model or charge per run.
   GitHub Copilot, or paste an API key.
   <!-- TODO(legal): check each provider's terms before naming more subscriptions -->
 - **Coding agents you already use**: Claude Code, Codex, and OpenCode run a
-  conversation with their own sign-in, while OhMyGame keeps its history, Undo,
+  conversation with their own sign-in, while puteng game keeps its history, Undo,
   canvas, media tools, and plugins. Enable them in Settings; native CLI
   permission limits apply. See [coding agents](docs/coding-agents.md).
 - **Media models** for images, video, and 3D through OpenAI, OpenRouter,
@@ -195,8 +195,8 @@ not code-signed yet, so Windows may show a SmartScreen warning during install.
 
 ![First-run welcome and provider connection screens](docs/assets/first-run-onboarding.png)
 
-OhMyGame ships without a model. On first launch, a small game world forms and
-transforms into the OhMyGame logo. The wordmark, **Your own game studio.**, and
+puteng game ships without a model. On first launch, a small game world forms and
+transforms into the puteng game logo. The wordmark, **Your own game studio.**, and
 **Next** appear in sequence over about five seconds.
 Click **Next** to connect a model before your first prompt:
 
@@ -258,7 +258,7 @@ contract and offline migration instructions.
 ## Privacy
 
 Your projects and keys stay on your machine. Prompts and generation requests go
-directly to the model providers you choose. Publishing requires an OhMyGame
+directly to the model providers you choose. Publishing requires a puteng game
 account and uploads only your game's static build. Release builds check for
 updates and send anonymous usage events (PostHog, no session recording) and
 crash reports (Sentry, no personal data). Builds from source send no telemetry.
@@ -293,5 +293,5 @@ Report security issues using [SECURITY.md](SECURITY.md).
 
 ## License
 
-[Apache-2.0](LICENSE). The OhMyGame name and logo are not covered by the
+[Apache-2.0](LICENSE). The puteng game name and logo are not covered by the
 license.

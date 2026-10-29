@@ -214,6 +214,7 @@ export function LibraryAssetPicker({
   sourceFolders,
   onChooseSourceFolder,
   onClearSourceFolder,
+  onRefreshSourceFolders,
   onUpload,
   onClose,
   onSelect,
@@ -236,6 +237,7 @@ export function LibraryAssetPicker({
   sourceFolders?: LibrarySourceFolders;
   onChooseSourceFolder?: (category: LibrarySourceFolderCategory) => void;
   onClearSourceFolder?: (category: LibrarySourceFolderCategory) => void;
+  onRefreshSourceFolders?: () => Promise<void>;
   onClose: () => void;
   onSelect: (asset: LibraryAsset) => void;
   onRemoveFromSession?: (asset: LibraryAsset) => void;
@@ -307,6 +309,7 @@ export function LibraryAssetPicker({
               folders={sourceFolders}
               onChoose={onChooseSourceFolder}
               onClear={onClearSourceFolder}
+              onRefresh={onRefreshSourceFolders}
             />
           ) : null}
           {onUpload ? (

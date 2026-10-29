@@ -10,8 +10,189 @@ import {
   isPlayableFrameMessage,
   isPlayableHostMessage,
 } from "../src/shared/playable-player-protocol.js";
+import { DEFAULT_PLAYABLE_GAME_SETTINGS } from "../src/shared/playable-settings.js";
 
 describe("Playable sandbox", () => {
+  it("validates editor keyboard shortcut messages from the preview frame", () => {
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:keyboard-shortcut",
+        instanceId: "instance",
+        shortcut: "toggle-playback",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:keyboard-shortcut",
+        instanceId: "instance",
+        shortcut: "launch",
+      }),
+    ).toBe(false);
+  });
+
+  it("validates per-Scene Asset loading messages", () => {
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:assets-request",
+        instanceId: "instance",
+        requestId: "request",
+        assetIds: ["background"],
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:assets-request",
+        instanceId: "instance",
+        requestId: "request",
+        assetIds: [""],
+      }),
+    ).toBe(false);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:assets-result",
+        instanceId: "instance",
+        requestId: "request",
+        assets: { background: { contentType: "image/webp", blob: new Blob() } },
+      }),
+    ).toBe(true);
+  });
+
+  it("validates separate player-settings persistence messages", () => {
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:settings-save",
+        instanceId: "instance",
+        requestId: "request",
+        settings: structuredClone(DEFAULT_PLAYABLE_GAME_SETTINGS),
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:settings-change",
+        instanceId: "instance",
+        settings: {
+          ...DEFAULT_PLAYABLE_GAME_SETTINGS,
+          videoVolume: 2,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:settings-save-result",
+        instanceId: "instance",
+        requestId: "request",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:settings-command",
+        instanceId: "instance",
+        action: "patch",
+        settings: structuredClone(DEFAULT_PLAYABLE_GAME_SETTINGS),
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:settings-command",
+        instanceId: "instance",
+        action: "patch",
+        settings: {
+          ...DEFAULT_PLAYABLE_GAME_SETTINGS,
+          brightness: 999,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:settings-command",
+        instanceId: "instance",
+        action: "pause",
+      }),
+    ).toBe(true);
+  });
+
+  it("validates the VR scene inspection and activation messages", () => {
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-inspect",
+        instanceId: "instance",
+        requestId: "request",
+        nodeId: "start",
+        viewport: { width: 1920, height: 1080 },
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-inspect",
+        instanceId: "instance",
+        requestId: "request",
+        nodeId: "start",
+        viewport: { width: 0, height: 1080 },
+      }),
+    ).toBe(false);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-activate",
+        instanceId: "instance",
+        nodeId: "start",
+        buttonId: "vr-button-1",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-activate",
+        instanceId: "instance",
+        nodeId: "start",
+        buttonId: "x".repeat(129),
+      }),
+    ).toBe(false);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-press",
+        instanceId: "instance",
+        nodeId: "start",
+        buttonId: "charge-button",
+        phase: "start",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:vr-press",
+        instanceId: "instance",
+        nodeId: "start",
+        buttonId: "charge-button",
+        phase: "click",
+      }),
+    ).toBe(false);
+  });
+
+  it("validates stereo VR scene button coordinates and appearance", () => {
+    const message = {
+      kind: "putenggame:playable:vr-scene",
+      instanceId: "instance",
+      requestId: "request",
+      nodeId: "start",
+      buttons: [{
+        id: "vr-button-1",
+        label: "开始",
+        x: 0.25,
+        y: 0.5,
+        width: 0.2,
+        height: 0.1,
+        color: "#fff",
+        backgroundColor: "#222",
+        holdToCharge: true,
+      }],
+    };
+    expect(isPlayableFrameMessage(message)).toBe(true);
+    expect(
+      isPlayableFrameMessage({
+        ...message,
+        buttons: [{ ...message.buttons[0], x: 1.1 }],
+      }),
+    ).toBe(false);
+  });
+
   it("keeps renderer and published sandbox documents on the Runtime CSP", async () => {
     for (const file of [
       "playable-sandbox.html",
@@ -162,6 +343,8 @@ describe("Playable sandbox", () => {
           scale: 150,
           offsetX: 24,
           offsetY: -12,
+          circular: true,
+          barLayer: "bottom",
           asset: {
             contentType: "image/png",
             bytes: new ArrayBuffer(4),
@@ -179,6 +362,7 @@ describe("Playable sandbox", () => {
         source: "nodes/choice/index.html:2:1",
         scale: 150,
         offsetX: 101,
+        barLayer: "behind",
         asset: {
           contentType: "image/png",
           bytes: new ArrayBuffer(4),
@@ -467,6 +651,18 @@ describe("Playable sandbox", () => {
           motion: {
             ...message.command.motion,
             feedback: "bounce-hover-press",
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        ...message,
+        command: {
+          ...message.command,
+          motion: {
+            ...message.command.motion,
+            feedback: "idle-pulse-hover-press",
           },
         },
       }),

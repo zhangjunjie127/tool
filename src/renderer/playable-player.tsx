@@ -5,9 +5,9 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
-  PlayableAssetTransfer,
   PlayableAppearanceTimingCommand,
   PlayableDeleteEdit,
   PlayableElementClipboardCommand,
@@ -17,9 +17,12 @@ import type {
   PlayableMediaCommand,
   PlayableMediaState,
   PlayableMotionCommand,
+  PlayableRuntimeAsset,
   PlayableTextStyleCommand,
+  PlayableVrButton,
   PlayableMove,
   PlayablePreviewOptions,
+  PlayablePreviewShortcut,
   PlayablePreviewTool,
   PlayableTextCreate,
   PlayableTextEdit,
@@ -34,8 +37,20 @@ import type { PlayablePickResult } from "../shared/playable-picker.js";
 import type { NodeRuntimeSnapshot } from "../shared/playable-runtime.js";
 import { playableRuntimeKey } from "../shared/playable-editor.js";
 import { PLAYABLE_IFRAME_SANDBOX } from "../shared/playable-sandbox.js";
+import {
+  DEFAULT_PLAYABLE_GAME_SETTINGS,
+  normalizePlayableGameSettings,
+  type PlayableGameSettings,
+} from "../shared/playable-settings.js";
+import {
+  normalizePlayableSettingsButtonPosition,
+  PLAYABLE_SETTINGS_BUTTON_SIZE,
+} from "../shared/playable-settings-button.js";
 import { readLanguage, translateText } from "./i18n.js";
 import "./playable-player.css";
+import { PlayableVrViewer } from "./playable-vr-viewer.js";
+import { PlayableGameSettingsOverlay } from "./playable-game-settings-overlay.js";
+import { Pause, Play, Settings as SettingsIcon } from "./icons.js";
 
 export interface NodePlayerProps {
   definition: NodePlayerDefinition;
@@ -44,6 +59,8 @@ export interface NodePlayerProps {
   title?: string;
   frameUrl?: string;
   storage?: Storage;
+  /** Player preferences use a slot separate from story progress. */
+  settingsKey?: string;
   /**
    * Where what the player has seen is kept, for the Story Map. It outlasts
    * the save: by default `${saveKey}:seen` in localStorage, even when saves
@@ -51,10 +68,23 @@ export interface NodePlayerProps {
    */
   seenKey?: string;
   seenStorage?: Storage;
+  /** Resolves only the Assets needed by a destination Scene. */
+  onLoadAssets?: (assetIds: readonly string[]) => Promise<Record<string, Blob>>;
   /** Authoring preview options; omit in the Published Player. */
   preview?: PlayablePreviewOptions;
+  /** Shows playback controls in the exported player. */
+  showPlaybackControls?: boolean;
+  /** Shows the player-owned settings menu; editor-only previews opt out. */
+  showGameSettings?: boolean;
+  /** Highlights the settings entry while it is selected in the editor. */
+  settingsButtonSelected?: boolean;
+  /** Lets the editor drag the game-wide settings entry without restarting playback. */
+  onSettingsButtonPositionChange?: (position: { x: number; y: number }) => Promise<boolean>;
+  onSelectSettingsButton?: () => void;
   /** Hands the preview's input to an authoring tool; requires `preview`. */
   tool?: PlayablePreviewTool;
+  /** Forwards keyboard shortcuts pressed while the preview iframe has focus. */
+  onPreviewShortcut?: (shortcut: PlayablePreviewShortcut) => void;
   /** `additive` asks to add the element to the selection instead of replacing it. */
   onPick?: (pick: PlayablePickResult, additive: boolean) => void;
   onTextEdit?: (edit: PlayableTextEdit) => void;
@@ -76,6 +106,12 @@ export interface NodePlayerProps {
   onElementClipboardCommandApplied?: (sequence: number) => void;
   onMediaState?: (state: PlayableMediaState) => void;
   onActivity?: () => void;
+  lockedPicks?: readonly PlayablePickResult[];
+  alignCommand?: {
+    sequence: number;
+    reference: PlayablePickResult;
+    targets: readonly PlayablePickResult[];
+  };
   /** Keeps the authoring preview's media position across source updates. */
   preserveMediaState?: PlayableMediaState;
   backdropEffects?: PlayableBackdropEffects;
@@ -103,10 +139,18 @@ export function NodePlayer({
   title = definition.graph.title,
   frameUrl = "./playable-sandbox.html",
   storage = window.localStorage,
+  settingsKey = `${saveKey}:settings`,
   seenKey = `${saveKey}:seen`,
   seenStorage = window.localStorage,
+  onLoadAssets,
   preview,
+  showPlaybackControls = false,
+  showGameSettings = true,
+  settingsButtonSelected = false,
+  onSettingsButtonPositionChange,
+  onSelectSettingsButton,
   tool,
+  onPreviewShortcut,
   onPick,
   onTextEdit,
   onTextCreate,
@@ -122,6 +166,8 @@ export function NodePlayer({
   onElementClipboardCommandApplied,
   onMediaState,
   onActivity,
+  lockedPicks = [],
+  alignCommand,
   preserveMediaState,
   backdropEffects,
   deleteCommand,
@@ -137,6 +183,7 @@ export function NodePlayer({
 }: NodePlayerProps) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const player = useRef<HTMLElement>(null);
+  const playerStage = useRef<HTMLDivElement>(null);
   const frameLoaded = useRef(false);
   const restoreMediaState = useRef<
     { instanceId: string; state: PlayableMediaState } | undefined
@@ -144,7 +191,26 @@ export function NodePlayer({
   const appliedAppearanceTimingSequence = useRef<number | undefined>(undefined);
   const appliedMotionSequence = useRef<number | undefined>(undefined);
   const appliedTextStyleSequence = useRef<number | undefined>(undefined);
+  const appliedMotionProgressPreviewKey = useRef<string | undefined>(
+    undefined,
+  );
   const [scale, setScale] = useState<number>();
+  const [resolution, setResolution] =
+    useState<PlayableGameSettings["resolution"]>("auto");
+  const [displayModeValue, setDisplayModeValue] =
+    useState<PlayableGameSettings["displayMode"]>("fullscreen");
+  const [gameSettings, setGameSettings] = useState<PlayableGameSettings>(() =>
+    normalizePlayableGameSettings(
+      readStoredJson(storage, settingsKey) ?? DEFAULT_PLAYABLE_GAME_SETTINGS,
+    ),
+  );
+  const gameSettingsRef = useRef(gameSettings);
+  const savedGameSettingsRef = useRef(gameSettings);
+  const closeSettingsAfterSave = useRef(false);
+  const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
+  const [gameSettingsSaveStatus, setGameSettingsSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   // Keyed on content so callers need not memoize the preview object.
   const previewKey = JSON.stringify(preview ?? null);
   // Parent selection state may recreate the definition object without changing
@@ -160,7 +226,280 @@ export function NodePlayer({
   const [error, setError] = useState<string>();
   const [ready, setReady] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number }>();
+  const [currentNodeId, setCurrentNodeId] = useState(
+    preview?.startNodeId ?? definition.graph.entryNodeId,
+  );
+  const [mediaState, setMediaState] = useState<PlayableMediaState>({
+    currentTime: 0,
+    duration: 0,
+    paused: true,
+  });
+  const [playbackControlsVisible, setPlaybackControlsVisible] = useState(true);
+  const playbackControlsTimer = useRef<number | undefined>(undefined);
+  const [vrButtons, setVrButtons] = useState<PlayableVrButton[]>([]);
+  const vrRequestId = useRef("");
   const clipboardSequence = useRef(0);
+  const previousDisplayMode = useRef<PlayableGameSettings["displayMode"]>("fullscreen");
+  const settingsButtonConfig = definition.graph.settingsButton;
+  const settingsButtonPositionFromGraph = normalizePlayableSettingsButtonPosition(
+    settingsButtonConfig,
+    definition.graph.viewport,
+  );
+  const [settingsButtonPosition, setSettingsButtonPosition] = useState(
+    settingsButtonPositionFromGraph,
+  );
+  const settingsButtonPositionRef = useRef(settingsButtonPosition);
+  const settingsButtonDrag = useRef<
+    | {
+        pointerId: number;
+        startX: number;
+        startY: number;
+        offsetX: number;
+        offsetY: number;
+        moved: boolean;
+      }
+    | undefined
+  >(undefined);
+  const settingsButtonAssetId = settingsButtonConfig?.iconAssetId;
+  const providedSettingsButtonIcon = settingsButtonAssetId
+    ? assets[settingsButtonAssetId]
+    : undefined;
+  const [settingsButtonIcon, setSettingsButtonIcon] = useState<Blob>();
+  const [settingsButtonIconUrl, setSettingsButtonIconUrl] = useState<string>();
+
+  settingsButtonPositionRef.current = settingsButtonPosition;
+
+  useEffect(() => {
+    setSettingsButtonPosition(settingsButtonPositionFromGraph);
+    settingsButtonPositionRef.current = settingsButtonPositionFromGraph;
+  }, [
+    settingsButtonConfig?.x,
+    settingsButtonConfig?.y,
+    definition.graph.viewport.width,
+    definition.graph.viewport.height,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    if (!settingsButtonAssetId) {
+      setSettingsButtonIcon(undefined);
+      return () => {
+        active = false;
+      };
+    }
+    if (providedSettingsButtonIcon) {
+      setSettingsButtonIcon(providedSettingsButtonIcon);
+      return () => {
+        active = false;
+      };
+    }
+    setSettingsButtonIcon(undefined);
+    if (!onLoadAssets) return;
+    void onLoadAssets([settingsButtonAssetId]).then(
+      (loaded) => {
+        if (active) setSettingsButtonIcon(loaded[settingsButtonAssetId]);
+      },
+      (cause) => {
+        if (active)
+          onDiagnostic(
+            `Could not load the settings button image: ${errorMessage(cause)}`,
+          );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [
+    settingsButtonAssetId,
+    providedSettingsButtonIcon,
+    onLoadAssets,
+    onDiagnostic,
+  ]);
+
+  useEffect(() => {
+    if (!settingsButtonIcon) {
+      setSettingsButtonIconUrl(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(settingsButtonIcon);
+    setSettingsButtonIconUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [settingsButtonIcon]);
+
+  const startSettingsButtonDrag = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const selectButton = tool === "select" && onSelectSettingsButton;
+    if (selectButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelectSettingsButton();
+    }
+    if (!onSettingsButtonPositionChange) return;
+    const stage = playerStage.current;
+    const stageBounds = stage?.getBoundingClientRect();
+    const buttonBounds = event.currentTarget.getBoundingClientRect();
+    if (!stage || !stageBounds || !stageBounds.width || !stageBounds.height)
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    settingsButtonDrag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: (event.clientX - buttonBounds.left - buttonBounds.width / 2) / stageBounds.width,
+      offsetY: (event.clientY - buttonBounds.top - buttonBounds.height / 2) / stageBounds.height,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveSettingsButton = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = settingsButtonDrag.current;
+    const stageBounds = playerStage.current?.getBoundingClientRect();
+    if (
+      !drag ||
+      drag.pointerId !== event.pointerId ||
+      !stageBounds ||
+      !stageBounds.width ||
+      !stageBounds.height
+    )
+      return;
+    const crossedDragThreshold =
+      !drag.moved &&
+      Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= 3;
+    if (crossedDragThreshold) {
+      drag.moved = true;
+    }
+    if (!drag.moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = normalizePlayableSettingsButtonPosition(
+      {
+        x:
+          (event.clientX - stageBounds.left) / stageBounds.width -
+          drag.offsetX,
+        y:
+          (event.clientY - stageBounds.top) / stageBounds.height -
+          drag.offsetY,
+      },
+      definition.graph.viewport,
+    );
+    settingsButtonPositionRef.current = next;
+    setSettingsButtonPosition(next);
+  };
+
+  const finishSettingsButtonDrag = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = settingsButtonDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    settingsButtonDrag.current = undefined;
+    if (!drag.moved) {
+      if (
+        event.type === "pointerup" &&
+        !(tool === "select" && onSelectSettingsButton)
+      )
+        activateSettingsButton();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const savePosition = onSettingsButtonPositionChange;
+    if (!savePosition) return;
+    void savePosition(settingsButtonPositionRef.current).catch((cause) => {
+      onDiagnostic(
+        `Could not save the settings button position: ${errorMessage(cause)}`,
+      );
+    });
+  };
+
+  const revealPlaybackControls = () => {
+    if (!showPlaybackControls) return;
+    setPlaybackControlsVisible(true);
+    if (playbackControlsTimer.current !== undefined)
+      window.clearTimeout(playbackControlsTimer.current);
+    playbackControlsTimer.current = mediaState.paused
+      ? undefined
+      : window.setTimeout(() => setPlaybackControlsVisible(false), 2500);
+  };
+
+  const sendSettingsAction = (
+    action: "save" | "reset" | "discard" | "pause" | "resume",
+  ) => {
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:settings-command",
+        instanceId,
+        action,
+      },
+      "*",
+    );
+  };
+
+  const patchGameSettings = (patch: Partial<PlayableGameSettings>) => {
+    const next = normalizePlayableGameSettings({
+      ...gameSettingsRef.current,
+      ...patch,
+    });
+    gameSettingsRef.current = next;
+    setGameSettings(next);
+    setGameSettingsSaveStatus("idle");
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:settings-command",
+        instanceId,
+        action: "patch",
+        settings: next,
+      },
+      "*",
+    );
+  };
+
+  const closeGameSettings = () => {
+    closeSettingsAfterSave.current = false;
+    setGameSettingsOpen(false);
+    sendSettingsAction("resume");
+  };
+
+  const openGameSettings = () => {
+    setGameSettingsSaveStatus("idle");
+    setGameSettingsOpen(true);
+    sendSettingsAction("pause");
+  };
+
+  function activateSettingsButton() {
+    if (tool === "select" && onSelectSettingsButton) {
+      onSelectSettingsButton();
+      return;
+    }
+    openGameSettings();
+  }
+
+  useEffect(
+    () => () => {
+      if (playbackControlsTimer.current !== undefined)
+        window.clearTimeout(playbackControlsTimer.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (playbackControlsTimer.current !== undefined)
+      window.clearTimeout(playbackControlsTimer.current);
+    playbackControlsTimer.current = undefined;
+    if (!showPlaybackControls) return;
+    if (mediaState.paused) {
+      setPlaybackControlsVisible(true);
+    } else if (playbackControlsVisible) {
+      playbackControlsTimer.current = window.setTimeout(
+        () => setPlaybackControlsVisible(false),
+        2500,
+      );
+    }
+  }, [mediaState.paused, playbackControlsVisible, showPlaybackControls]);
 
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
@@ -171,6 +510,88 @@ export function NodePlayer({
       if (message.instanceId !== instanceId) return;
       if (message.kind === "putenggame:playable:save") {
         respondToSave(iframe.current, storage, saveKey, message);
+      } else if (message.kind === "putenggame:playable:settings-save") {
+        const saveError = respondToSettings(
+          iframe.current,
+          storage,
+          settingsKey,
+          message,
+        );
+        if (saveError) {
+          setGameSettingsSaveStatus("error");
+          closeSettingsAfterSave.current = false;
+        } else {
+          savedGameSettingsRef.current = message.settings;
+          setGameSettingsSaveStatus("saved");
+          if (closeSettingsAfterSave.current) {
+            closeSettingsAfterSave.current = false;
+            setGameSettingsOpen(false);
+            iframe.current?.contentWindow?.postMessage(
+              {
+                kind: "putenggame:playable:settings-command",
+                instanceId,
+                action: "resume",
+              },
+              "*",
+            );
+          }
+        }
+      } else if (message.kind === "putenggame:playable:settings-change") {
+        gameSettingsRef.current = message.settings;
+        setGameSettings(message.settings);
+        setGameSettingsSaveStatus((current) =>
+          current === "saving" ||
+          (current === "saved" &&
+            JSON.stringify(message.settings) ===
+              JSON.stringify(savedGameSettingsRef.current))
+            ? current
+            : "idle",
+        );
+        setResolution(message.settings.resolution);
+        setDisplayModeValue(message.settings.displayMode);
+        if (preview === undefined) {
+          const changedMode =
+            previousDisplayMode.current !== message.settings.displayMode;
+          applyPlayerDisplaySettings(
+            player.current,
+            message.settings,
+            changedMode,
+            onDiagnostic,
+          );
+          previousDisplayMode.current = message.settings.displayMode;
+        }
+      } else if (message.kind === "putenggame:playable:assets-request") {
+        void Promise.resolve(onLoadAssets?.(message.assetIds))
+          .then((loaded) => {
+            if (!loaded) throw new Error("Scene Assets could not be loaded.");
+            const assets: Record<string, PlayableRuntimeAsset> = {};
+            for (const [id, blob] of Object.entries(loaded))
+              assets[id] = {
+                contentType: blob.type || "application/octet-stream",
+                blob,
+              };
+            iframe.current?.contentWindow?.postMessage(
+              {
+                kind: "putenggame:playable:assets-result",
+                instanceId,
+                requestId: message.requestId,
+                assets,
+              },
+              "*",
+            );
+          })
+          .catch((cause) =>
+            iframe.current?.contentWindow?.postMessage(
+              {
+                kind: "putenggame:playable:assets-result",
+                instanceId,
+                requestId: message.requestId,
+                assets: {},
+                error: errorMessage(cause),
+              },
+              "*",
+            ),
+          );
       } else if (message.kind === "putenggame:playable:seen") {
         try {
           seenStorage.setItem(seenKey, JSON.stringify(message.seen));
@@ -181,6 +602,7 @@ export function NodePlayer({
         }
       } else if (message.kind === "putenggame:playable:snapshot") {
         setReady(true);
+        setCurrentNodeId(message.snapshot.currentNodeId);
         onSnapshot?.(message.snapshot);
       } else if (message.kind === "putenggame:playable:error") {
         setError(message.error);
@@ -262,9 +684,16 @@ export function NodePlayer({
       } else if (message.kind === "putenggame:playable:history-command") {
         onHistoryCommand?.(message.command);
       } else if (message.kind === "putenggame:playable:media-state") {
+        setMediaState(message.state);
         onMediaState?.(message.state);
+      } else if (message.kind === "putenggame:playable:keyboard-shortcut") {
+        if (preview !== undefined) onPreviewShortcut?.(message.shortcut);
+      } else if (message.kind === "putenggame:playable:vr-scene") {
+        if (message.requestId === vrRequestId.current)
+          setVrButtons(message.buttons);
       } else if (message.kind === "putenggame:playable:activity") {
         onActivity?.();
+        revealPlaybackControls();
       } else if (message.kind === "putenggame:playable:pick-cancelled") {
         onPickCancel?.();
       } else {
@@ -275,6 +704,7 @@ export function NodePlayer({
     return () => window.removeEventListener("message", receive);
   }, [
     instanceId,
+    onLoadAssets,
     onDiagnostic,
     onPick,
     onTextEdit,
@@ -290,11 +720,38 @@ export function NodePlayer({
     onMediaState,
     onActivity,
     onPickCancel,
+    onPreviewShortcut,
     onSnapshot,
+    preview,
     saveKey,
+    settingsKey,
     storage,
     seenKey,
     seenStorage,
+    showPlaybackControls,
+    mediaState.paused,
+  ]);
+
+  useEffect(() => {
+    if (!ready || !frameLoaded.current || !currentNodeId) return;
+    const requestId = `vr-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    vrRequestId.current = requestId;
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:vr-inspect",
+        instanceId,
+        requestId,
+        nodeId: currentNodeId,
+        viewport: definition.graph.viewport,
+      },
+      "*",
+    );
+  }, [
+    currentNodeId,
+    definition.graph.viewport.height,
+    definition.graph.viewport.width,
+    instanceId,
+    ready,
   ]);
 
   useEffect(() => {
@@ -342,6 +799,33 @@ export function NodePlayer({
     );
   }, [instanceId, activeTool, ready]);
 
+  const lockedPicksKey = JSON.stringify(lockedPicks);
+  useEffect(() => {
+    if (!ready) return;
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:pick-locks",
+        instanceId,
+        picks: lockedPicks,
+      },
+      "*",
+    );
+  }, [activeTool, instanceId, lockedPicksKey, ready]);
+
+  const alignCommandKey = JSON.stringify(alignCommand ?? null);
+  useEffect(() => {
+    if (!ready || !alignCommand) return;
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:align-elements",
+        instanceId,
+        reference: alignCommand.reference,
+        targets: alignCommand.targets,
+      },
+      "*",
+    );
+  }, [alignCommandKey, instanceId, ready]);
+
   useEffect(() => {
     if (!ready || !elementClipboardCommand) return;
     iframe.current?.contentWindow?.postMessage(
@@ -366,6 +850,11 @@ export function NodePlayer({
   });
   useEffect(() => {
     if (!ready) return;
+    if (
+      mediaCommand?.command === "motion-progress-preview" &&
+      appliedMotionProgressPreviewKey.current === mediaCommandKey
+    )
+      return;
     const restore = restoreMediaState.current;
     if (restore?.instanceId === instanceId) {
       restoreMediaState.current = undefined;
@@ -421,6 +910,8 @@ export function NodePlayer({
         "*",
         bytes ? [bytes] : [],
       );
+      if (mediaCommand.command === "motion-progress-preview")
+        appliedMotionProgressPreviewKey.current = mediaCommandKey;
     }
   }, [instanceId, mediaCommandKey, ready]);
 
@@ -549,15 +1040,12 @@ export function NodePlayer({
     setError(undefined);
     setReady(false);
     try {
-      const transferredAssets: Record<string, PlayableAssetTransfer> = {};
-      const transfer: Transferable[] = [];
+      const transferredAssets: Record<string, PlayableRuntimeAsset> = {};
       for (const [id, blob] of Object.entries(assets)) {
-        const bytes = await blob.arrayBuffer();
         transferredAssets[id] = {
           contentType: blob.type || "application/octet-stream",
-          bytes,
+          blob,
         };
-        transfer.push(bytes);
       }
       let save: unknown;
       const saved = storage.getItem(saveKey);
@@ -568,6 +1056,27 @@ export function NodePlayer({
           storage.removeItem(saveKey);
         }
       }
+      const settings = readStoredJson(storage, settingsKey);
+      if (settings && typeof settings === "object" && "displayMode" in settings) {
+        const savedSettings = settings as Partial<PlayableGameSettings>;
+        previousDisplayMode.current =
+          savedSettings.displayMode === "windowed" ? "windowed" : "fullscreen";
+        const savedResolution = isPlayableResolution(savedSettings.resolution)
+          ? savedSettings.resolution
+          : "auto";
+        setResolution(savedResolution);
+        setDisplayModeValue(previousDisplayMode.current);
+        if (preview === undefined)
+          applyPlayerDisplaySettings(
+            player.current,
+            {
+              displayMode: previousDisplayMode.current,
+              resolution: savedResolution,
+            },
+            false,
+            onDiagnostic,
+          );
+      }
       target.postMessage(
         {
           kind: "putenggame:playable:init",
@@ -575,11 +1084,11 @@ export function NodePlayer({
           definition,
           assets: transferredAssets,
           save,
+          settings,
           seen: readSeen(seenStorage, seenKey),
           ...(preview ? { preview } : {}),
         },
         "*",
-        transfer,
       );
     } catch (cause) {
       setError(errorMessage(cause));
@@ -610,13 +1119,14 @@ export function NodePlayer({
         Math.min(
           container.clientWidth / width,
           container.clientHeight / height,
+          resolutionLimit(resolution, displayModeValue, width, height),
         ),
       );
     update();
     const observer = new ResizeObserver(update);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [width, height]);
+  }, [width, height, resolution, displayModeValue]);
 
   const stageStyle: CSSProperties =
     scale === undefined
@@ -631,10 +1141,114 @@ export function NodePlayer({
     <main
       ref={player}
       className="playable-player"
+      data-display-mode={displayModeValue}
+      data-resolution={resolution}
       tabIndex={-1}
       onClick={() => setContextMenu(undefined)}
+      onPointerMove={revealPlaybackControls}
+      onPointerDown={revealPlaybackControls}
     >
-      <div className="playable-player-stage" style={stageStyle}>
+      {gameSettingsOpen ? (
+        <PlayableGameSettingsOverlay
+          settings={gameSettings}
+          hasUnsavedChanges={
+            JSON.stringify(gameSettings) !==
+            JSON.stringify(savedGameSettingsRef.current)
+          }
+          saveStatus={gameSettingsSaveStatus}
+          onChange={patchGameSettings}
+          onSave={(closeAfterSave = false) => {
+            closeSettingsAfterSave.current = closeAfterSave;
+            setGameSettingsSaveStatus("saving");
+            sendSettingsAction("save");
+          }}
+          onReset={() => {
+            setGameSettingsSaveStatus("idle");
+            sendSettingsAction("reset");
+          }}
+          onDiscard={() => {
+            sendSettingsAction("discard");
+            closeGameSettings();
+          }}
+          onClose={closeGameSettings}
+        />
+      ) : null}
+      <PlayableVrViewer
+        video={
+          mediaState.backdropAssetId
+            ? assets[mediaState.backdropAssetId]
+            : undefined
+        }
+        currentTime={mediaState.currentTime}
+        buttons={vrButtons}
+        viewport={definition.graph.viewport}
+        onActivate={(buttonId) =>
+          iframe.current?.contentWindow?.postMessage(
+            {
+              kind: "putenggame:playable:vr-activate",
+              instanceId,
+              nodeId: currentNodeId,
+              buttonId,
+            },
+            "*",
+          )
+        }
+        onPress={(buttonId, phase) =>
+          iframe.current?.contentWindow?.postMessage(
+            {
+              kind: "putenggame:playable:vr-press",
+              instanceId,
+              nodeId: currentNodeId,
+              buttonId,
+              phase,
+            },
+            "*",
+          )
+        }
+      />
+      <div ref={playerStage} className="playable-player-stage" style={stageStyle}>
+        {showGameSettings && ready ? (
+          <button
+            className={`playable-player-settings-trigger${onSettingsButtonPositionChange ? " is-editable" : ""}${settingsButtonSelected && tool === "select" ? " is-selected" : ""}`}
+            type="button"
+            aria-label={translateText(
+              tool === "select" && onSelectSettingsButton
+                ? "Select game settings button"
+                : "Open game settings",
+              readLanguage(),
+            )}
+            aria-pressed={settingsButtonSelected && tool === "select"}
+            title={
+              tool === "select" && onSelectSettingsButton
+                ? translateText("Select the settings button or drag to move it", readLanguage())
+                : onSettingsButtonPositionChange
+                  ? translateText("Drag to move the settings button", readLanguage())
+                  : translateText("Open game settings", readLanguage())
+            }
+            onPointerDown={startSettingsButtonDrag}
+            onPointerMove={moveSettingsButton}
+            onPointerUp={finishSettingsButtonDrag}
+            onPointerCancel={finishSettingsButtonDrag}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (tool === "select" && onSelectSettingsButton) return;
+              if (onSettingsButtonPositionChange && event.detail !== 0) return;
+              if (!settingsButtonDrag.current) activateSettingsButton();
+            }}
+            style={{
+              left: `${settingsButtonPosition.x * 100}%`,
+              top: `${settingsButtonPosition.y * 100}%`,
+              width: PLAYABLE_SETTINGS_BUTTON_SIZE * (scale ?? 1),
+              height: PLAYABLE_SETTINGS_BUTTON_SIZE * (scale ?? 1),
+            }}
+          >
+            {settingsButtonIconUrl ? (
+              <img src={settingsButtonIconUrl} alt="" draggable={false} />
+            ) : (
+              <SettingsIcon size={19 * (scale ?? 1)} />
+            )}
+          </button>
+        ) : null}
         <div className="playable-player-canvas" style={canvasStyle}>
           <iframe
             ref={iframe}
@@ -699,8 +1313,75 @@ export function NodePlayer({
           </div>
         ) : null}
       </div>
+      {showPlaybackControls && mediaState.duration > 0 ? (
+        <div
+          className={`published-player-controls${playbackControlsVisible ? " is-visible" : ""}`}
+          role="group"
+          aria-label={translateText("Published video timeline", readLanguage())}
+          onPointerMove={revealPlaybackControls}
+          onPointerDown={revealPlaybackControls}
+        >
+          <button
+            type="button"
+            aria-label={translateText(
+              mediaState.paused
+                ? "Play video"
+                : "Pause video",
+              readLanguage(),
+            )}
+            title={translateText(
+              mediaState.paused
+                ? "Play video"
+                : "Pause video",
+              readLanguage(),
+            )}
+            onClick={() =>
+              iframe.current?.contentWindow?.postMessage(
+                {
+                  kind: "putenggame:playable:media-command",
+                  instanceId,
+                  command: { command: mediaState.paused ? "play" : "pause" },
+                },
+                "*",
+              )
+            }
+          >
+            {mediaState.paused ? <Play size={18} /> : <Pause size={18} />}
+          </button>
+          <time>{formatPlayerTime(mediaState.currentTime)}</time>
+          <input
+            type="range"
+            min="0"
+            max={mediaState.duration}
+            step="0.01"
+            value={Math.min(
+              Math.max(0, mediaState.currentTime),
+              mediaState.duration,
+            )}
+            aria-label={translateText("Video progress", readLanguage())}
+            onChange={(event) =>
+              iframe.current?.contentWindow?.postMessage(
+                {
+                  kind: "putenggame:playable:media-command",
+                  instanceId,
+                  command: { command: "seek", time: Number(event.target.value) },
+                },
+                "*",
+              )
+            }
+          />
+          <time>{formatPlayerTime(mediaState.duration)}</time>
+        </div>
+      ) : null}
     </main>
   );
+}
+
+function formatPlayerTime(value: number): string {
+  const total = Math.max(0, Math.floor(value));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function respondToSave(
@@ -724,6 +1405,101 @@ function respondToSave(
     },
     "*",
   );
+}
+
+function respondToSettings(
+  iframe: HTMLIFrameElement | null,
+  storage: Storage,
+  settingsKey: string,
+  message: Extract<
+    PlayableFrameMessage,
+    { kind: "putenggame:playable:settings-save" }
+  >,
+): string | undefined {
+  let error: string | undefined;
+  try {
+    storage.setItem(settingsKey, JSON.stringify(message.settings));
+  } catch (cause) {
+    error = errorMessage(cause);
+  }
+  iframe?.contentWindow?.postMessage(
+    {
+      kind: "putenggame:playable:settings-save-result",
+      instanceId: message.instanceId,
+      requestId: message.requestId,
+      error,
+    },
+    "*",
+  );
+  return error;
+}
+
+function applyPlayerDisplaySettings(
+  player: HTMLElement | null,
+  settings: Pick<PlayableGameSettings, "displayMode" | "resolution">,
+  changedMode: boolean,
+  onDiagnostic: (error: string) => void,
+): void {
+  if (!player) return;
+  player.dataset.displayMode = settings.displayMode;
+  player.dataset.resolution = settings.resolution;
+  if (!changedMode) return;
+  if (settings.displayMode === "fullscreen") {
+    void player.requestFullscreen?.().catch((cause) =>
+      onDiagnostic(`Could not enter fullscreen: ${errorMessage(cause)}`),
+    );
+  } else if (document.fullscreenElement === player) {
+    void document.exitFullscreen().catch((cause) =>
+      onDiagnostic(`Could not leave fullscreen: ${errorMessage(cause)}`),
+    );
+  }
+}
+
+function resolutionLimit(
+  resolution: PlayableGameSettings["resolution"],
+  displayMode: PlayableGameSettings["displayMode"],
+  width: number,
+  height: number,
+): number {
+  const limits: Record<
+    Exclude<PlayableGameSettings["resolution"], "auto">,
+    { width: number; height: number }
+  > = {
+    "1280x720": { width: 1280, height: 720 },
+    "1920x1080": { width: 1920, height: 1080 },
+    "2560x1440": { width: 2560, height: 1440 },
+  };
+  const limit =
+    resolution === "auto"
+      ? displayMode === "windowed"
+        ? { width: 1280, height: 720 }
+        : undefined
+      : limits[resolution];
+  return limit
+    ? Math.min(limit.width / width, limit.height / height)
+    : Number.POSITIVE_INFINITY;
+}
+
+function isPlayableResolution(
+  value: unknown,
+): value is PlayableGameSettings["resolution"] {
+  return (
+    value === "auto" ||
+    value === "1280x720" ||
+    value === "1920x1080" ||
+    value === "2560x1440"
+  );
+}
+
+function readStoredJson(storage: Storage, key: string): unknown {
+  const stored = storage.getItem(key);
+  if (stored === null) return undefined;
+  try {
+    return JSON.parse(stored) as unknown;
+  } catch {
+    storage.removeItem(key);
+    return undefined;
+  }
 }
 
 /** What the player has seen; a record that cannot be read starts over. */

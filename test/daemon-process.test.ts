@@ -179,7 +179,7 @@ describe("desktop daemon process", () => {
     await daemon.stop();
   });
 
-  it("passes the OhMyGame Pi agent directory to the daemon", async () => {
+  it("passes the puteng game Pi agent directory to the daemon", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "ohmygame-pi-agent-"));
     const piAgentDirectory = path.join(directory, "pi-agent");
     const piAgentFile = path.join(directory, "pi-agent-path");

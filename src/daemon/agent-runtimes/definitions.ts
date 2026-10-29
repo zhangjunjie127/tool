@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentRuntimeId } from "../../shared/agent-runtimes.js";
 
 /**
- * What OhMyGame knows about a coding agent CLI before running it: how to find
+ * What puteng game knows about a coding agent CLI before running it: how to find
  * it, read its version and sign it in. Everything about how a session talks
  * to it lives in its protocol adapter. A new CLI starts as one entry here
  * and an adapter; nothing in the Provider, media, canvas or plugin code
@@ -22,7 +22,7 @@ export interface AgentRuntimeDefinition {
   versionArgs: readonly string[];
   /** The oldest version whose protocol the adapter speaks. */
   minimumVersion: string;
-  /** What to run in a terminal to sign in, when OhMyGame cannot start it itself. */
+  /** What to run in a terminal to sign in, when puteng game cannot start it itself. */
   loginCommand: string;
   installUrl: string;
 }
@@ -68,7 +68,7 @@ export const AGENT_RUNTIME_DEFINITIONS: Record<
 
 /**
  * Codex confines commands with its own sandbox and Claude Code with its
- * native one (Seatbelt on macOS, bubblewrap on Linux), which OhMyGame turns
+ * native one (Seatbelt on macOS, bubblewrap on Linux), which puteng game turns
  * on; OpenCode has none. Windows support is not established for either.
  * Claude Code runs commands unconfined when bubblewrap or socat is missing.
  */

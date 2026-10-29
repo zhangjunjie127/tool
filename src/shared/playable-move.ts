@@ -23,6 +23,20 @@ export interface PlayableTransform {
   originY?: number;
 }
 
+export function interactionTimingEditsAreUnchanged(
+  current: readonly { delaySeconds: number; endSeconds?: number }[],
+  next: readonly { delaySeconds: number; endSeconds?: number }[],
+): boolean {
+  return (
+    current.length === next.length &&
+    current.every(
+      (selection, index) =>
+        selection.delaySeconds === next[index]?.delaySeconds &&
+        selection.endSeconds === next[index]?.endSeconds,
+    )
+  );
+}
+
 /** Returns the uniform scale change implied by dragging a corner around a fixed center. */
 export function playableCenteredScaleFactor(
   center: { x: number; y: number },

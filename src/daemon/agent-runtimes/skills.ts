@@ -50,7 +50,7 @@ export async function stageSkills(
   return staged;
 }
 
-/** The Skill folders inside a folder of Skills, such as OhMyGame's own in the Pi agent folder. */
+/** The Skill folders inside a folder of Skills, such as puteng game's own in the Pi agent folder. */
 export async function skillFolders(root: string): Promise<string[]> {
   try {
     const entries = await readdir(root, { withFileTypes: true });

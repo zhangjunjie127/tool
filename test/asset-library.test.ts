@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -141,6 +141,14 @@ describe("AssetLibrary", () => {
       modifiedAt: updatedTime.toISOString(),
     });
     expect(await readFile((await library.content(image!.id)).absolutePath, "utf8")).toBe("updated image bytes");
+
+    const manual = await library.add("manual.png", Buffer.from("manual upload"), { origin: "uploaded" });
+    await rm(imagePath);
+    await library.syncSourceFolders();
+    expect(library.get(image!.id)).toBeUndefined();
+    expect(library.get(manual.id)).toMatchObject({ origin: "uploaded" });
+    expect(library.get(video!.id)).toBeDefined();
+    await expect(library.content(image!.id)).rejects.toThrow("Library asset not found");
 
   });
 

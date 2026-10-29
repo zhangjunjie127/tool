@@ -25,6 +25,10 @@ export interface PlayablePickResult {
   buttonPressedAssetId?: string;
   buttonAssetScaleX?: number;
   buttonAssetScaleY?: number;
+  transformScale?: number;
+  transformRotation?: number;
+  transformOriginX?: number;
+  transformOriginY?: number;
   fontFamily?: string;
   tag: string;
   /** The element shows media: an image, a video, or a `data-media` slot for one. */

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   NodePlayerDefinition,
   PlayableAppearanceTimingCommand,
+  PlayableMediaCommand,
 } from "../src/shared/playable-player-protocol.js";
 import {
   createMemoryStorage,
@@ -178,6 +179,24 @@ it("sends timing updates to the active frame without initializing it again", asy
       />,
     ),
   );
+  await act(async () =>
+    root.render(
+      <NodePlayer
+        {...playerProps}
+        mediaCommand={{ command: "play" }}
+        mediaCommandSequence={3}
+      />,
+    ),
+  );
+  await act(async () =>
+    root.render(
+      <NodePlayer
+        {...playerProps}
+        mediaCommand={{ command: "pause" }}
+        mediaCommandSequence={4}
+      />,
+    ),
+  );
   expect(
     messages.filter(
       (message) =>
@@ -185,7 +204,232 @@ it("sends timing updates to the active frame without initializing it again", asy
         message !== null &&
         Reflect.get(message, "kind") === "putenggame:playable:media-command",
     ),
-  ).toHaveLength(2);
+  ).toHaveLength(4);
+  expect(messages).toContainEqual({
+    kind: "putenggame:playable:media-command",
+    instanceId,
+    command: { command: "play" },
+  });
+  expect(messages).toContainEqual({
+    kind: "putenggame:playable:media-command",
+    instanceId,
+    command: { command: "pause" },
+  });
+});
+
+it("does not replay a one-shot progress-image placement preview after runtime reinitialization", async () => {
+  const playerProps = {
+    definition,
+    assets: {},
+    saveKey: "preview",
+    frameUrl: "about:blank",
+    storage,
+    preview,
+  };
+  const previewCommand: PlayableMediaCommand = {
+    command: "motion-progress-preview",
+    nodeId: "start",
+    cssPath: "#charge",
+    source: "nodes/start/index.html:1:1",
+    scale: 100,
+    circular: true,
+    asset: { contentType: "image/png", bytes: new ArrayBuffer(1) },
+  };
+
+  await act(async () => root.render(<NodePlayer {...playerProps} />));
+  const iframe = container.querySelector("iframe")!;
+  const messages: unknown[] = [];
+  Object.defineProperty(iframe.contentWindow!, "postMessage", {
+    configurable: true,
+    value: (message: unknown) => messages.push(message),
+  });
+  await act(async () => {
+    iframe.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+  });
+
+  const initialInit = messages.find(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "kind") === "putenggame:playable:init",
+  )!;
+  const initialInstanceId = Reflect.get(initialInit, "instanceId");
+  await act(async () =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          kind: "putenggame:playable:snapshot",
+          instanceId: initialInstanceId,
+          snapshot: {},
+        },
+      }),
+    ),
+  );
+  await act(async () =>
+    root.render(
+      <NodePlayer
+        {...playerProps}
+        mediaCommand={previewCommand}
+        mediaCommandSequence={1}
+      />,
+    ),
+  );
+  expect(
+    messages.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        Reflect.get(message, "kind") ===
+          "putenggame:playable:media-command",
+    ),
+  ).toHaveLength(1);
+
+  const updatedDefinition: NodePlayerDefinition = {
+    ...definition,
+    compiled: {
+      ...definition.compiled,
+      nodes: {
+        ...definition.compiled.nodes,
+        start: {
+          ...definition.compiled.nodes.start!,
+          html: "<main>Updated preview</main>",
+        },
+      },
+    },
+  };
+  await act(async () =>
+    root.render(
+      <NodePlayer
+        {...playerProps}
+        definition={updatedDefinition}
+        mediaCommand={previewCommand}
+        mediaCommandSequence={1}
+      />,
+    ),
+  );
+  const updatedInit = messages.findLast(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "kind") === "putenggame:playable:init",
+  )!;
+  const updatedInstanceId = Reflect.get(updatedInit, "instanceId");
+  expect(updatedInstanceId).not.toBe(initialInstanceId);
+
+  await act(async () =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          kind: "putenggame:playable:snapshot",
+          instanceId: updatedInstanceId,
+          snapshot: {},
+        },
+      }),
+    ),
+  );
+  expect(
+    messages.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        Reflect.get(message, "kind") ===
+          "putenggame:playable:media-command",
+    ),
+  ).toHaveLength(1);
+});
+
+it("shows playback controls in the exported player and sends play and seek commands", async () => {
+  await act(async () =>
+    root.render(
+      <NodePlayer
+        definition={definition}
+        assets={{}}
+        saveKey="published"
+        frameUrl="about:blank"
+        storage={storage}
+        showPlaybackControls
+      />,
+    ),
+  );
+  const iframe = container.querySelector("iframe")!;
+  const messages: unknown[] = [];
+  Object.defineProperty(iframe.contentWindow!, "postMessage", {
+    configurable: true,
+    value: (message: unknown) => messages.push(message),
+  });
+  await act(async () => {
+    iframe.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+  });
+  const init = messages.find(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "kind") === "putenggame:playable:init",
+  )!;
+  const instanceId = Reflect.get(init, "instanceId");
+
+  await act(async () =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          kind: "putenggame:playable:media-state",
+          instanceId,
+          state: { currentTime: 9, duration: 65, paused: true },
+        },
+      }),
+    ),
+  );
+
+  expect(container.querySelector(".published-player-controls")?.textContent).toContain("00:09");
+  expect(container.querySelector(".published-player-controls")?.textContent).toContain("01:05");
+
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(".published-player-controls button")!
+      .click(),
+  );
+  await act(async () =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          kind: "putenggame:playable:media-state",
+          instanceId,
+          state: { currentTime: 9, duration: 65, paused: false },
+        },
+      }),
+    ),
+  );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(".published-player-controls button")!
+      .click(),
+  );
+  const progress = container.querySelector<HTMLInputElement>(
+    '.published-player-controls input[type="range"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
+      .set!.call(progress, "21.5");
+    progress.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  expect(messages).toContainEqual({
+    kind: "putenggame:playable:media-command",
+    instanceId,
+    command: { command: "play" },
+  });
+  expect(messages).toContainEqual({
+    kind: "putenggame:playable:media-command",
+    instanceId,
+    command: { command: "pause" },
+  });
+  expect(messages).toContainEqual({
+    kind: "putenggame:playable:media-command",
+    instanceId,
+    command: { command: "seek", time: 21.5 },
+  });
 });
 
 it("updates the backdrop in place without initializing the preview again", async () => {
@@ -267,6 +511,56 @@ it("updates the backdrop in place without initializing the preview again", async
       },
     },
   });
+});
+
+it("shares video Blobs with the sandbox without waiting to read their bytes", async () => {
+  const video = new Blob(["large video"], { type: "video/mp4" });
+  const readBytes = vi
+    .spyOn(video, "arrayBuffer")
+    .mockImplementation(() => new Promise<ArrayBuffer>(() => {}));
+  const playerProps = {
+    definition,
+    assets: { opening: video },
+    saveKey: "preview",
+    frameUrl: "about:blank",
+    storage,
+    preview,
+  };
+
+  await act(async () => root.render(<NodePlayer {...playerProps} />));
+  const iframe = container.querySelector("iframe")!;
+  const messages: unknown[] = [];
+  Object.defineProperty(iframe.contentWindow!, "postMessage", {
+    configurable: true,
+    value: (message: unknown) => messages.push(message),
+  });
+  await act(async () => {
+    iframe.dispatchEvent(new Event("load"));
+    await Promise.resolve();
+  });
+
+  const init = messages.find(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "kind") === "putenggame:playable:init",
+  )!;
+  expect(Reflect.get(init, "assets")).toEqual({
+    opening: { contentType: "video/mp4", blob: video },
+  });
+  expect(readBytes).not.toHaveBeenCalled();
+  await act(async () =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          kind: "putenggame:playable:snapshot",
+          instanceId: Reflect.get(init, "instanceId"),
+          snapshot: {},
+        },
+      }),
+    ),
+  );
+  expect(container.querySelector(".playable-player-status")).toBeNull();
 });
 
 it("forwards history shortcuts from the preview frame to the editor", async () => {

@@ -7,7 +7,7 @@ import {
   withoutOhMyGameManagedPiPackages,
 } from "../src/daemon/pi-agent.js";
 
-describe("OhMyGame Pi environment", () => {
+describe("puteng game Pi environment", () => {
   it("removes only the legacy app-managed MCP adapter package", () => {
     const configured = [
       "npm:pi-web-access",

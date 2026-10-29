@@ -45,7 +45,7 @@ export interface NativeTurnInput {
   readOnly: boolean;
 }
 
-/** A tool result in the shape OhMyGame's own tools return, so artifacts and images show the same way. */
+/** A tool result in the shape puteng game's own tools return, so artifacts and images show the same way. */
 export interface NativeToolResult {
   content: Array<
     | { type: "text"; text: string }
@@ -139,7 +139,7 @@ export interface NativeSessionOptions {
     toolCallId: string,
     signal?: AbortSignal,
   ): Promise<ApprovalDecision>;
-  /** OhMyGame tools offered to the agent, by the names Pi gives them. */
+  /** puteng game tools offered to the agent, by the names Pi gives them. */
   toolNames: readonly string[];
   setActiveTools?(names: readonly string[]): void;
   skills?: () => SkillCatalogItem[];
@@ -158,7 +158,7 @@ const IDLE_PROCESS_MS = 10 * 60_000;
 
 /**
  * A conversation run by a coding agent CLI. It keeps the conversation in the
- * same Pi session file as OhMyGame's own agent: every user message, answer
+ * same Pi session file as puteng game's own agent: every user message, answer
  * and tool result is stored as a Pi message, after the checkpoint taken for
  * it, so the conversation list, Undo, message edits and restarts work the
  * same. The CLI keeps its own context; the stored messages are a record and,
@@ -649,7 +649,7 @@ export class NativeCodingSession implements CodingSession {
         return false;
       }
     }
-    // As in Pi, the message ends before it is stored: OhMyGame finds the message's checkpoint among the entries before it.
+    // As in Pi, the message ends before it is stored: puteng game finds the message's checkpoint among the entries before it.
     this.#emit({ type: "message_end", message } as AgentSessionEvent);
     this.storeMessage(message);
     return true;

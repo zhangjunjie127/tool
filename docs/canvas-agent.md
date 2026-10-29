@@ -139,7 +139,7 @@ Three tools supplement ordinary file editing:
 
 ## Migrating Existing Projects
 
-Stop OhMyGame, then run the migration against its data directory:
+Stop puteng game, then run the migration against its data directory:
 
 ```sh
 bun scripts/migrate-canvas-workspaces.ts .data

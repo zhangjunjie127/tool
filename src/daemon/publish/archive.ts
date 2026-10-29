@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
@@ -20,6 +20,7 @@ import type { NodePlayerDefinition } from "../../shared/playable-player-protocol
 import { isPublishedNodeManifest, PLAYTEST_SCOPE_PREFIX, type PublishedNodeAsset, type PublishedNodeManifest } from "../../shared/playable-publish.js";
 import { isNodeGraph } from "../../shared/playable-graph-validation.js";
 import { getWorkspaceMedia } from "../workspace.js";
+import { buildPicoStoryApk } from "./pico-apk.js";
 
 interface PackageJson {
   scripts?: { build?: unknown };
@@ -44,7 +45,81 @@ export class ArtifactBuilder {
 
   async buildInteractiveStory(project: ProjectState): Promise<Buffer> {
     if (project.type !== "interactive-story") throw new PublishError("Build requires an Interactive Story project");
-    return this.#create(project);
+    let temporary: string | undefined;
+    try {
+      temporary = await prepareInteractiveStory(project, this.library, this.playerDirectory);
+      await addPlayableWindowsLauncher(temporary);
+      return await createZip(temporary);
+    } finally {
+      if (temporary) await rm(temporary, { recursive: true, force: true });
+    }
+  }
+
+  async buildInteractiveStoryProject(project: ProjectState): Promise<Buffer> {
+    if (project.type !== "interactive-story") throw new PublishError("Build requires an Interactive Story project");
+    if (!this.library) throw new PublishError("The Asset Library is not available.");
+    const output = await mkdtemp(path.join(tmpdir(), "puteng-game-project-export-"));
+    try {
+      for (const file of await filesIn(project.workspacePath)) {
+        const destination = path.join(output, ...file.split("/"));
+        await mkdir(path.dirname(destination), { recursive: true });
+        await copyFile(path.join(project.workspacePath, ...file.split("/")), destination);
+      }
+      const graphPath = path.join(output, "graph.json");
+      const graph = JSON.parse(await readFile(graphPath, "utf8")) as {
+        assets?: Record<string, { source?: { kind?: string; assetId?: string; path?: string } }>;
+      };
+      for (const [assetId, definition] of Object.entries(graph.assets ?? {})) {
+        if (definition.source?.kind !== "library" || !definition.source.assetId) continue;
+        const { asset, absolutePath } = await this.library.content(definition.source.assetId);
+        const extension = path.extname(asset.name).toLowerCase();
+        const relative = `assets/library/${sha256Hex(Buffer.from(assetId)).slice(0, 24)}${extension}`;
+        const destination = path.join(output, ...relative.split("/"));
+        await mkdir(path.dirname(destination), { recursive: true });
+        await copyFile(absolutePath, destination);
+        definition.source = { kind: "workspace", path: relative };
+      }
+      await writeFile(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
+      await writeFile(
+        path.join(output, "EXPORT_README.md"),
+        "# Editable Interactive Story Project\n\n" +
+          "Extract this archive, then choose the extracted folder when creating a new Interactive Story project in puteng game.\n" +
+          "Library media used by the project has been copied into `assets/library/`.\n",
+      );
+      return await createZip(output);
+    } catch (cause) {
+      if (cause instanceof PublishError) throw cause;
+      throw new PublishError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      await rm(output, { recursive: true, force: true });
+    }
+  }
+
+  async buildInteractiveStoryPicoWebApp(project: ProjectState): Promise<Buffer> {
+    if (project.type !== "interactive-story") throw new PublishError("Build requires an Interactive Story project");
+    let temporary: string | undefined;
+    try {
+      temporary = await prepareInteractiveStory(project, this.library, this.playerDirectory);
+      await addPicoWebAppFiles(temporary, project.name);
+      return await createZip(temporary);
+    } finally {
+      if (temporary) await rm(temporary, { recursive: true, force: true });
+    }
+  }
+
+  async buildInteractiveStoryPicoApk(project: ProjectState): Promise<Buffer> {
+    if (project.type !== "interactive-story") throw new PublishError("Build requires an Interactive Story project");
+    let temporary: string | undefined;
+    try {
+      temporary = await prepareInteractiveStory(project, this.library, this.playerDirectory);
+      await addPicoWebAppFiles(temporary, project.name);
+      return await buildPicoStoryApk(temporary, project.name, project.id);
+    } catch (cause) {
+      if (cause instanceof PublishError) throw cause;
+      throw new PublishError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (temporary) await rm(temporary, { recursive: true, force: true });
+    }
   }
 
   async #create(project: ProjectState, cover?: Buffer, maxBytes?: number): Promise<Buffer> {
@@ -105,6 +180,68 @@ export class ArtifactBuilder {
   }
 }
 
+async function addPicoWebAppFiles(directory: string, name: string): Promise<void> {
+  const manifest = {
+    id: "./",
+    name,
+    short_name: name.slice(0, 24),
+    description: `${name} - immersive interactive story`,
+    start_url: "./",
+    scope: "./",
+    display: "standalone",
+    orientation: "landscape",
+    background_color: "#090b10",
+    theme_color: "#090b10",
+    icons: [{
+      src: "./pico-app-icon.svg",
+      sizes: "any",
+      type: "image/svg+xml",
+      purpose: "any maskable",
+    }],
+  };
+  const iconTitle = escapeXml(name.slice(0, 1).toUpperCase() || "P");
+  const indexPath = path.join(directory, "index.html");
+  const index = await readFile(indexPath, "utf8");
+  const manifestLink = '    <link rel="manifest" href="./manifest.webmanifest" />\n';
+  const workerRegistration =
+    '    <script>if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));</script>\n';
+  const withManifest = index.replace("</head>", `${manifestLink}  </head>`);
+  if (withManifest === index) throw new PublishError("Published Player index.html has no closing head tag.");
+  const withWorker = withManifest.replace("</body>", `${workerRegistration}  </body>`);
+  if (withWorker === withManifest) throw new PublishError("Published Player index.html has no closing body tag.");
+  await writeFile(indexPath, withWorker);
+  await writeFile(path.join(directory, "manifest.webmanifest"), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(
+    path.join(directory, "pico-app-icon.svg"),
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#121923"/><path d="M128 118h112c91 0 144 47 144 126S331 370 240 370h-32v54h-80V118zm80 72v108h34c39 0 61-18 61-54s-22-54-61-54h-34z" fill="#f2f5f8"/><text x="256" y="475" fill="#71d3c1" font-family="Arial,sans-serif" font-size="30" font-weight="700" text-anchor="middle">${iconTitle}</text></svg>\n`,
+  );
+  await writeFile(
+    path.join(directory, "service-worker.js"),
+    'const CACHE = "puteng-pico-shell-v1";\n' +
+      'self.addEventListener("install", (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(["./", "./index.html", "./manifest.webmanifest", "./pico-app-icon.svg"]))));\n' +
+      'self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))));\n' +
+      'self.addEventListener("fetch", (event) => { const url = new URL(event.request.url); if (event.request.method !== "GET" || url.origin !== self.location.origin || event.request.destination === "video" || url.pathname.includes("/assets/media/")) return; event.respondWith(fetch(event.request).then((response) => { if (response.ok && !event.request.headers.has("range")) { const copy = response.clone(); void caches.open(CACHE).then((cache) => cache.put(event.request, copy)); } return response; }).catch(async () => (await caches.match(event.request)) ?? Response.error())); });\n',
+  );
+  await writeFile(
+    path.join(directory, "PICO-INSTALL.md"),
+    `# ${name}\n\n` +
+      "1. Upload the entire extracted folder to an HTTPS website. Do not open index.html as a local file.\n" +
+      "2. On PICO 4 Ultra, open the HTTPS address in PICO Browser. Use Install or Add to Home Screen if offered; otherwise launch it directly in the browser.\n" +
+      "3. Launch it and choose Enter VR in the game when ready.\n\n" +
+      "This is a WebXR/PWA website bundle, not an Android APK. Standalone installation depends on the PICO OS and browser version. WebXR also requires a secure HTTPS origin. Video files are loaded on demand and are not pre-cached for offline use.\n",
+  );
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/[<>&'"]/g, (character) => ({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;",
+  })[character]!);
+}
+
 async function publishStartupDirectory(project: ProjectState): Promise<string> {
   try {
     return (await resolveStartupDirectory(project.workspacePath, project.startupDirectory ?? ".")).absolutePath;
@@ -124,6 +261,118 @@ async function prepareInteractiveStory(project: ProjectState, library?: AssetLib
   }
   if (!playable) throw new PublishError("This project has no graph.json.");
   return preparePlayableProject(project, playable, library, playerDirectory);
+}
+
+async function addPlayableWindowsLauncher(directory: string): Promise<void> {
+  await Promise.all([
+    writeFile(
+      path.join(directory, "start-game.bat"),
+      "@echo off\r\n" +
+        "setlocal\r\n" +
+        "set \"PORT=8000\"\r\n" +
+        "start \"\" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0start-game-server.ps1\" -Port %PORT%\r\n",
+    ),
+    writeFile(
+      path.join(directory, "start-game-server.ps1"),
+      String.raw`param(
+  [string]$Root = $PSScriptRoot,
+  [int]$Port = 8000
+)
+
+trap {
+  $details = $_.Exception.ToString()
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+      ("The game could not start." + [System.Environment]::NewLine + [System.Environment]::NewLine + $details),
+      "puteng game startup error"
+    ) | Out-Null
+  } catch {
+    Write-Error $details
+    Read-Host "Press Enter to close"
+  }
+  exit 1
+}
+
+$ErrorActionPreference = "Stop"
+$rootPath = [System.IO.Path]::GetFullPath($Root)
+$rootPrefix = $rootPath.TrimEnd([char[]]@("\", "/")) + [System.IO.Path]::DirectorySeparatorChar
+$listener = $null
+
+for ($candidate = $Port; $candidate -lt ($Port + 100); $candidate++) {
+  $tryListener = New-Object System.Net.HttpListener
+  $tryListener.Prefixes.Add("http://127.0.0.1:$candidate/")
+  try {
+    $tryListener.Start()
+    $listener = $tryListener
+    $Port = $candidate
+    break
+  } catch {
+    $tryListener.Close()
+  }
+}
+
+if ($null -eq $listener) {
+  throw "Could not open a local web server on ports $Port through $($Port + 99)."
+}
+
+$url = "http://127.0.0.1:$Port/"
+Start-Process $url
+$contentTypes = @{
+  ".css" = "text/css; charset=utf-8"
+  ".html" = "text/html; charset=utf-8"
+  ".js" = "text/javascript; charset=utf-8"
+  ".json" = "application/json; charset=utf-8"
+  ".m4a" = "audio/mp4"
+  ".mp3" = "audio/mpeg"
+  ".mp4" = "video/mp4"
+  ".mov" = "video/quicktime"
+  ".ogg" = "audio/ogg"
+  ".png" = "image/png"
+  ".svg" = "image/svg+xml"
+  ".webm" = "video/webm"
+  ".webp" = "image/webp"
+  ".woff" = "font/woff"
+  ".woff2" = "font/woff2"
+}
+
+while ($listener.IsListening) {
+  $context = $listener.GetContext()
+  $response = $context.Response
+  try {
+    $relative = [Uri]::UnescapeDataString($context.Request.Url.AbsolutePath.TrimStart("/")).Replace("/", [System.IO.Path]::DirectorySeparatorChar)
+    if ([string]::IsNullOrEmpty($relative)) { $relative = "index.html" }
+    $filePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($rootPath, $relative))
+    if (-not $filePath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $response.StatusCode = 403
+    } elseif (Test-Path -LiteralPath $filePath -PathType Container) {
+      $filePath = Join-Path $filePath "index.html"
+    }
+
+    if ($response.StatusCode -ne 403 -and (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+      $response.StatusCode = 200
+      $extension = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()
+      $response.ContentType = $contentTypes[$extension]
+      if (-not $response.ContentType) { $response.ContentType = "application/octet-stream" }
+      $response.Headers["Cache-Control"] = "no-cache"
+      $stream = [System.IO.File]::OpenRead($filePath)
+      $response.ContentLength64 = $stream.Length
+      if ($context.Request.HttpMethod -ne "HEAD") {
+        $stream.CopyTo($response.OutputStream)
+      }
+      $stream.Dispose()
+    } elseif ($response.StatusCode -ne 403) {
+      $response.StatusCode = 404
+    }
+  } catch {
+    $response.StatusCode = 500
+  } finally {
+    $response.Close()
+  }
+}
+`,
+    ),
+  ]);
 }
 
 async function preparePlayableProject(

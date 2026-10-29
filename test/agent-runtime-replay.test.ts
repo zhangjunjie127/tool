@@ -14,7 +14,7 @@ const native = (content: unknown[]) => ({
   timestamp: 2,
 });
 
-describe("replaying coding agent turns for OhMyGame's own agent", () => {
+describe("replaying coding agent turns for puteng game's own agent", () => {
   it("turns a native turn into text and leaves Pi's own messages alone", () => {
     const user = { role: "user", content: "add a jump", timestamp: 1 };
     const pi = {

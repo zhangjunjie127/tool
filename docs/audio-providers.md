@@ -1,6 +1,6 @@
 # Audio providers
 
-OhMyGame treats audio as a capability family rather than a TTS-only feature. The shared contract has four operations:
+puteng game treats audio as a capability family rather than a TTS-only feature. The shared contract has four operations:
 
 - `speech` for narration and character voices;
 - `dialogue` for multi-speaker synthesis when a provider supports it;

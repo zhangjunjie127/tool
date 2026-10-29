@@ -517,32 +517,12 @@ kbd,
    stage's content. Its data-asset and data-type name a declared Asset, which
    showBackdrop() in components.js shows. Until one is set it shows a
    placeholder picture picked by a class: is-night, is-warm, is-lamp,
-   is-alarm, is-room, or is-dusk. Black bars, a vignette, and film grain sit
-   over every background. */
+   is-alarm, is-room, or is-dusk. A vignette and film grain sit over every
+   background. */
 .has-backdrop {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-}
-
-.has-backdrop::before,
-.has-backdrop::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  height: var(--letterbox);
-  background: #000;
-  pointer-events: none;
-}
-
-.has-backdrop::before {
-  top: 0;
-}
-
-.has-backdrop::after {
-  bottom: 0;
 }
 
 .backdrop {
@@ -719,9 +699,10 @@ export function showBackdrop(context) {
 }
 
 /**
- * Shows the background and emits a Signal when its video ends or the player
- * clicks anywhere. This is Node content, not a Runtime feature, so change or
- * replace it freely.
+ * Shows the background and emits a Signal when its video ends. A single-play
+ * video cannot be skipped by clicking the Scene; looping videos, images, and
+ * empty backgrounds can still be clicked to continue. This is Node content,
+ * not a Runtime feature, so change or replace it freely.
  *
  * @param {object} context the Node context passed to mount
  * @param {object} options
@@ -738,12 +719,17 @@ export function playScene(context, { signal }) {
     finished = true;
     void context.navigation.emit(signal);
   };
+  const onStageClick = (event) => {
+    if (event.target?.closest?.("button, a, input, select, textarea, [role='button'], [data-signal]")) return;
+    if (backdrop.video && !backdrop.video.loop) return;
+    finish();
+  };
   backdrop.video?.addEventListener("ended", finish);
-  stage.addEventListener("click", finish);
+  stage.addEventListener("click", onStageClick);
 
   return () => {
     backdrop.video?.removeEventListener("ended", finish);
-    stage.removeEventListener("click", finish);
+    stage.removeEventListener("click", onStageClick);
     backdrop.cleanup();
   };
 }

@@ -56,7 +56,7 @@ interface OpenCodeTurn {
  * OpenCode through `opencode serve`, one server per conversation on a
  * loopback port with a password of its own. Messages go to the session's
  * prompt endpoint, everything that happens comes back on its event stream,
- * and permission requests are answered on the server. OhMyGame's tools are
+ * and permission requests are answered on the server. puteng game's tools are
  * a remote MCP server on the daemon whose token only works while a turn of
  * this conversation runs.
  */
@@ -70,7 +70,7 @@ export class OpenCodeDriver implements NativeDriver {
   #turn?: OpenCodeTurn;
   #bridge?: { url: string; token: string; revoke: () => void };
   #userMessages = new Set<string>();
-  /** What bridged OhMyGame tools returned, by tool and arguments: OpenCode's record of the call has only MCP's text. */
+  /** What bridged puteng game tools returned, by tool and arguments: OpenCode's record of the call has only MCP's text. */
   #bridged = new Map<
     string,
     Array<{ result: NativeToolResult; isError: boolean }>
@@ -217,7 +217,7 @@ export class OpenCodeDriver implements NativeDriver {
       }
     }
     const created = (await this.#api("POST", "/session", {
-      title: "OhMyGame",
+      title: "puteng game",
     })) as { id?: unknown };
     if (typeof created.id !== "string")
       throw new Error("OpenCode did not start a session");
@@ -800,7 +800,7 @@ export class OpenCodeDriver implements NativeDriver {
       feedback = undefined;
     }
     await this.#api("POST", `/permission/${id}/reply`, {
-      // Conversation grants are kept by OhMyGame for the exact request, never as a native pattern.
+      // Conversation grants are kept by puteng game for the exact request, never as a native pattern.
       reply: decision === "deny" ? "reject" : "once",
       ...(decision === "deny" && feedback ? { message: feedback } : {}),
     }).catch(() => {});
@@ -879,7 +879,7 @@ export function splitModel(model: string): [string, string] {
     : [model.slice(0, index), model.slice(index + 1)];
 }
 
-/** OhMyGame's tools by their own names; OpenCode's file and shell tools by Pi's. */
+/** puteng game's tools by their own names; OpenCode's file and shell tools by Pi's. */
 export function openCodeToolCall(
   name: string,
   input: Record<string, unknown>,

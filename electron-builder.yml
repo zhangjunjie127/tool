@@ -1,5 +1,5 @@
 appId: ai.ohmygame.desktop
-productName: OhMyGame
+productName: puteng game
 asar: true
 beforePack: scripts/prepare-desktop-typebox.mjs
 afterPack: scripts/check-packaged-desktop.mjs
@@ -53,7 +53,7 @@ win:
   icon: build/icon.ico
   target:
     - nsis
-  artifactName: OhMyGame-${version}-${arch}.${ext}
+  artifactName: puteng-game-${version}-${arch}.${ext}
 
 nsis:
   include: build/installer.nsh
@@ -68,4 +68,4 @@ publish:
   channel: latest
 
 dmg:
-  artifactName: OhMyGame-${version}-${arch}.${ext}
+  artifactName: puteng-game-${version}-${arch}.${ext}

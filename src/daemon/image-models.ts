@@ -4,7 +4,7 @@ import { knownImageReferenceLimit } from "../shared/image-reference-limits.js";
 type ImageModelDefinition = Omit<ImageModel, "provider" | "providerName">;
 
 /**
- * Model IDs a provider's `/models` list may contain that OhMyGame can drive, by family.
+ * Model IDs a provider's `/models` list may contain that puteng game can drive, by family.
  * `/models` gives IDs only, so the family decides the protocol and safe defaults, and the
  * public OpenRouter catalog (`vendor/<id>`) refines them when it knows the model.
  */
@@ -48,7 +48,7 @@ export function imageModelDefinition(id: string, catalog: readonly ImageModel[] 
   const known = catalog.find((model) => model.id === `${family.vendor}/${id}`);
   const knownRatios = unique(known?.generationOptions.map((option) => option.aspectRatio) ?? []);
   const knownResolutions = known?.supportsResolution ? unique(known.generationOptions.map((option) => option.resolution)) : [];
-  // OpenAI takes a pixel size, which OhMyGame derives for its own resolutions, so the catalog only narrows ratios.
+  // OpenAI takes a pixel size, which puteng game derives for its own resolutions, so the catalog only narrows ratios.
   const resolutions = family.protocol === "gemini-generate-content" && knownResolutions.length ? knownResolutions : family.resolutions;
   const aspectRatios = knownRatios.length ? IMAGE_ASPECT_RATIOS.filter((ratio) => knownRatios.includes(ratio) && (family.protocol !== "openai-images" || family.aspectRatios.includes(ratio))) : family.aspectRatios;
   return {

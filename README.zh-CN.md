@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.webp" alt="OhMyGame：用 AI 做游戏的开源工作室" width="100%" />
+<img src="docs/assets/banner-puteng.webp" alt="puteng game：用 AI 做游戏的开源工作室" width="100%" />
 
 **你的一人游戏工作室。** 用 AI 做游戏需要的一切，都在一个应用里。使用你自己的模型密钥。
 
@@ -26,12 +26,12 @@ https://github.com/user-attachments/assets/4d5805fe-92a2-40b4-a232-c7452f9a796a
 </div>
 
 > [!NOTE]
-> 🚧 OhMyGame 目前处于 Beta 阶段，难免还有粗糙的地方。欢迎加入我们，一起把它做好！
+> 🚧 puteng game 目前处于 Beta 阶段，难免还有粗糙的地方。欢迎加入我们，一起把它做好！
 
 ## 这是什么
 
 做一款游戏，需要设计文档、2D 美术、3D 模型、视频、代码，做完还要有地方发布。
-现在这些工作分散在五六个不同的工具里。OhMyGame 把它们放进了一个应用：描述你想做的游戏，
+现在这些工作分散在五六个不同的工具里。puteng game 把它们放进了一个应用：描述你想做的游戏，
 Agent 会设计它、制作素材、搭建游戏、亲自试玩确认能正常运行，再发布成一个可以分享的链接。
 
 它围绕两个核心设计理念：
@@ -42,7 +42,7 @@ Agent 会设计它、制作素材、搭建游戏、亲自试玩确认能正常�
 2. **活由 Agent 来干。** 它像你一样操作画布：起草设计文档，把角色草图变成绑好骨骼的
    3D 模型，编写代码，再试玩检验结果。
 
-OhMyGame 是开源的，通过 Pi 支持 40 多家模型服务商，从 Anthropic、OpenAI 到 DeepSeek、
+puteng game 是开源的，通过 Pi 支持 40 多家模型服务商，从 Anthropic、OpenAI 到 DeepSeek、
 通义千问。密钥留在你自己的电脑上，没有按次计费的点数，做出来的东西归你所有。
 
 ## 功能
@@ -72,19 +72,19 @@ https://github.com/user-attachments/assets/5a35964d-87b3-4153-8b1b-fc6deced5bb3
 
 ### 🔗 发布：一个链接，随处可玩
 
-登录后即可发布：OhMyGame 会构建你的游戏，并生成一个任何人都能在浏览器里打开就玩的链接。
+登录后即可发布：puteng game 会构建你的游戏，并生成一个任何人都能在浏览器里打开就玩的链接。
 重新发布会更新同一个链接。发布的游戏会出现在应用内的社区（Community）里，
 你也可以在那里玩到别人做的游戏。
 
 ## 你可以做什么
 
-我们团队用 OhMyGame 做的三款游戏：
+我们团队用 puteng game 做的三款游戏：
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/showcase/interactive-film.webp" alt="用 OhMyGame 制作的互动电影：猴子武士躲开一记剑击" width="100%" /></td>
-    <td width="33%"><img src="docs/assets/showcase/island-builder.webp" alt="用 OhMyGame 制作的海岛建造游戏：在浮动码头上建造工坊" width="100%" /></td>
-    <td width="33%"><img src="docs/assets/showcase/deckbuilding-roguelike.webp" alt="用 OhMyGame 制作的卡牌构筑 Roguelike：在哥特风战斗中出牌" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/interactive-film.webp" alt="用 puteng game 制作的互动电影：猴子武士躲开一记剑击" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/island-builder.webp" alt="用 puteng game 制作的海岛建造游戏：在浮动码头上建造工坊" width="100%" /></td>
+    <td width="33%"><img src="docs/assets/showcase/deckbuilding-roguelike.webp" alt="用 puteng game 制作的卡牌构筑 Roguelike：在哥特风战斗中出牌" width="100%" /></td>
   </tr>
   <tr>
     <td align="center">互动电影</td>
@@ -106,7 +106,7 @@ Agent 会走完一整套网页游戏流程：设计文档、关键画面 mockup�
 主菜单、案件档案、一段对话、一个谜题。你在图上把它们连起来，运行时负责状态、存档和跳转。
 架构和创作模型见 [Playable Nodes](docs/playable-nodes/README.md)。
 
-<!-- TODO(asset): 截图或 GIF，展示节点图和两个用 OhMyGame 做好的画面。
+<!-- TODO(asset): 截图或 GIF，展示节点图和两个用 puteng game 做好的画面。
 有真实素材之前先不放。 -->
 
 ### 🎲 General Game：任意引擎与技术栈
@@ -122,7 +122,7 @@ Agent 会走完一整套网页游戏流程：设计文档、关键画面 mockup�
 
 把这一切串起来的思路是：一个 Agent 驱动工作室的每个部分。
 
-**1 · 带图形界面的完整 Pi Agent。** OhMyGame 运行的是
+**1 · 带图形界面的完整 Pi Agent。** puteng game 运行的是
 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)，带有完整的工具集和持久化会话，
 界面专为查看结果而设计，而不是让你读 diff。关掉应用再回来，项目、对话和上下文都还在。
 你负责描述、审阅和把控方向；随时可以手动编辑，但那不是主要的用法。
@@ -138,7 +138,7 @@ Agent 会走完一整套网页游戏流程：设计文档、关键画面 mockup�
 
 ## 任意模型，自带密钥
 
-OhMyGame 不会把你绑定在某一个模型上，也不按次收费。
+puteng game 不会把你绑定在某一个模型上，也不按次收费。
 
 - **40 多家服务商的编程模型**，通过 Pi 接入，包括 Anthropic、OpenAI、Google、DeepSeek、
   通义千问（Qwen）、Kimi、智谱 GLM、MiniMax、xAI、Mistral、Groq、OpenRouter、
@@ -146,7 +146,7 @@ OhMyGame 不会把你绑定在某一个模型上，也不按次收费。
 - **直接登录你已有的订阅**，例如 ChatGPT Plus/Pro 或 GitHub Copilot，也可以粘贴 API 密钥。
   <!-- TODO(legal): 列出更多订阅前，先确认各服务商的条款 -->
 - **你已经在用的编程智能体**：Claude Code、Codex 和 OpenCode 使用各自的登录来运行对话，
-  对话记录、撤销、画布、媒体工具和插件仍由 OhMyGame 提供。在设置中启用，并遵循原生 CLI
+  对话记录、撤销、画布、媒体工具和插件仍由 puteng game 提供。在设置中启用，并遵循原生 CLI
   的权限边界。详见[编程智能体](docs/coding-agents.md)。
 - **媒体模型**：图片、视频和 3D 生成，可通过 OpenAI、OpenRouter、火山方舟 / BytePlus ModelArk
   和 Meshy 接入。
@@ -170,7 +170,7 @@ OhMyGame 不会把你绑定在某一个模型上，也不按次收费。
 
 ![首次运行欢迎页和服务商连接页](docs/assets/first-run-onboarding.png)
 
-OhMyGame 不内置模型。首次启动时，一个小小的游戏世界逐渐成形，随后变为 OhMyGame 标志。
+puteng game 不内置模型。首次启动时，一个小小的游戏世界逐渐成形，随后变为 puteng game 标志。
 品牌名称、**你的专属游戏工作室。** 和 **下一步** 会在约五秒内依次出现。
 点击 **下一步**，在发送第一条提示词之前连接模型：
 
@@ -223,7 +223,7 @@ bun run dev:desktop    # Electron 桌面应用
 ## 隐私
 
 你的项目和密钥都留在你自己的电脑上。提示词和生成请求直接发送给你选择的模型服务商。
-发布游戏需要 OhMyGame 账号，并且只上传游戏的静态构建产物。正式版会检查更新，
+发布游戏需要 puteng game 账号，并且只上传游戏的静态构建产物。正式版会检查更新，
 并发送匿名使用数据（PostHog，不录制会话）和崩溃报告（Sentry，不含个人数据）。
 从源码构建的版本不发送任何遥测数据。
 
@@ -253,4 +253,4 @@ bun run dev:desktop    # Electron 桌面应用
 
 ## 许可证
 
-[Apache-2.0](LICENSE)。OhMyGame 的名称和标志不在该许可证的授权范围内。
+[Apache-2.0](LICENSE)。puteng game 的名称和标志不在该许可证的授权范围内。

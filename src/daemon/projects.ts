@@ -39,7 +39,7 @@ interface ProjectMetadata extends ProjectPreviewSettings {
   previewPath?: string;
   /** Present only when a Web Game preview defaults to a device preset other than fit. */
   previewViewport?: PreviewViewport;
-  /** Present only when the user chose a workspace outside OhMyGame storage. */
+  /** Present only when the user chose a workspace outside puteng game storage. */
   workspacePath?: string;
   publication?: PublicationState;
   mediaModelDefaults?: MediaModelDefaults;
@@ -760,7 +760,7 @@ export class ProjectManager {
       throw new ProjectWorkspaceError("The filesystem root cannot be used as a workspace");
     }
     if (pathsOverlap(workspacePath, this.#projectsDirectory)) {
-      throw new ProjectWorkspaceError("OhMyGame's project storage cannot be used as a workspace");
+      throw new ProjectWorkspaceError("puteng game's project storage cannot be used as a workspace");
     }
     const owner = this.#workspaceOwner(workspacePath);
     if (owner) throw new ProjectWorkspaceError(`This folder is already the workspace of “${owner.name}”`);

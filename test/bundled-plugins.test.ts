@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { BundledPluginStore } from "../src/daemon/bundled-plugins.js";
 
 describe("bundled plugins", () => {
-  it("loads a standard skill-only OhMyGame plugin directory", async () => {
+  it("loads a standard skill-only puteng game plugin directory", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "ohmygame-bundled-plugins-"));
     const plugin = path.join(root, "reference-modeler");
     await mkdir(path.join(plugin, ".ohmygame-plugin"), { recursive: true });

@@ -624,7 +624,7 @@ export function createApp(options: AppOptions = {}) {
   const volcengineTtsSettings = new VolcengineTtsSettingsStore(dataDirectory);
   const volcengineSeedAudioSettings = new VolcengineSeedAudioSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
-  // Coding agents reach OhMyGame's tools over loopback only when they cannot take them over their own pipe.
+  // Coding agents reach puteng game's tools over loopback only when they cannot take them over their own pipe.
   const agentRuntimes = new AgentRuntimeService(dataDirectory, () => {
     const address = app.server.address();
     return address && typeof address === "object" ? `http://127.0.0.1:${address.port}` : undefined;
@@ -812,7 +812,7 @@ export function createApp(options: AppOptions = {}) {
     await canvasStore.waitForProject(project.id);
     return withCanvasLock(project.workspacePath, () => checkpoints.snapshot(project));
   });
-  /** OhMyGame's own tools for a conversation, the same for Pi and for a coding agent. */
+  /** puteng game's own tools for a conversation, the same for Pi and for a coding agent. */
   const projectAgentTools = (project: ProjectState, conversation: StoredConversation) => {
     const playtestKey = `${project.id}:${conversation.summary.id}`;
     let playtest = agentPlaytests.get(playtestKey);
@@ -1412,8 +1412,11 @@ export function createApp(options: AppOptions = {}) {
     }
     try {
       await projects.touch(project.id);
-    } catch {
-      return reply.code(500).send({ error: "Playable codebase was saved, but project metadata could not be updated" });
+    } catch (cause) {
+      request.log.warn(
+        { projectId: project.id, err: cause },
+        "Playable codebase was saved, but project metadata could not be updated",
+      );
     }
     return { revision };
   });
@@ -1724,8 +1727,12 @@ export function createApp(options: AppOptions = {}) {
   registerCommunityRoutes(app, publisher, projects);
 
   app.get("/library/assets", async (request) => {
-    await library.syncSourceFolders();
-    const associations = await projects.libraryAssetAssociations((project, cause) => request.log.warn({ projectId: project.id, err: cause }, "Could not read Library asset usage"));
+    await library.syncSourceFolders(async (assetId) =>
+      (await projects.referencesLibraryAsset(assetId)).length > 0,
+    );
+    const associations = await projects.libraryAssetAssociations(
+      (project, cause) => request.log.warn({ projectId: project.id, err: cause }, "Could not read Library asset usage"),
+    );
     return library.list().map((asset) => ({
       ...asset,
       projects: associations.get(asset.id)?.projects ?? [],
@@ -1757,15 +1764,64 @@ export function createApp(options: AppOptions = {}) {
     },
   }, async (request, reply) => {
     try {
-      return await library.setSourceFolder(
+      const folders = await library.setSourceFolder(
         request.params.category,
         request.body.path ?? undefined,
       );
+      if (!request.body.path) {
+        await library.reconcileSourceFiles(
+          request.params.category,
+          "local-folder",
+          [],
+          async (assetId) => (await projects.referencesLibraryAsset(assetId)).length > 0,
+        );
+      }
+      return folders;
     } catch (cause) {
       if (cause instanceof AssetLibraryError) {
         return reply.code(cause.statusCode).send({ error: cause.message });
       }
       throw cause;
+    }
+  });
+
+  app.put<{
+    Params: { category: LibrarySourceFolderCategory };
+    Body: { sourceKeys: string[] };
+  }>("/library/assets/source-sync/browser/:category", {
+    bodyLimit: Number.MAX_SAFE_INTEGER,
+    schema: {
+      params: {
+        type: "object",
+        additionalProperties: false,
+        required: ["category"],
+        properties: { category: { enum: ["video", "image"] } },
+      },
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sourceKeys"],
+        properties: {
+          sourceKeys: {
+            type: "array",
+            maxItems: 100_000,
+            items: { type: "string", minLength: 1, maxLength: 4_000 },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      await library.reconcileSourceFiles(
+        request.params.category,
+        "browser-folder",
+        request.body.sourceKeys,
+        async (assetId) => (await projects.referencesLibraryAsset(assetId)).length > 0,
+      );
+      return reply.code(204).send();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : String(cause);
+      return reply.code(cause instanceof AssetLibraryError ? cause.statusCode : 500).send({ error });
     }
   });
 
@@ -2656,7 +2712,7 @@ export function createApp(options: AppOptions = {}) {
         provider: providerId, providerName: provider?.name ?? providerId, id: model.id, name: model.name, reasoningLevels: [], capabilities: [model.capability],
         visible: providerModelSettings.isVisible(model), custom: false, source: "cloud",
         description: [model.estimatedCredits !== undefined && `${model.estimatedCredits} credits / generation`, model.maxReferenceImages && `up to ${model.maxReferenceImages} references`, model.polycount && `${model.polycount.min.toLocaleString()}–${model.polycount.max.toLocaleString()} faces`].filter(Boolean).join(" · "),
-      })), defaultApi: "cloud", canAddCustomModel: false, catalogNotice: "Models and generation options are managed by OhMyGame. You can choose which models to show." };
+      })), defaultApi: "cloud", canAddCustomModel: false, catalogNotice: "Models and generation options are managed by puteng game. You can choose which models to show." };
     }
     const catalog = providerModelSettings.isCustom(providerId) ? customModelCatalog(runtime.getModels()) : new Map();
     const models = runtime.getModels(providerId).map((model) => providerModelSettings.resolveModel(model, catalog));
@@ -3564,17 +3620,37 @@ export function createApp(options: AppOptions = {}) {
     },
   );
 
-  app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/build", async (request, reply) => {
+  app.post<{
+    Params: { projectId: string };
+    Querystring: { format?: "playable" | "editable" | "pico-web" | "pico-apk" };
+  }>("/projects/:projectId/interactive-story/build", {
+    schema: {
+      querystring: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          format: { enum: ["playable", "editable", "pico-web", "pico-apk"] },
+        },
+      },
+    },
+  }, async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
     if (project.type !== "interactive-story") return reply.code(409).send({ error: "Build requires an Interactive Story project" });
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before building" });
     if (publishing.has(project.id)) return reply.code(409).send({ error: "Project is already being published" });
     try {
-      const artifact = await artifacts.buildInteractiveStory(project);
+      const format = request.query.format ?? "playable";
+      const artifact = format === "editable"
+        ? await artifacts.buildInteractiveStoryProject(project)
+        : format === "pico-apk"
+          ? await artifacts.buildInteractiveStoryPicoApk(project)
+        : format === "pico-web"
+          ? await artifacts.buildInteractiveStoryPicoWebApp(project)
+          : await artifacts.buildInteractiveStory(project);
       return reply
-        .header("content-type", "application/zip")
-        .header("content-disposition", `attachment; filename="${encodeURIComponent(project.name)}.zip"`)
+        .header("content-type", format === "pico-apk" ? "application/vnd.android.package-archive" : "application/zip")
+        .header("content-disposition", `attachment; filename="${encodeURIComponent(project.name)}-${format}.${format === "pico-apk" ? "apk" : "zip"}"`)
         .send(artifact);
     } catch (cause) {
       const statusCode = cause instanceof PublishError ? cause.statusCode : 500;

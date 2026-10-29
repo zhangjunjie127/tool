@@ -233,11 +233,14 @@ export class AssetLibrary {
     return this.sourceFolders();
   }
 
-  async syncSourceFolders(): Promise<void> {
+  async syncSourceFolders(
+    shouldRetainAsset?: (assetId: string) => Promise<boolean>,
+  ): Promise<void> {
     for (const [category, directory] of Object.entries(this.#state.sourceFolders) as [
       LibrarySourceFolderCategory,
       string,
     ][]) {
+      const seenSourceKeys: string[] = [];
       for (const sourcePath of await filesInDirectory(directory)) {
         const fileName = path.basename(sourcePath);
         const media = workspaceMediaInfo(fileName);
@@ -245,13 +248,63 @@ export class AssetLibrary {
           !media ||
           (category === "video" ? media.mediaType !== "video" : media.mediaType !== "image")
         ) continue;
+        const sourceKey = `local-folder:${category}:${sourcePath}`;
+        seenSourceKeys.push(sourceKey);
         await this.addFile(fileName, sourcePath, {
           category,
           origin: "local",
-          sourceKey: `local-folder:${category}:${sourcePath}`,
+          sourceKey,
         });
       }
+      await this.reconcileSourceFiles(category, "local-folder", seenSourceKeys, shouldRetainAsset);
     }
+  }
+
+  async reconcileSourceFiles(
+    category: LibrarySourceFolderCategory,
+    source: "local-folder" | "browser-folder",
+    seenSourceKeys: readonly string[],
+    shouldRetainAsset?: (assetId: string) => Promise<boolean>,
+  ): Promise<void> {
+    const prefix = `${source}:${category}:`;
+    if (seenSourceKeys.some((sourceKey) => !sourceKey.startsWith(prefix) || sourceKey.length > 4_000))
+      throw new AssetLibraryError("Invalid Library source key", 400);
+    const seen = new Set(seenSourceKeys);
+    await this.#mutate(async () => {
+      const stale = Object.entries(this.#state.sources)
+        .filter(([sourceKey]) => sourceKey.startsWith(prefix) && !seen.has(sourceKey));
+      if (!stale.length) return;
+
+      const staleIds = new Set(stale.map(([, id]) => id));
+      const sources = Object.fromEntries(
+        Object.entries(this.#state.sources).filter(([sourceKey]) => !sourceKey.startsWith(prefix) || seen.has(sourceKey)),
+      );
+      const retainedIds = new Set(Object.values(sources));
+      const staleAssetIds = [...new Set(stale.map(([, id]) => id))]
+        .filter((id) => !retainedIds.has(id));
+      const protectedIds = new Set(
+        shouldRetainAsset
+          ? (await Promise.all(staleAssetIds.map(async (id) => (await shouldRetainAsset(id)) ? id : undefined)))
+            .filter((id): id is string => id !== undefined)
+          : [],
+      );
+      const removedAssets = this.#state.assets.filter((asset) =>
+        staleIds.has(asset.id) &&
+        !retainedIds.has(asset.id) &&
+        !protectedIds.has(asset.id) &&
+        asset.origin === "local" &&
+        asset.category === category,
+      );
+      const removedIds = new Set(removedAssets.map((asset) => asset.id));
+      const state = {
+        ...this.#state,
+        assets: this.#state.assets.filter((asset) => !removedIds.has(asset.id)),
+        sources,
+      };
+      await this.#write(state);
+      this.#state = state;
+      await Promise.all(removedAssets.map((asset) => rm(this.#contentPath(asset.id, asset.name), { force: true })));
+    });
   }
 
   async content(id: string): Promise<{ asset: LibraryAsset; absolutePath: string }> {
@@ -450,13 +503,7 @@ async function filesInDirectory(directory: string): Promise<string[]> {
   const pending = [directory];
   while (pending.length) {
     const current = pending.pop()!;
-    let entries;
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch (error) {
-      if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
-      throw error;
-    }
+    const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       const absolutePath = path.join(current, entry.name);
       if (entry.isDirectory()) pending.push(absolutePath);

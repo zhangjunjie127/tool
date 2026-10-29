@@ -12,7 +12,7 @@ and the tools it uses to verify results.
   Agent-only representation or hidden editing API.
 - **The public contract is enough.** [runtime.md](runtime.md), the project
   `AGENTS.md` and `README.md`, and `schemas/` are sufficient to build normal
-  content. The OhMyGame Runtime source is open for understanding edge cases,
+  content. The puteng game Runtime source is open for understanding edge cases,
   but projects never copy or modify it.
 - **Verify, don't assume.** A change is finished when validation passes,
   every surface compiles, and the affected route has been exercised in the

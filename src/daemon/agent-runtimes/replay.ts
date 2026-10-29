@@ -19,7 +19,7 @@ interface ReplayMessage {
 type Block = Record<string, unknown>;
 
 /**
- * Prepares a conversation a coding agent worked in for OhMyGame's own agent.
+ * Prepares a conversation a coding agent worked in for puteng game's own agent.
  * A native turn is stored as Pi messages so Undo, branches and the timeline
  * work, but its tool calls use the CLI's tools: names Pi may not have (Skill,
  * Agent, task, web_search) and arguments that do not fit Pi's tools of the

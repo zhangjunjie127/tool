@@ -7,6 +7,10 @@ import {
   playableNodeById,
 } from "./playable-graph.js";
 import {
+  playableBackdropAsset,
+  playableBackdropLoops,
+} from "./playable-backdrop.js";
+import {
   createPlayableNavigation,
   navigatePlayableBack,
   navigatePlayableSignal,
@@ -39,6 +43,11 @@ import {
   PlayableStateError,
   setPlayableState,
 } from "./playable-state.js";
+import {
+  createPlayableSettingsService,
+  type PlayableSettingsService,
+  type PlayableTranscriptionProvider,
+} from "./playable-settings.js";
 
 export interface PlayableSave {
   version: 1;
@@ -70,6 +79,7 @@ export interface PlayableSurfaceHost {
   mountNode(
     surface: CompiledPlayableSurface,
     context: Omit<PlayableNodeContext, "root">,
+    onBackdropVideoEnded?: () => void,
   ): Promise<PlayableMountedSurface>;
 }
 
@@ -89,11 +99,17 @@ export interface NodeRuntimeOptions {
   /** Defaults to memory, so nothing seen outlasts the session. */
   seenStore?: PlayableSeenStore;
   assetUrls: Readonly<Record<string, string>>;
+  /** Loads the destination Node's Assets before its surface mounts. */
+  ensureAssets?: (assetIds: readonly string[]) => Promise<void>;
   policy?: NodeRuntimePolicy;
   /** Node to enter instead of `entryNodeId`. */
   startNodeId?: string;
   /** Overrides applied to `initialState` for this session; keys must be declared. */
   previewState?: JsonObject;
+  /** Player preferences are independent from the story save slot. */
+  settings?: PlayableSettingsService;
+  /** Optional provider adapter for generating subtitle cues from declared video Assets. */
+  transcriptionProvider?: PlayableTranscriptionProvider;
   now?: () => Date;
   onError?: (error: unknown) => void;
   /** Called whenever the diagnostics snapshot may have changed. */
@@ -195,6 +211,7 @@ interface SurfaceToken {
   surfaceId: string;
   active: boolean;
   navigationReady: boolean;
+  onNavigationReady?: () => void;
 }
 
 export class NodeRuntime {
@@ -204,6 +221,9 @@ export class NodeRuntime {
   readonly #surfaceHost: PlayableSurfaceHost;
   readonly #saveStore: PlayableSaveStore;
   readonly #seenStore: PlayableSeenStore;
+  readonly #settings: PlayableSettingsService;
+  readonly #transcriptionProvider?: PlayableTranscriptionProvider;
+  readonly #ensureAssets?: NodeRuntimeOptions["ensureAssets"];
   #incompatibleSave = false;
   readonly #assetUrls: Readonly<Record<string, string>>;
   readonly #now: () => Date;
@@ -246,6 +266,9 @@ export class NodeRuntime {
     this.#surfaceHost = options.surfaceHost;
     this.#saveStore = options.saveStore;
     this.#seenStore = options.seenStore ?? new MemoryPlayableSeenStore();
+    this.#settings = options.settings ?? createPlayableSettingsService();
+    this.#transcriptionProvider = options.transcriptionProvider;
+    this.#ensureAssets = options.ensureAssets;
     this.#assetUrls = options.assetUrls;
     this.#now = options.now ?? (() => new Date());
     this.#onError = options.onError ?? (() => undefined);
@@ -306,6 +329,7 @@ export class NodeRuntime {
       this.#activeNode = await this.#mountNode(this.#navigation.currentNodeId);
       this.#assertNotDisposed();
       this.#activeNode.token.navigationReady = true;
+      this.#activeNode.token.onNavigationReady?.();
       this.#see("nodes", this.#navigation.currentNodeId);
     } catch (cause) {
       if (!this.#disposed) this.#failed = true;
@@ -524,6 +548,7 @@ export class NodeRuntime {
         await this.#disposeActiveSurface(previous);
         this.#assertNotDisposed();
         mounted.token.navigationReady = true;
+        mounted.token.onNavigationReady?.();
       } catch (cause) {
         if (this.#activeNode !== mounted)
           await this.#disposeActiveSurface(mounted);
@@ -539,14 +564,6 @@ export class NodeRuntime {
     else this.#leftStoryAt = leftStoryAt;
   }
 
-  async #failRuntime(): Promise<void> {
-    this.#failed = true;
-    this.#started = false;
-    await this.#disposeActiveSurface(this.#activeNode);
-    this.#activeNode = undefined;
-    this.#stateListeners.clear();
-  }
-
   async #mountNode(nodeId: string): Promise<ActiveSurface> {
     const node = playableNodeById(this.#graph, nodeId);
     if (!node)
@@ -560,20 +577,53 @@ export class NodeRuntime {
         "missing-compiled-surface",
         `Compiled Playable Node "${nodeId}" is missing.`,
       );
+    await this.#ensureAssets?.(node.assets);
+    this.#assertNotDisposed();
     const token: SurfaceToken = {
       surfaceId: nodeId,
       active: true,
       navigationReady: false,
     };
     const abortController = new AbortController();
+    const outgoingEdges = this.#graph.edges.filter(
+      (edge) => edge.source.nodeId === nodeId,
+    );
+    const soleStoryExit =
+      node.videoEndAutoAdvance &&
+      outgoingEdges.length === 1 &&
+      node.signals.find(
+        (signal) => signal.id === outgoingEdges[0]!.source.signal,
+      )?.role !== "navigation" &&
+      playableBackdropAsset(surface.html)?.type === "video" &&
+      !playableBackdropLoops(surface.html)
+        ? outgoingEdges[0]!.source.signal
+        : undefined;
+    let backdropVideoEnded = false;
+    let autoAdvanceStarted = false;
+    const advanceAfterReadiness = () => {
+      if (!backdropVideoEnded || autoAdvanceStarted || !soleStoryExit) return;
+      autoAdvanceStarted = true;
+      void this.#emit(token, soleStoryExit).catch((cause: unknown) =>
+        this.#recordError(cause, nodeId),
+      );
+    };
+    if (soleStoryExit) token.onNavigationReady = advanceAfterReadiness;
     const context: Omit<PlayableNodeContext, "root"> = {
       ...this.#baseContext(token, abortController, node.assets),
       navigation: {
-        emit: this.#guardAsync(token, (signal: string) =>
-          this.#emit(token, signal),
-        ),
+        emit: this.#guardAsync(token, (signal: string) => {
+          if (
+            soleStoryExit &&
+            (!backdropVideoEnded || autoAdvanceStarted)
+          )
+            return Promise.resolve();
+          return this.#emit(token, signal);
+        }),
         fail: this.#guardAsync(token, (signal: string) =>
-          this.#emit(token, signal),
+          soleStoryExit &&
+          (!backdropVideoEnded || autoAdvanceStarted)
+            ? Promise.resolve()
+            : this.#emit(token, signal),
         ),
         back: this.#guardAsync(token, () => this.#back(token)),
         connected: this.#guard(token, (signal: string) => {
@@ -584,7 +634,16 @@ export class NodeRuntime {
       },
     };
     try {
-      const mounted = await this.#surfaceHost.mountNode(surface, context);
+      const mounted = await this.#surfaceHost.mountNode(
+        surface,
+        context,
+        soleStoryExit
+          ? () => {
+              backdropVideoEnded = true;
+              advanceAfterReadiness();
+            }
+          : undefined,
+      );
       await this.#validateMountedSurface(mounted);
       return { token, abortController, mounted };
     } catch (cause) {
@@ -623,6 +682,12 @@ export class NodeRuntime {
         url: this.#guard(token, (id: string) =>
           this.#assetUrl(token, declaredAssets, id),
         ),
+        list: this.#guard(token, () =>
+          declaredAssets.flatMap((id) => {
+            const asset = this.#graph.assets[id];
+            return asset ? [{ id, type: asset.type }] : [];
+          }),
+        ),
       },
       state: this.#stateService(token, abortController.signal),
       session: {
@@ -631,6 +696,36 @@ export class NodeRuntime {
         continue: this.#guardAsync(token, () => this.#continue(token)),
         save: this.#guardAsync(token, () => this.#save(token)),
         restart: this.#guardAsync(token, () => this.#restart(token)),
+      },
+      settings: this.#settings,
+      transcription: {
+        available: this.#transcriptionProvider !== undefined,
+        transcribe: async (assetId, language = this.#settings.get("language")) => {
+          this.#assertSurfaceActive(token);
+          const asset = this.#graph.assets[assetId];
+          if (
+            !declaredAssets.includes(assetId) ||
+            asset?.type !== "video"
+          )
+            throw new NodeRuntimeError(
+              "undeclared-asset",
+              `Subtitle transcription requires a declared video Asset "${assetId}".`,
+            );
+          if (!this.#transcriptionProvider)
+            throw new Error(
+              "No subtitle transcription provider is configured.",
+            );
+          try {
+            return await this.#transcriptionProvider.transcribe({
+              assetId,
+              language,
+              signal: abortController.signal,
+            });
+          } catch (cause) {
+            this.#reportError(cause, token.surfaceId);
+            throw cause;
+          }
+        },
       },
       story: {
         map: this.#guard(token, () => {
@@ -806,14 +901,6 @@ export class NodeRuntime {
 
   async #restart(token: SurfaceToken): Promise<void> {
     this.#assertNavigationReady(token);
-    if (this.#policy === "report") {
-      this.#report({
-        kind: "restart",
-        targetNodeId: this.#graph.entryNodeId,
-        at: this.#now().toISOString(),
-      });
-      return;
-    }
     await this.#navigate(
       () => createPlayableNavigation(this.#graph),
       () => {

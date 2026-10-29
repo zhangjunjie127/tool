@@ -316,7 +316,7 @@ describe("desktop release publication", () => {
       mkdirSync(path.join(directory, "release-assets"));
       for (const extension of ["exe", "dmg", "zip"]) {
         writeFileSync(
-          path.join(directory, "release-assets", `OhMyGame.${extension}`),
+          path.join(directory, "release-assets", `puteng game.${extension}`),
           "fixture",
         );
       }

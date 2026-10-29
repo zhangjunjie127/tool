@@ -59,6 +59,55 @@ describe("Node Graph contract", () => {
     expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
   });
 
+  it("accepts the optional video-end auto-advance Scene setting", () => {
+    const graph = createNodeGraphFixture();
+    graph.nodes[0]!.videoEndAutoAdvance = true;
+
+    expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("accepts one game-wide settings button with an image Asset", () => {
+    const graph = createNodeGraphFixture();
+    graph.settingsButton = {
+      x: 0.04,
+      y: 0.08,
+      iconAssetId: "background",
+    };
+
+    expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("rejects a settings button icon that is missing or not an image", () => {
+    const graph = createNodeGraphFixture();
+    graph.settingsButton = { x: 0.04, y: 0.08, iconAssetId: "theme" };
+
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-settings-button-asset",
+        path: "/settingsButton/iconAssetId",
+      }),
+    );
+    graph.settingsButton.iconAssetId = "missing";
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-settings-button-asset",
+        path: "/settingsButton/iconAssetId",
+      }),
+    );
+  });
+
+  it("rejects settings button coordinates outside the viewport", () => {
+    const graph = createNodeGraphFixture();
+    graph.settingsButton = { x: 1.1, y: 0.08 };
+
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "schema",
+        path: "/settingsButton/x",
+      }),
+    );
+  });
+
   it("rejects descriptions of Variables with no starting value", () => {
     const graph = createNodeGraphFixture();
     graph.initialState = {};

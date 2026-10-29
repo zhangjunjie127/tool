@@ -474,7 +474,7 @@ describe("coding agent sessions", () => {
     );
     session.dispose();
   });
-  it("records a turn in the conversation the way OhMyGame's own agent does", async () => {
+  it("records a turn in the conversation the way puteng game's own agent does", async () => {
     let commit = 0;
     const { manager, project, conversation, sessionManager, received } = setup(
       [
@@ -915,7 +915,7 @@ describe("coding agent sessions", () => {
     ).toBe("codex-1");
   });
 
-  it("marks planning turns read-only from the tools OhMyGame allows", async () => {
+  it("marks planning turns read-only from the tools puteng game allows", async () => {
     const { manager, project, conversation, drivers } = setup([
       async () => ({ status: "completed" }),
     ]);

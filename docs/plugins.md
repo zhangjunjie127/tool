@@ -1,4 +1,4 @@
-# Native OhMyGame plugins
+# Native puteng game plugins
 
 Plugins is the single place to install Skills and MCP services, change configuration, test connections, and authorize services. A plugin may bundle Skills (including supporting scripts, references, and assets), existing MCP servers, or both.
 
@@ -101,7 +101,7 @@ SemVer `version`. The host currently supports format `1`; an omitted field also
 means `1`, so existing native packages remain readable. A newer format is
 rejected during discovery, installation, and archive import with an upgrade
 message; in a marketplace, only the incompatible plugins are skipped. Optional
-`minimumHostVersion` is a SemVer release of OhMyGame required by the package.
+`minimumHostVersion` is a SemVer release of puteng game required by the package.
 It is checked against the running application's version, including prereleases.
 Already installed plugins remain listed after a downgrade, so they can still be
 exported or uninstalled.
@@ -140,7 +140,7 @@ The legacy `connections` manifest field is a provider reference. It neither owns
 
 The Add plugin menu supports folder/Git installation, manual MCP configuration, and a dedicated AI assistant. Existing MCP configuration JSON can be pasted into the manual dialog. Credentials in environment/header fields are extracted into private configuration rather than copied into the generated package. The detail page offers configuration forms, definition editing, tests, and HTTP authorization controls.
 
-The library groups plugins into **Public** and **Personal**. Public contains plugins provided by OhMyGame, including bundled and preinstalled packages, plus catalog entries whose trusted adapter marks the marketplace as official. Personal contains user-created plugins and user imports from folders, Git repositories, and third-party marketplaces. These are display groups: plugin IDs, original marketplace identities, and configuration keys are preserved. Imported archives always enter Personal, even when their source metadata came from a public catalog. Both groups expose plugin switches, including for bundled plugins. Bundled packages cannot be uninstalled.
+The library groups plugins into **Public** and **Personal**. Public contains plugins provided by puteng game, including bundled and preinstalled packages, plus catalog entries whose trusted adapter marks the marketplace as official. Personal contains user-created plugins and user imports from folders, Git repositories, and third-party marketplaces. These are display groups: plugin IDs, original marketplace identities, and configuration keys are preserved. Imported archives always enter Personal, even when their source metadata came from a public catalog. Both groups expose plugin switches, including for bundled plugins. Bundled packages cannot be uninstalled.
 
 Create with AI opens a dedicated Plugin Builder page with a conversation and four preview views: Overview, Files, Setup, and Checks. Each new plugin gets its own persisted workspace. The Plugins page lists AI workspaces that can be resumed or deleted; unsent input and the selected model are saved per workspace on the current device.
 

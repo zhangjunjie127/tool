@@ -33,7 +33,7 @@ const externalFixture = await mkdtemp(
 );
 const workspace = path.join(root, "workspace");
 await mkdir(workspace);
-// A Skill of OhMyGame's own, staged for the session; its code proves the agent read it.
+// A Skill of puteng game's own, staged for the session; its code proves the agent read it.
 const skillCode = "LIVE-SKILL-" + randomUUID().slice(0, 8);
 const skillDirectory = path.join(root, "pi", "skills", "live-check");
 await mkdir(skillDirectory, { recursive: true });
@@ -213,7 +213,7 @@ try {
   );
   base = `/projects/${project.id}/conversations/${conversation.id}`;
   const first = await prompt(
-    "This is a narrowly scoped integration test. Write runtime-proof.txt containing exactly FIRST followed by a newline. Then call the OhMyGame canvas_check tool once; if no canvas exists, just report that result. Do not create canvas files or run builds, installs or network commands. Reply DONE.",
+    "This is a narrowly scoped integration test. Write runtime-proof.txt containing exactly FIRST followed by a newline. Then call the puteng game canvas_check tool once; if no canvas exists, just report that result. Do not create canvas files or run builds, installs or network commands. Reply DONE.",
   );
   assert.equal(
     await readFile(path.join(workspace, "runtime-proof.txt"), "utf8"),
@@ -225,7 +225,7 @@ try {
         item.type === "dynamicToolCall" &&
         JSON.stringify(item).includes("canvas_check"),
     ),
-    "OhMyGame tool bridge was not called",
+    "puteng game tool bridge was not called",
   );
   const second = await prompt(
     "Replace runtime-proof.txt with exactly SECOND followed by a newline. Do nothing else. Reply DONE.",

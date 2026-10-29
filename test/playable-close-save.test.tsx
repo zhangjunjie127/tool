@@ -8,6 +8,7 @@ import type { ProjectState } from "../src/shared/contracts.js";
 import type { NodeCodebaseUpdate } from "../src/shared/playable-codebase.js";
 import type { ReactFlowInstance } from "@xyflow/react";
 import { desktopSave } from "../src/renderer/desktop-save.js";
+import { parsePlayableMotionConfig } from "../src/shared/playable-motion.js";
 
 const codebase = createStarterCodebaseWithScene("Close save", { width: 1280, height: 720 });
 const update = vi.fn(async (_projectId: string, _next: NodeCodebaseUpdate) => ({ revision: "saved" }));
@@ -202,6 +203,54 @@ it("persists both button image states when motion is saved immediately after the
   expect(node.assets).toEqual(expect.arrayContaining([normal, pressed]));
   expect(html).toContain(`data-putenggame-button-asset="${normal}"`);
   expect(html).toContain(`data-putenggame-button-pressed-asset="${pressed}"`);
+});
+
+it("persists a changed press-effect color on the selected button", async () => {
+  htmlSource = [
+    '<button data-putenggame-motion="button-feedback"',
+    ' data-putenggame-motion-mode="visual"',
+    ' data-putenggame-motion-duration="0.1"',
+    ' data-putenggame-motion-feedback="hover-press"',
+    ' data-putenggame-motion-press-effect="green-particle-burst"',
+    ' data-putenggame-motion-effect-color="#00ff00">Start</button>',
+  ].join("");
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-open-scene]")!.click());
+
+  await act(async () => {
+    await workbenchProps!.onWriteMotion(
+      {
+        nodeId: "start",
+        source: "nodes/start/index.html:1:1",
+        cssPath: "button",
+        tag: "button",
+        text: "Start",
+        box: { x: 0, y: 0, width: 10, height: 10 },
+      },
+      {
+        kind: "button-feedback",
+        mode: "visual",
+        duration: 0.1,
+        feedback: "hover-press",
+        pressEffect: "green-particle-burst",
+        effectColor: "#fe4120",
+        effectAnchorX: 50,
+        effectAnchorY: 50,
+      },
+      undefined,
+      false,
+    );
+  });
+
+  const parsedButton = document.createElement("div");
+  parsedButton.innerHTML = htmlSource;
+  expect(
+    parsePlayableMotionConfig(parsedButton.querySelector("button")!),
+  ).toEqual(
+    expect.objectContaining({
+      pressEffect: "green-particle-burst",
+      effectColor: "#fe4120",
+    }),
+  );
 });
 
 it("undoes and redoes a scene connection one step at a time without moving the canvas", async () => {

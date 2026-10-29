@@ -1,5 +1,5 @@
 import type { LibrarySourceFolderCategory, LibrarySourceFolders, LibraryUploadMediaType } from "../shared/contracts.js";
-import { uploadLibraryAsset } from "./api.js";
+import { reconcileBrowserLibraryFolder, uploadLibraryAsset } from "./api.js";
 
 interface BrowserDirectoryHandle {
   name: string;
@@ -60,6 +60,7 @@ export async function chooseBrowserLibraryFolder(
 export async function clearBrowserLibraryFolder(
   category: LibrarySourceFolderCategory,
 ): Promise<void> {
+  await reconcileBrowserLibraryFolder(category, []);
   const db = await openDatabase();
   await transaction(db, "readwrite", (store) => store.delete(category));
 }
@@ -108,6 +109,10 @@ async function syncFolder(folder: StoredFolder): Promise<void> {
       lastModified: file.lastModified,
     };
   });
+  await reconcileBrowserLibraryFolder(
+    category,
+    [...seenFiles].map((relativePath) => `browser-folder:${category}:${relativePath}`),
+  );
   await writeFolder({
     ...folder,
     syncedFiles: Object.fromEntries(

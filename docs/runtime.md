@@ -10,7 +10,7 @@
 │  project workspaces · preview dev server            │
 └──────────────┬──────────────────────────────────────┘
                │ Publish (static build only)
-┌──────────────┴──────── OhMyGame Cloud ──────────────┐
+┌──────────────┴──────── puteng game Cloud ──────────────┐
 │  immutable deployments · Community                  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -130,12 +130,12 @@ screens. Selecting the provider step also returns from its inline forms to
 the provider list. Step navigation is disabled while saving. The welcome's
 illustration plays once per visit in 5.2 seconds. Only the forming game world
 is visible at first: terrain rises, paths unfold, water reshapes, and trees
-grow in sequence. Its outline then morphs into a small OhMyGame logo beside
+grow in sequence. Its outline then morphs into a small puteng game logo beside
 the wordmark, followed by **Your own game studio.** and **Next**. Hidden
 controls stay out of keyboard navigation. Reduced-motion preferences show the
 final logo, title, and controls immediately. The connection screen reuses
 the daemon's provider authentication flow and custom-provider form; it does
-not require an OhMyGame cloud account. The add button beside provider search
+not require a puteng game cloud account. The add button beside provider search
 opens that form inline. Settings uses the same form in its existing dialog.
 Saving or cancelling returns to the provider list without adding a persisted
 setup step. Image, video, and 3D connections and default models are configured
@@ -214,7 +214,7 @@ must not contain a Clash forward-proxy address.
 
 Pi runs in trusted-local mode. The workspace is Pi's working directory, but
 `cwd` is not an operating-system security boundary, and enabled Pi tools run
-without an OhMyGame approval prompt. Provider credentials stay in the daemon
+without a puteng game approval prompt. Provider credentials stay in the daemon
 and are never written to workspaces or returned to the renderer.
 
 The desktop app writes the daemon's access token to the daemon's stdin, not
@@ -269,7 +269,7 @@ so code changes can hot-update both. See [preview lifecycle](preview-runtime.md)
 for storage, diagnostics, and window details.
 
 The desktop runtime exposes game interaction and verification as the Pi custom
-tool `game_use`. This is an OhMyGame core capability rather than a Plugin:
+tool `game_use`. This is a puteng game core capability rather than a Plugin:
 
 1. The current Web adapter starts or reuses the project's local Preview and
    accepts only a path, query, or hash on that Preview origin.

@@ -6,10 +6,10 @@ import { PLUGIN_AUTHORING_RULES } from "./plugin-authoring.js";
 
 const PLUGIN_CREATOR_SKILL = `---
 name: plugin-creator
-description: Create or update an OhMyGame plugin from a natural-language request, validate it, and install it for the user.
+description: Create or update a puteng game plugin from a natural-language request, validate it, and install it for the user.
 ---
 
-# OhMyGame Plugin Creator
+# puteng game Plugin Creator
 
 Create or update a plugin directory inside the current workspace. Read existing files before editing.
 

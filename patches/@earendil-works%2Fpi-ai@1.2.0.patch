@@ -239,7 +239,7 @@ index 0000000000000000000000000000000000000000..53fb4cb64fa706f8a19a8e6fbac1ea2e
 --- /dev/null
 +++ b/dist/utils/provider-failure.js
 @@ -0,0 +1,77 @@
-+// OhMyGame compatibility patch: preserve provider failure diagnostics without
++// puteng game compatibility patch: preserve provider failure diagnostics without
 +// changing errorMessage, which Pi uses for retry and recovery decisions.
 +export function sanitizeDiagnosticUrl(value) {
 +    if (typeof value !== "string") return undefined;
@@ -324,7 +324,7 @@ index a0e9b83609417e117662a40797153c1b1e71dc01..d1929ae81111f2c861b73e7e97504e37
  export function isRetryableAssistantError(message) {
      if (message.stopReason !== "error" || !message.errorMessage)
          return false;
-+    // OhMyGame's WebSocket adapter preserves provider rejections as diagnostics.
++    // puteng game's WebSocket adapter preserves provider rejections as diagnostics.
 +    // Parameter names such as "timeout" must not turn a rejected request into a retry.
 +    if (message.diagnostics?.some((diagnostic) => diagnostic.type === "provider_failure"
 +        && diagnostic.details?.transport === "websocket"

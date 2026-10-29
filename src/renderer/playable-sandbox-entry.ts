@@ -4,9 +4,15 @@ import {
   type PlayableHostMessage,
   type PlayableElementCopy,
   type PlayablePreviewTool,
+  type PlayablePreviewShortcut,
 } from "../shared/playable-player-protocol.js";
+import { NodeRuntime } from "../shared/playable-runtime.js";
 import {
-  NodeRuntime,
+  createPlayableSettingsService,
+  type PlayableSettingsService,
+  type PlayableGameSettings,
+} from "../shared/playable-settings.js";
+import {
   type PlayableSave,
   type PlayableSaveStore,
   type PlayableSeenStore,
@@ -42,6 +48,34 @@ const reportPlayerActivity = (event: Event) => {
 for (const type of ["pointermove", "pointerdown", "click", "keydown", "touchstart"])
   document.addEventListener(type, reportPlayerActivity, true);
 
+document.addEventListener(
+  "keydown",
+  (event) => {
+    const current = session;
+    if (
+      !current?.preview ||
+      event.defaultPrevented ||
+      event.repeat ||
+      event.isComposing ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      isTextEntry(event.target)
+    )
+      return;
+    const shortcut = previewShortcutForKey(event.key);
+    if (!shortcut) return;
+    event.preventDefault();
+    post({
+      kind: "putenggame:playable:keyboard-shortcut",
+      instanceId: current.instanceId,
+      shortcut,
+    });
+  },
+  true,
+);
+
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.source !== window.parent || !isPlayableHostMessage(event.data))
     return;
@@ -49,8 +83,69 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     session?.saveStore.resolve(event.data);
     return;
   }
+  if (event.data.kind === "putenggame:playable:settings-save-result") {
+    session?.settingsStore.resolve(event.data);
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:settings-command") {
+    const current = session;
+    if (current?.instanceId !== event.data.instanceId) return;
+    switch (event.data.action) {
+      case "patch":
+        current.settingsStore.service.patch(event.data.settings);
+        break;
+      case "save":
+        void current.settingsStore.service.save().catch(() => {});
+        break;
+      case "reset":
+        current.settingsStore.service.reset();
+        break;
+      case "discard":
+        current.settingsStore.service.discard();
+        break;
+      case "pause":
+        current.host.setPlayerPaused(true);
+        break;
+      case "resume":
+        current.host.setPlayerPaused(false);
+        break;
+    }
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:assets-result") {
+    const current = session;
+    if (current?.instanceId !== event.data.instanceId) return;
+    const pending = current.pendingAssets.get(event.data.requestId);
+    if (!pending) return;
+    current.pendingAssets.delete(event.data.requestId);
+    if (event.data.error) {
+      pending.reject(new Error(event.data.error));
+      return;
+    }
+    for (const [id, asset] of Object.entries(event.data.assets))
+      current.assetUrls[id] = URL.createObjectURL(
+        asset.blob.type === asset.contentType
+          ? asset.blob
+          : new Blob([asset.blob], { type: asset.contentType }),
+      );
+    pending.resolve();
+    return;
+  }
   if (event.data.kind === "putenggame:playable:pick-start") {
     startPicking(event.data.instanceId, event.data.tool);
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:pick-locks") {
+    if (session?.instanceId === event.data.instanceId)
+      session.host.setPickingLocks(event.data.picks);
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:align-elements") {
+    if (session?.instanceId === event.data.instanceId)
+      session.host.alignPickedToCenter(
+        event.data.reference,
+        event.data.targets,
+      );
     return;
   }
   if (event.data.kind === "putenggame:playable:text-created-result") {
@@ -70,6 +165,34 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (session?.instanceId !== event.data.instanceId) return;
     if (event.data.action === "copy") session.host.copyPickedElements();
     else void session.host.pastePickedElements()?.catch(() => {});
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:vr-inspect") {
+    if (session?.instanceId !== event.data.instanceId) return;
+    post({
+      kind: "putenggame:playable:vr-scene",
+      instanceId: event.data.instanceId,
+      requestId: event.data.requestId,
+      nodeId: event.data.nodeId,
+      buttons: session.host.inspectVrButtons(
+        event.data.nodeId,
+        event.data.viewport,
+      ),
+    });
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:vr-activate") {
+    if (session?.instanceId !== event.data.instanceId) return;
+    session.host.activateVrButton(event.data.nodeId, event.data.buttonId);
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:vr-press") {
+    if (session?.instanceId !== event.data.instanceId) return;
+    session.host.pressVrButton(
+      event.data.nodeId,
+      event.data.buttonId,
+      event.data.phase,
+    );
     return;
   }
   if (event.data.kind === "putenggame:playable:media-command") {
@@ -137,22 +260,50 @@ async function startSession(
 ): Promise<void> {
   await disposeSession();
   const assetUrls: Record<string, string> = {};
+  const pendingAssets = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  let nextAssetRequest = 0;
   try {
     for (const [id, asset] of Object.entries(message.assets)) {
       assetUrls[id] = URL.createObjectURL(
-        new Blob([asset.bytes], { type: asset.contentType }),
+        asset.blob.type === asset.contentType
+          ? asset.blob
+          : new Blob([asset.blob], { type: asset.contentType }),
       );
     }
     const saveStore = new ParentSaveStore(message.instanceId, message.save);
+    const settingsStore = new ParentSettingsStore(
+      message.instanceId,
+      message.settings,
+    );
     const host = new DocumentPlayableSurfaceHost(document);
+    const ensureAssets = (assetIds: readonly string[]) => {
+      const missing = [...new Set(assetIds)].filter((id) => !assetUrls[id]);
+      if (!missing.length) return Promise.resolve();
+      const requestId = String(++nextAssetRequest);
+      const result = new Promise<void>((resolve, reject) => {
+        pendingAssets.set(requestId, { resolve, reject });
+      });
+      post({
+        kind: "putenggame:playable:assets-request",
+        instanceId: message.instanceId,
+        requestId,
+        assetIds: missing,
+      });
+      return result;
+    };
     const runtime = new NodeRuntime({
       graph: message.definition.graph,
       compiled: message.definition.compiled,
       graphSignature: message.definition.graphSignature,
       surfaceHost: host,
       saveStore,
+      settings: settingsStore.service,
       seenStore: new ParentSeenStore(message.instanceId, message.seen),
       assetUrls,
+      ensureAssets,
       ...message.preview,
       onChange: () => scheduleSnapshot(message.instanceId),
       onError: (error) =>
@@ -176,7 +327,9 @@ async function startSession(
       runtime,
       host,
       saveStore,
+      settingsStore,
       assetUrls,
+      pendingAssets,
       disposeLanguage,
     };
     await runtime.start();
@@ -259,6 +412,10 @@ async function disposeSession(): Promise<void> {
   session = undefined;
   if (!current) return;
   current.saveStore.dispose();
+  current.settingsStore.dispose();
+  for (const pending of current.pendingAssets.values())
+    pending.reject(new Error("The preview closed before Assets loaded."));
+  current.pendingAssets.clear();
   current.disposeLanguage();
   await current.runtime.dispose();
   current.host.destroy();
@@ -340,17 +497,81 @@ class ParentSeenStore implements PlayableSeenStore {
   }
 }
 
+class ParentSettingsStore {
+  readonly #pending = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  #nextRequest = 0;
+  readonly service: PlayableSettingsService;
+
+  constructor(
+    readonly instanceId: string,
+    initialSettings: unknown,
+  ) {
+    this.service = createPlayableSettingsService(initialSettings, (settings) =>
+      this.persist(settings),
+    );
+    this.service.subscribe((settings) => {
+      applySandboxLanguage();
+      post({
+        kind: "putenggame:playable:settings-change",
+        instanceId,
+        settings: settings as PlayableGameSettings,
+      });
+    });
+  }
+
+  resolve(
+    message: Extract<
+      PlayableHostMessage,
+      { kind: "putenggame:playable:settings-save-result" }
+    >,
+  ): void {
+    if (message.instanceId !== this.instanceId) return;
+    const pending = this.#pending.get(message.requestId);
+    if (!pending) return;
+    this.#pending.delete(message.requestId);
+    if (message.error) pending.reject(new Error(message.error));
+    else pending.resolve();
+  }
+
+  dispose(): void {
+    for (const pending of this.#pending.values())
+      pending.reject(new Error("The player closed before settings were saved."));
+    this.#pending.clear();
+  }
+
+  private persist(settings: Readonly<PlayableGameSettings>): Promise<void> {
+    const requestId = String(++this.#nextRequest);
+    const result = new Promise<void>((resolve, reject) => {
+      this.#pending.set(requestId, { resolve, reject });
+    });
+    post({
+      kind: "putenggame:playable:settings-save",
+      instanceId: this.instanceId,
+      requestId,
+      settings: settings as PlayableGameSettings,
+    });
+    return result;
+  }
+}
+
 interface SandboxSession {
   instanceId: string;
   preview: boolean;
   runtime: NodeRuntime;
   host: DocumentPlayableSurfaceHost;
   saveStore: ParentSaveStore;
+  settingsStore: ParentSettingsStore;
   assetUrls: Record<string, string>;
+  pendingAssets: Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >;
   disposeLanguage: () => void;
 }
 
-const SANDBOX_LANGUAGE_KEY = "putenggame:language";
 const sandboxOriginalText = new WeakMap<Text, string>();
 
 const SANDBOX_ZH: Record<string, string> = {
@@ -382,16 +603,55 @@ const SANDBOX_ZH: Record<string, string> = {
   '"You came alone. That was brave."': "“你独自一人来的。很勇敢。”",
   "Click to continue ▸": "点击继续 ▸",
   Back: "返回",
+  "PLAYER MENU": "玩家设置",
+  "Video volume": "视频音量",
+  "Background music": "背景音乐",
+  "Music volume": "音乐音量",
+  "UI sounds": "界面音效",
+  "UI sound volume": "界面音效音量",
+  Sound: "声音",
+  Display: "显示",
+  Brightness: "亮度",
+  "Display mode": "显示模式",
+  Fullscreen: "全屏",
+  Windowed: "窗口",
+  Resolution: "分辨率",
+  Auto: "自动",
+  Subtitles: "字幕",
+  "Show subtitles": "显示字幕",
+  "Subtitle size": "字幕字号",
+  "Video for subtitle timing": "字幕对应视频",
+  "No declared videos": "没有已声明的视频",
+  End: "结束",
+  "Subtitle text": "字幕内容",
+  "Remove subtitle": "删除字幕",
+  "Check subtitle timing.": "请检查字幕时间。",
+  "Speech transcription provider connected": "语音转写服务已连接",
+  "Speech transcription provider not connected": "尚未连接语音转写服务",
+  "Add subtitle line": "添加字幕行",
+  "Generate subtitles": "生成字幕",
+  Other: "其他",
+  "Message hints": "消息提示",
+  Language: "语言",
+  "Save settings": "保存设置",
+  Reset: "重置",
+  "Unsaved settings": "未保存的设置",
+  "Save your changes before leaving?": "离开前要保存更改吗？",
+  "Save and return": "保存并返回",
+  "Discard and return": "放弃更改并返回",
+  "Keep editing": "继续编辑",
+  "Unsaved changes": "有未保存的更改",
+  "Settings saved": "设置已保存",
+  "Could not save settings.": "设置保存失败。",
+  "Could not return.": "无法返回。",
+  "Could not generate subtitles.": "字幕生成失败。",
+  "Language changed": "语言已切换",
+  "Defaults restored. Save to keep them.": "已恢复默认值，保存后生效。",
+  "Subtitle draft generated. Review and save it.": "字幕草稿已生成，请检查并保存。",
 };
 
 function sandboxLanguage(): "zh-CN" | "en-US" {
-  try {
-    return localStorage.getItem(SANDBOX_LANGUAGE_KEY) === "en-US"
-      ? "en-US"
-      : "zh-CN";
-  } catch {
-    return "zh-CN";
-  }
+  return session?.settingsStore.service.get("language") ?? "zh-CN";
 }
 
 function translateSandboxText(value: string): string {
@@ -475,6 +735,32 @@ function postSnapshot(instanceId: string): void {
 
 function post(message: PlayableFrameMessage): void {
   window.parent.postMessage(message, "*");
+}
+
+function previewShortcutForKey(key: string): PlayablePreviewShortcut | undefined {
+  switch (key.toLowerCase()) {
+    case "s":
+      return "select";
+    case "t":
+      return "text";
+    case "m":
+      return "move";
+    case "d":
+      return "draw";
+    case " ":
+    case "spacebar":
+      return "toggle-playback";
+    default:
+      return undefined;
+  }
+}
+
+function isTextEntry(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+  );
 }
 
 function errorMessage(value: unknown): string {

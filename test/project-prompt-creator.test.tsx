@@ -13,7 +13,7 @@ describe("project prompt creator workspace", () => {
     vi.stubGlobal("window", { ohMyGameDesktop: { selectProjectDirectory: async () => undefined } });
     const html = render();
     expect(html).toContain("New folder");
-    expect(html).toContain('aria-label="Workspace: new folder in OhMyGame storage"');
+    expect(html).toContain('aria-label="Workspace: new folder in puteng game storage"');
   });
 
   it("hides the workspace selector without the desktop folder picker", () => {

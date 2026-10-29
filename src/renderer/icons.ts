@@ -39,6 +39,8 @@ import {
   HomeIcon,
   InfoCircleIcon,
   LaptopMinimalisticIcon,
+  LockIcon,
+  LockUnlockedIcon,
   LayersIcon,
   LightbulbIcon,
   Logout2Icon,
@@ -100,6 +102,44 @@ export const Circle = forwardRef<SVGSVGElement, IconProps>(function Circle({ siz
 
 export const CircleDot = forwardRef<SVGSVGElement, IconProps>(function CircleDot({ size = 24, ...props }, ref) {
   return createElement("svg", { ref, width: size, height: size, viewBox: "0 0 24 24", fill: "none", ...props }, createElement("circle", { cx: "12", cy: "12", r: "9", stroke: "currentColor", strokeWidth: "1.5" }), createElement("circle", { cx: "12", cy: "12", r: "3", fill: "currentColor" }));
+});
+
+export const GuideHorizontal = forwardRef<SVGSVGElement, IconProps>(function GuideHorizontal({ size = 24, ...props }, ref) {
+  return createElement(
+    "svg",
+    { ref, width: size, height: size, viewBox: "0 0 24 24", fill: "none", ...props },
+    ([[4, 8], [10, 14], [16, 20]] as const).map(([x1, x2]) =>
+      createElement("line", {
+        key: x1,
+        x1,
+        y1: 12,
+        x2,
+        y2: 12,
+        stroke: "currentColor",
+        strokeWidth: "1.5",
+        strokeLinecap: "round",
+      }),
+    ),
+  );
+});
+
+export const GuideVertical = forwardRef<SVGSVGElement, IconProps>(function GuideVertical({ size = 24, ...props }, ref) {
+  return createElement(
+    "svg",
+    { ref, width: size, height: size, viewBox: "0 0 24 24", fill: "none", ...props },
+    ([[4, 8], [10, 14], [16, 20]] as const).map(([y1, y2]) =>
+      createElement("line", {
+        key: y1,
+        x1: 12,
+        y1,
+        x2: 12,
+        y2,
+        stroke: "currentColor",
+        strokeWidth: "1.5",
+        strokeLinecap: "round",
+      }),
+    ),
+  );
 });
 
 export const Square = forwardRef<SVGSVGElement, IconProps>(function Square({ size = 24, ...props }, ref) {
@@ -166,6 +206,8 @@ export {
   HeartIcon as Heart,
   SidebarCodeIcon as Columns2,
   FlagIcon as Flag,
+  LockIcon as Lock,
+  LockUnlockedIcon as LockOpen,
   FolderIcon as Folder,
   FolderOpenIcon as FolderOpen,
   GamepadIcon as Gamepad2,

@@ -3,6 +3,10 @@ import type { JsonObject, NodeGraph } from "./playable-nodes.js";
 import type { PlayableTransform, PlayableTranslate } from "./playable-move.js";
 import type { PlayablePickResult } from "./playable-picker.js";
 import type { PlayableSeen } from "./playable-story-map.js";
+import {
+  isPlayableGameSettings,
+  type PlayableGameSettings,
+} from "./playable-settings.js";
 import type { PlayableBackdropEffects } from "./playable-backdrop-effects.js";
 import {
   PLAYABLE_BUTTON_ASSET_SCALE_MAX,
@@ -45,9 +49,17 @@ export interface PlayablePreviewOptions {
  */
 export type PlayablePreviewTool = "select" | "text" | "move";
 
+export type PlayablePreviewShortcut =
+  | "select"
+  | "text"
+  | "move"
+  | "draw"
+  | "toggle-playback";
+
 export type PlayableMediaCommand =
   | { command: "play" }
   | { command: "pause" }
+  | { command: "vr-eye-preview"; nodeId: string; eye: "full" | "left" | "right" }
   | {
       command: "set-backdrop";
       nodeId: string;
@@ -108,6 +120,13 @@ export type PlayableMediaCommand =
       scaleY: number;
     }
   | {
+      command: "element-scale-preview";
+      nodeId: string;
+      cssPath: string;
+      source: string;
+      scale: number;
+    }
+  | {
       command: "motion-progress-preview";
       nodeId: string;
       cssPath: string;
@@ -115,6 +134,8 @@ export type PlayableMediaCommand =
       scale: number;
       offsetX?: number;
       offsetY?: number;
+      circular?: boolean;
+      barLayer?: "bottom" | "top";
       asset: PlayableAssetTransfer;
     }
   | { command: "seek"; time: number };
@@ -123,6 +144,22 @@ export interface PlayableMediaState {
   currentTime: number;
   duration: number;
   paused: boolean;
+  /** Asset behind the current Scene, when it is a declared video backdrop. */
+  backdropAssetId?: string;
+}
+
+export interface PlayableVrButton {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  backgroundColor: string;
+  holdToCharge?: boolean;
+  imageDataUrl?: string;
+  pressedImageDataUrl?: string;
 }
 
 /** Text the author typed over an element in the preview. */
@@ -272,16 +309,30 @@ export interface PlayableAssetTransfer {
   bytes: ArrayBuffer;
 }
 
+/** A runtime Asset shared with the sandbox without eagerly copying its bytes. */
+export interface PlayableRuntimeAsset {
+  contentType: string;
+  blob: Blob;
+}
+
 export type PlayableHostMessage =
   | {
       kind: "putenggame:playable:init";
       instanceId: string;
       definition: NodePlayerDefinition;
-      assets: Record<string, PlayableAssetTransfer>;
+      assets: Record<string, PlayableRuntimeAsset>;
       save?: unknown;
+      settings?: unknown;
       /** What the player has seen in earlier sessions, for the Story Map. */
       seen?: unknown;
       preview?: PlayablePreviewOptions;
+    }
+  | {
+      kind: "putenggame:playable:assets-result";
+      instanceId: string;
+      requestId: string;
+      assets: Record<string, PlayableRuntimeAsset>;
+      error?: string;
     }
   | {
       kind: "putenggame:playable:save-result";
@@ -290,9 +341,57 @@ export type PlayableHostMessage =
       error?: string;
     }
   | {
+      kind: "putenggame:playable:settings-save-result";
+      instanceId: string;
+      requestId: string;
+      error?: string;
+    }
+  | {
+      kind: "putenggame:playable:settings-command";
+      instanceId: string;
+      action: "patch";
+      settings: PlayableGameSettings;
+    }
+  | {
+      kind: "putenggame:playable:settings-command";
+      instanceId: string;
+      action: "save" | "reset" | "discard" | "pause" | "resume";
+    }
+  | {
       kind: "putenggame:playable:pick-start";
       instanceId: string;
       tool: PlayablePreviewTool;
+    }
+  | {
+      kind: "putenggame:playable:pick-locks";
+      instanceId: string;
+      picks: PlayablePickResult[];
+    }
+  | {
+      kind: "putenggame:playable:align-elements";
+      instanceId: string;
+      reference: PlayablePickResult;
+      targets: PlayablePickResult[];
+    }
+  | {
+      kind: "putenggame:playable:vr-inspect";
+      instanceId: string;
+      requestId: string;
+      nodeId: string;
+      viewport: { width: number; height: number };
+    }
+  | {
+      kind: "putenggame:playable:vr-activate";
+      instanceId: string;
+      nodeId: string;
+      buttonId: string;
+    }
+  | {
+      kind: "putenggame:playable:vr-press";
+      instanceId: string;
+      nodeId: string;
+      buttonId: string;
+      phase: "start" | "end";
     }
   | {
       kind: "putenggame:playable:delete-element";
@@ -347,10 +446,27 @@ export type PlayableHostMessage =
 
 export type PlayableFrameMessage =
   | {
+      kind: "putenggame:playable:assets-request";
+      instanceId: string;
+      requestId: string;
+      assetIds: string[];
+    }
+  | {
       kind: "putenggame:playable:save";
       instanceId: string;
       requestId: string;
       save: PlayableSave;
+    }
+  | {
+      kind: "putenggame:playable:settings-save";
+      instanceId: string;
+      requestId: string;
+      settings: PlayableGameSettings;
+    }
+  | {
+      kind: "putenggame:playable:settings-change";
+      instanceId: string;
+      settings: PlayableGameSettings;
     }
   | {
       /** Keep this record; there is no reply, since losing it never stops the game. */
@@ -442,6 +558,18 @@ export type PlayableFrameMessage =
       instanceId: string;
       state: PlayableMediaState;
     }
+  | {
+      kind: "putenggame:playable:vr-scene";
+      instanceId: string;
+      requestId: string;
+      nodeId: string;
+      buttons: PlayableVrButton[];
+    }
+  | {
+      kind: "putenggame:playable:keyboard-shortcut";
+      instanceId: string;
+      shortcut: PlayablePreviewShortcut;
+    }
   | { kind: "putenggame:playable:activity"; instanceId: string }
   | { kind: "putenggame:playable:pick-cancelled"; instanceId: string };
 
@@ -461,9 +589,71 @@ export function isPlayableHostMessage(
       (value.preview === undefined || isRecord(value.preview))
     );
   }
+  if (value.kind === "putenggame:playable:assets-result")
+    return (
+      typeof value.requestId === "string" &&
+      isRecord(value.assets) &&
+      Object.values(value.assets).every(
+        (asset) =>
+          isRecord(asset) &&
+          typeof asset.contentType === "string" &&
+          asset.blob instanceof Blob,
+      ) &&
+      (value.error === undefined || typeof value.error === "string")
+    );
   if (value.kind === "putenggame:playable:pick-start")
     return (
       value.tool === "select" || value.tool === "text" || value.tool === "move"
+    );
+  if (value.kind === "putenggame:playable:pick-locks")
+    return (
+      Array.isArray(value.picks) &&
+      value.picks.length <= 100 &&
+      value.picks.every(
+        (pick) =>
+          isRecord(pick) &&
+          typeof pick.nodeId === "string" &&
+          typeof pick.cssPath === "string",
+      )
+    );
+  if (value.kind === "putenggame:playable:align-elements")
+    return (
+      isRecord(value.reference) &&
+      typeof value.reference.nodeId === "string" &&
+      typeof value.reference.cssPath === "string" &&
+      Array.isArray(value.targets) &&
+      value.targets.length <= 100 &&
+      value.targets.every(
+        (pick) =>
+          isRecord(pick) &&
+          typeof pick.nodeId === "string" &&
+          typeof pick.cssPath === "string",
+      )
+    );
+  if (value.kind === "putenggame:playable:vr-inspect")
+    return (
+      typeof value.requestId === "string" &&
+      typeof value.nodeId === "string" &&
+      isRecord(value.viewport) &&
+      typeof value.viewport.width === "number" &&
+      Number.isFinite(value.viewport.width) &&
+      value.viewport.width > 0 &&
+      typeof value.viewport.height === "number" &&
+      Number.isFinite(value.viewport.height) &&
+      value.viewport.height > 0
+    );
+  if (value.kind === "putenggame:playable:vr-activate")
+    return (
+      typeof value.nodeId === "string" &&
+      typeof value.buttonId === "string" &&
+      value.buttonId.length <= 128
+    );
+  if (value.kind === "putenggame:playable:vr-press")
+    return (
+      typeof value.nodeId === "string" &&
+      typeof value.buttonId === "string" &&
+      value.buttonId.length <= 128 &&
+      (value.phase === "start" || value.phase === "end")
     );
   if (value.kind === "putenggame:playable:delete-element")
     return (
@@ -645,11 +835,13 @@ export function isPlayableHostMessage(
             )) ||
           (command.config.feedback !== undefined &&
             command.config.feedback !== "hover-press" &&
+            command.config.feedback !== "idle-pulse-hover-press" &&
             command.config.feedback !== "bounce-hover-press" &&
             command.config.feedback !== "ripple-hint" &&
             command.config.feedback !== "none") ||
           (command.config.kind === "button-feedback" &&
             command.config.feedback !== "hover-press" &&
+            command.config.feedback !== "idle-pulse-hover-press" &&
             command.config.feedback !== "bounce-hover-press" &&
             command.config.feedback !== "ripple-hint"))) ||
       (command.buttonSignal !== undefined &&
@@ -705,6 +897,11 @@ export function isPlayableHostMessage(
       isRecord(value.command) &&
       (value.command.command === "play" ||
         value.command.command === "pause" ||
+        (value.command.command === "vr-eye-preview" &&
+          typeof value.command.nodeId === "string" &&
+          (value.command.eye === "full" ||
+            value.command.eye === "left" ||
+            value.command.eye === "right")) ||
         (value.command.command === "set-backdrop" &&
           typeof value.command.nodeId === "string" &&
           typeof value.command.sequence === "number" &&
@@ -797,6 +994,14 @@ export function isPlayableHostMessage(
           Number.isInteger(value.command.scaleY) &&
           value.command.scaleY >= PLAYABLE_BUTTON_ASSET_SCALE_MIN &&
           value.command.scaleY <= PLAYABLE_BUTTON_ASSET_SCALE_MAX) ||
+        (value.command.command === "element-scale-preview" &&
+          typeof value.command.nodeId === "string" &&
+          typeof value.command.cssPath === "string" &&
+          typeof value.command.source === "string" &&
+          typeof value.command.scale === "number" &&
+          Number.isFinite(value.command.scale) &&
+          value.command.scale >= 0.05 &&
+          value.command.scale <= 5) ||
         (value.command.command === "motion-progress-preview" &&
           typeof value.command.nodeId === "string" &&
           typeof value.command.cssPath === "string" &&
@@ -815,6 +1020,11 @@ export function isPlayableHostMessage(
               Number.isInteger(value.command.offsetY) &&
               value.command.offsetY >= -100 &&
               value.command.offsetY <= 100)) &&
+          (value.command.circular === undefined ||
+            typeof value.command.circular === "boolean") &&
+          (value.command.barLayer === undefined ||
+            value.command.barLayer === "bottom" ||
+            value.command.barLayer === "top") &&
           isRecord(value.command.asset) &&
           typeof value.command.asset.contentType === "string" &&
           value.command.asset.bytes instanceof ArrayBuffer) ||
@@ -824,6 +1034,19 @@ export function isPlayableHostMessage(
           value.command.time >= 0))
     );
   if (value.kind === "putenggame:playable:pick-cancel") return true;
+  if (value.kind === "putenggame:playable:settings-command")
+    return value.action === "patch"
+      ? isPlayableGameSettings(value.settings)
+      : value.action === "save" ||
+          value.action === "reset" ||
+          value.action === "discard" ||
+          value.action === "pause" ||
+          value.action === "resume";
+  if (value.kind === "putenggame:playable:settings-save-result")
+    return (
+      typeof value.requestId === "string" &&
+      (value.error === undefined || typeof value.error === "string")
+    );
   return (
     value.kind === "putenggame:playable:save-result" &&
     typeof value.requestId === "string" &&
@@ -840,8 +1063,24 @@ export function isPlayableFrameMessage(
     typeof value.instanceId !== "string"
   )
     return false;
+  if (value.kind === "putenggame:playable:assets-request")
+    return (
+      typeof value.requestId === "string" &&
+      Array.isArray(value.assetIds) &&
+      value.assetIds.length <= 500 &&
+      value.assetIds.every(
+        (id) => typeof id === "string" && id.length > 0 && id.length <= 128,
+      )
+    );
   if (value.kind === "putenggame:playable:save")
     return typeof value.requestId === "string" && isRecord(value.save);
+  if (value.kind === "putenggame:playable:settings-save")
+    return (
+      typeof value.requestId === "string" &&
+      isPlayableGameSettings(value.settings)
+    );
+  if (value.kind === "putenggame:playable:settings-change")
+    return isPlayableGameSettings(value.settings);
   if (value.kind === "putenggame:playable:seen") return isRecord(value.seen);
   if (value.kind === "putenggame:playable:snapshot")
     return isRecord(value.snapshot);
@@ -1002,7 +1241,49 @@ export function isPlayableFrameMessage(
       Number.isFinite(value.state.currentTime) &&
       typeof value.state.duration === "number" &&
       Number.isFinite(value.state.duration) &&
-      typeof value.state.paused === "boolean"
+      typeof value.state.paused === "boolean" &&
+      (value.state.backdropAssetId === undefined ||
+        typeof value.state.backdropAssetId === "string")
+    );
+  if (value.kind === "putenggame:playable:vr-scene")
+    return (
+      typeof value.requestId === "string" &&
+      typeof value.nodeId === "string" &&
+      Array.isArray(value.buttons) &&
+      value.buttons.length <= 256 &&
+      value.buttons.every(
+        (button) =>
+          isRecord(button) &&
+          typeof button.id === "string" &&
+          button.id.length <= 128 &&
+          typeof button.label === "string" &&
+          button.label.length <= 256 &&
+          ["x", "y", "width", "height"].every(
+            (key) =>
+              typeof button[key] === "number" &&
+              Number.isFinite(button[key] as number) &&
+              (button[key] as number) >= 0 &&
+              (button[key] as number) <= 1,
+          ) &&
+          typeof button.color === "string" &&
+          typeof button.backgroundColor === "string" &&
+          (button.holdToCharge === undefined ||
+            typeof button.holdToCharge === "boolean") &&
+          (button.imageDataUrl === undefined ||
+            (typeof button.imageDataUrl === "string" &&
+              button.imageDataUrl.length <= 524288)) &&
+          (button.pressedImageDataUrl === undefined ||
+            (typeof button.pressedImageDataUrl === "string" &&
+              button.pressedImageDataUrl.length <= 524288))
+      )
+    );
+  if (value.kind === "putenggame:playable:keyboard-shortcut")
+    return (
+      value.shortcut === "select" ||
+      value.shortcut === "text" ||
+      value.shortcut === "move" ||
+      value.shortcut === "draw" ||
+      value.shortcut === "toggle-playback"
     );
   if (value.kind === "putenggame:playable:activity") return true;
   if (value.kind === "putenggame:playable:pick-cancelled") return true;
@@ -1103,11 +1384,13 @@ function isValidPlayableMotionConfig(value: unknown): value is PlayableMotionCon
       )) &&
     (value.feedback === undefined ||
       value.feedback === "hover-press" ||
+      value.feedback === "idle-pulse-hover-press" ||
       value.feedback === "bounce-hover-press" ||
       value.feedback === "ripple-hint" ||
       value.feedback === "none") &&
     (value.kind !== "button-feedback" ||
       value.feedback === "hover-press" ||
+      value.feedback === "idle-pulse-hover-press" ||
       value.feedback === "bounce-hover-press" ||
       value.feedback === "ripple-hint")
   );

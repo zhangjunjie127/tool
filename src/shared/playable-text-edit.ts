@@ -270,6 +270,93 @@ export function removePlayableElement(
   return range ? `${html.slice(0, start!)}${html.slice(range.end)}` : undefined;
 }
 
+/** Removes a uniquely identified source element when its preview location is stale. */
+export function removePlayableElementByCssPath(
+  html: string,
+  cssPath: string,
+  tag: string,
+): string | undefined {
+  const start = findUniqueElementStartByCssPath(html, cssPath, tag);
+  const range = start === undefined ? undefined : elementRange(html, start, tag);
+  return range
+    ? `${html.slice(0, start!)}${html.slice(range.end)}`
+    : undefined;
+}
+
+/** Resolves a unique ID-based pick to its current source position. */
+export function playableSourceLocationByCssPath(
+  html: string,
+  cssPath: string,
+  tag: string,
+): Pick<PlayableSourceLocation, "line" | "column"> | undefined {
+  const start = findUniqueElementStartByCssPath(html, cssPath, tag);
+  if (start === undefined) return undefined;
+  const lineStart = html.lastIndexOf("\n", start - 1) + 1;
+  return {
+    line: html.slice(0, start).split("\n").length,
+    column: start - lineStart + 1,
+  };
+}
+
+function findUniqueElementStartByCssPath(
+  html: string,
+  cssPath: string,
+  tag: string,
+): number | undefined {
+  const selector = /^([a-z][\w-]*)#([a-z][\w-]*)$/i.exec(cssPath);
+  if (!selector || selector[1]!.toLowerCase() !== tag.toLowerCase())
+    return undefined;
+
+  const id = selector[2]!;
+  const starts: number[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    const start = html.indexOf("<", cursor);
+    if (start < 0) break;
+    if (html.startsWith("<!--", start)) {
+      const close = html.indexOf("-->", start + 4);
+      if (close < 0) break;
+      cursor = close + 3;
+      continue;
+    }
+    const opening = /^<([a-z][\w-]*)\b/i.exec(html.slice(start));
+    const end = startTagEnd(html, start);
+    if (!opening || end === undefined) {
+      cursor = start + 1;
+      continue;
+    }
+    const attributes = html.slice(start, end);
+    const candidateId = /\bid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/i.exec(
+      attributes,
+    );
+    if (
+      opening[1]!.toLowerCase() === tag.toLowerCase() &&
+      (candidateId?.[1] ?? candidateId?.[2] ?? candidateId?.[3]) === id
+    )
+      starts.push(start);
+
+    cursor = end;
+    if (
+      [
+        "script",
+        "style",
+        "textarea",
+        "title",
+        "xmp",
+        "iframe",
+        "noembed",
+        "noframes",
+        "plaintext",
+      ].includes(opening[1]!.toLowerCase())
+    ) {
+      const close = html.toLowerCase().indexOf(`</${opening[1]}`, cursor);
+      if (close < 0) break;
+      cursor = close;
+    }
+  }
+  return starts.length === 1 ? starts[0] : undefined;
+}
+
 /** Removes one selected text node inside a source-backed element. */
 export function removePlayableTextPart(
   html: string,

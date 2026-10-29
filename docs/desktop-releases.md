@@ -1,6 +1,6 @@
 # Desktop releases
 
-OhMyGame uses `electron-updater` with a generic HTTPS update feed. Release
+puteng game uses `electron-updater` with a generic HTTPS update feed. Release
 artifacts are built by GitHub Actions and copied to a public, read-only
 Cloudflare R2 custom domain, so updates do not depend on GitHub.
 
@@ -13,7 +13,7 @@ example, with the prefix `desktop`:
 ```text
 https://updates.ohmygame.ai/desktop/latest.yml
 https://updates.ohmygame.ai/desktop/latest-mac.yml
-https://updates.ohmygame.ai/desktop/OhMyGame-0.1.0-x64.exe
+https://updates.ohmygame.ai/desktop/puteng-game-0.1.0-x64.exe
 ```
 
 The workflow uploads versioned installers and blockmaps with immutable cache

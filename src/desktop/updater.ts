@@ -176,7 +176,7 @@ export function updateFailure(
   const lower = detail.toLowerCase();
   let code: DesktopUpdateErrorCode = "unknown";
   let title = "Update could not be completed";
-  let message = "OhMyGame is still available at the current version. Try again or copy the details if the problem continues.";
+  let message = "puteng game is still available at the current version. Try again or copy the details if the problem continues.";
 
   if (error instanceof DesktopUpdatePreparationError && error.reason === "save") {
     code = "save";
@@ -185,7 +185,7 @@ export function updateFailure(
   } else if (error instanceof DesktopUpdatePreparationError && error.reason === "shutdown") {
     code = "shutdown";
     title = "A background service did not stop";
-    message = "The update did not start because OhMyGame could not close safely. Try again after the current task finishes.";
+    message = "The update did not start because puteng game could not close safely. Try again after the current task finishes.";
   } else if (matches(lower, "sha512", "checksum", "signature", "corrupt", "integrity")) {
     code = "verification";
     title = "The downloaded update could not be verified";
@@ -197,7 +197,7 @@ export function updateFailure(
   } else if (matches(lower, "eacces", "eperm", "access denied", "permission", "not permitted")) {
     code = "permission";
     title = "Windows blocked access to the update files";
-    message = "Close other OhMyGame windows and try again. If it still fails, security software or administrator permissions may be blocking the installer.";
+    message = "Close other puteng game windows and try again. If it still fails, security software or administrator permissions may be blocking the installer.";
   } else if (matches(
     lower,
     "enotfound",
@@ -227,7 +227,7 @@ export function updateFailure(
   } else if (phase === "install") {
     code = "installer";
     title = "The update installer could not start";
-    message = "The downloaded update is still available. Close other OhMyGame windows and try again.";
+    message = "The downloaded update is still available. Close other puteng game windows and try again.";
   }
 
   return { type: "error", phase, code, title, message, detail, retry, ...(version ? { version } : {}), dataSafe: true };

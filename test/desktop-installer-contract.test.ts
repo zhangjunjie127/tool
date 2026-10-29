@@ -5,6 +5,10 @@ import { parse } from "yaml";
 describe("Windows desktop installer safety", () => {
   it("offers install-scope and installation-directory choices", async () => {
     const config = parse(await readFile("electron-builder.yml", "utf8"));
+    expect(config.appId).toBe("ai.ohmygame.desktop");
+    expect(config.productName).toBe("puteng game");
+    expect(config.win?.artifactName).toBe("puteng-game-${version}-${arch}.${ext}");
+    expect(config.dmg?.artifactName).toBe("puteng-game-${version}-${arch}.${ext}");
     expect(config.win?.target).toEqual(["nsis"]);
     expect(config.nsis).toMatchObject({
       oneClick: false,

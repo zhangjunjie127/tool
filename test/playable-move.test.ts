@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  interactionTimingEditsAreUnchanged,
   playableCenteredScaleFactor,
   playableTransformOriginCorrection,
   parsePlayableTranslate,
@@ -11,6 +12,23 @@ import {
   setPlayableElementTranslate,
 } from "../src/shared/playable-move.js";
 import { playableMoveRequest } from "../src/shared/playable-chat-context.js";
+
+describe("interactionTimingEditsAreUnchanged", () => {
+  it("recognizes identical batch timing edits", () => {
+    expect(
+      interactionTimingEditsAreUnchanged(
+        [{ delaySeconds: 0 }, { delaySeconds: 10, endSeconds: 12 }],
+        [{ delaySeconds: 0 }, { delaySeconds: 10, endSeconds: 12 }],
+      ),
+    ).toBe(true);
+    expect(
+      interactionTimingEditsAreUnchanged(
+        [{ delaySeconds: 10, endSeconds: 12 }],
+        [{ delaySeconds: 10, endSeconds: 13 }],
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("playableCenteredScaleFactor", () => {
   const center = { x: 200, y: 120 };
