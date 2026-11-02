@@ -41,6 +41,14 @@ The workspace keeps the current Interactive Story layout:
 
 - The chat panel keeps its existing placement preference and collapse
   behavior.
+- On desktop, drag the dividers between Chat, Chapters, Story Tree, and the
+  canvas with the primary mouse button to adjust their widths. Default widths
+  are unchanged; minimum widths keep the panes and canvas usable. Width
+  preferences are stored locally, not in project data. Double-click a divider
+  to reset it, or focus it and use the left/right arrow keys to adjust it.
+  Dragging the Story Tree/canvas divider changes only the Story Tree and canvas:
+  Chapters keeps its width. The divider stops at the Story Tree's minimum width
+  instead of squeezing Chapters. Chapters has its own divider and saved width.
 - The main area shows either the **Story** tab, the flow canvas, or the
   Workbench of one Scene, with a breadcrumb (`Story › Case archive`) to
   return. The tab is named for the whole story it shows, not for one Scene.
@@ -149,7 +157,8 @@ screenplay. AI analysis adds scene metadata and route suggestions without
 replacing the original story beats.
 
 The **Story Tree** pane is a read-only view of the story flow: chapter, episode,
-and scene order, scene metadata, and branch destinations. It does not repeat
+and scene order, scene metadata, and branch destinations. Pending-generation
+badges appear here, not beside scene names in the Chapters pane. It does not repeat
 the content and structure editors from the Chapters pane. Choose **Analyze
 with AI** to analyze scenes whose screenplay inputs changed; inspect the
 preview and apply it to update only changed scene metadata and routes. The
@@ -168,9 +177,14 @@ ambiguous replacements do not inherit another scene's canvas edits: unmatched
 old scenes stay marked for removal review. Source-derived routes follow the
 new order; manually edited routes remain available for review.
 
-Choose **Generate nodes** to review the recommended Scene preset for each
-missing Scene, adjust any recommendation, and add the missing nodes without
-replacing existing canvas Scenes. Confirmed routes are added as Exits on their
+Choose **Generate nodes** to add every missing Scene without a setup preview or
+replacing existing canvas Scenes. The editor automatically recommends Blank,
+Choice, or Ending from the Scene's story-tree content. It scans Library videos
+and assigns a video only when the scene, episode, and chapter names identify a
+unique best match; ambiguous or unmatched scenes are generated without a video.
+A Library scan failure stops generation before any nodes are created, so the
+author can retry. The canvas shows a circular progress indicator while matching
+and generating. Confirmed and provisional routes are added as Exits on their
 source Scenes, including newly generated ones. If an existing button already
 emits the matching Signal, that button is reused; otherwise a button preset is
 added to the source Scene, with multiple new buttons spaced along the lower
@@ -182,9 +196,10 @@ canvas positions are preserved. Replacing a tree-managed beat or operation
 button that was manually edited requires confirmation. A generated operation
 button maps recognized long-press, directional swipe, repeated-click,
 double-click, quick-click, and timed-QTE instructions to the corresponding
-existing button behavior. Variable/state mutations, multi-step gestures, and
-other instructions that do not map to an existing editor behavior remain
-story text and need to be configured in the Scene editor. The editor reports when the
+existing button behavior. Variable/state beats remain story text. Operations
+that do not map to a supported behavior are flagged as ordinary-click
+placeholders and still require configuration in the Scene editor; they are not
+reported as fully implemented gestures. The editor reports when the
 tree is still loading, contains no Scenes, or has no missing nodes. Deleting a
 linked canvas Scene makes it eligible for generation again; the editor flushes
 pending canvas changes before syncing and refreshes the canvas when syncing
@@ -193,10 +208,8 @@ generation, the canvas fits all Scenes into view without moving or rearranging
 them. Episodes containing player operations, choices, or branching exits show
 an **Interactive** marker. Selecting a linked Scene in the tree switches to
 the canvas, selects that Scene, and centers and zooms in on it without opening
-its Workbench. The
-preview also shows while presets are loading. Ending sections recommend the
-Ending preset, explicit
-choice beats recommend Choice, and other sections recommend Blank. **Update
+its Workbench. Ending sections automatically use the Ending preset, explicit
+choice beats use Choice, and other sections use Blank. **Update
 nodes** uses the same recommendations when it creates newly added Scenes, then
 synchronizes changed titles and tree-managed connections. Changes to linked
 Scenes are previewed and require confirmation before they are applied. Neither
@@ -204,15 +217,50 @@ operation replaces existing Scene source files or assets, and existing canvas
 positions are preserved. The tree can be exported as PDF, Word, or Markdown.
 Removing a linked Scene or chapter from the tree detaches its canvas Node: the
 Node stays at its existing position as an ordinary Scene and remains outlined
-in red. Only confirmed tree routes are connected. Suggested routes show their
-candidate destination and can be confirmed inline; confirmation marks the tree
-route; save the tree, then choose **Generate nodes** or **Update nodes** to apply
-it to the canvas. Each episode with a suggested route, a missing incoming or
+in red. Both confirmed and suggested tree routes are connected. Suggested routes
+remain provisional: their canvas lines are amber and labeled as awaiting
+confirmation. Explicit action/destination text matches take priority; unmatched
+actions bind to the remaining candidates in tree order. Every choice and
+operation gets its own button and Exit, including choices beyond the starter
+preset's two buttons. Newly generated Choice scenes use a blank stage with the
+existing editor button presets, positioned below the story-text panel; the
+standalone Choice demo and previously edited scenes are not rearranged.
+Hold, swipe, multi-click, double-click, quick-click, and
+timed-click operations use the existing button motion presets. An action without
+a valid candidate still gets its button and Exit, with a missing-target warning;
+no unrelated Scene is invented as its destination. A missing target does not
+block the other exits.
+
+Suggested routes show their candidate destination and can be confirmed inline.
+Generation and update also check for structural route gaps before creating
+canvas connections. Missing choice destinations are matched against the next
+branch group, including across episode boundaries and inconsistent branch scene
+numbers. Ordinary scenes can continue to the next scene; sibling alternatives
+join the next non-branch scene instead of being chained together. Explicit
+screenplay scene references take priority over adjacency. Added routes are
+persisted as Suggested and appear in the Story Tree's pending-route and warning
+indicators; they retain the normal confirmation flow when an existing canvas
+node needs updating.
+Authored destinations, deliberately removed managed exits, removed scenes, and
+explicit endings/replay outcomes are not overridden. Ambiguous or missing
+referenced destinations remain unresolved rather than pointing at an unrelated
+scene.
+Save after confirmation; changing only confirmation status does not recreate
+buttons or move nodes. Use **Update nodes** to repair existing incomplete
+generations or apply changed destinations, with the usual confirmation before
+overwriting. Existing button geometry, assets, and unrelated edits are retained.
+Each episode with a suggested route, a missing incoming or
 outgoing route, or a confirmed route missing from the canvas shows a red warning
 marker. Hover over it to see the issue counts. A first Scene does not need an
 incoming route, and an ending does not need an outgoing route. New tree Scenes
-are arranged from left to right by tree links, with branches on separate rows
-and clear fixed gaps; existing Nodes are not moved.
+are arranged from left to right by tree links on a stable horizontal main axis.
+Branches occupy local rows below that axis; a merge follows the longest incoming
+branch and returns to its enclosing axis (the branch axis for a nested merge).
+Later branch groups reuse available rows instead of progressively drifting
+downward. Disconnected groups continue to the right, and new Nodes avoid occupied
+positions horizontally, retaining clear fixed gaps. Existing Nodes are not moved;
+this layout applies to newly generated Nodes, not automatic rearrangement of
+previously edited canvas positions.
 Nodes with no incoming or outgoing canvas connection receive a warning outline.
 PDF, Word, and Markdown exports use a connected text-tree layout with visible
 vertical and branch lines.
@@ -220,7 +268,7 @@ vertical and branch lines.
 Background video candidates are ranked by scene, episode, and chapter names.
 An explicit conflicting episode marker (including `EP02`, Arabic numerals, and
 Chinese numerals) prevents automatic selection even when the scene name matches.
-Ambiguous candidates remain available for manual selection.
+Only a unique best match is assigned automatically.
 
 Canvas synchronization holds the story-tree revision until the canvas and tree
 are saved. Concurrent saves using an older revision are rejected. If the final

@@ -109,13 +109,6 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
-  vi.spyOn(api, "listPlayablePresets").mockResolvedValue({
-    presets: [
-      { id: "blank", label: "Blank", summary: "A video or an image, then next" },
-      { id: "choice", label: "Choice", summary: "Answers that lead different ways" },
-      { id: "ending", label: "Ending", summary: "The end, with Play again" },
-    ],
-  });
   vi.spyOn(api, "listLibraryAssets").mockResolvedValue([]);
 });
 
@@ -141,6 +134,8 @@ it("keeps chapters and the read-only story tree visible side by side", async () 
   expect(host.querySelectorAll(".story-tree-pane")).toHaveLength(2);
   expect(host.querySelector(".story-tree-chapters-pane")).toBeTruthy();
   expect(host.querySelector(".story-tree-outline-pane")).toBeTruthy();
+  expect(host.querySelector(".story-tree-chapters-pane")?.textContent).not.toContain("待生成");
+  expect(host.querySelector(".story-tree-outline-pane")?.textContent).toContain("待生成");
   expect(host.querySelector('[role="tab"]')).toBeNull();
   expect(host.querySelector(".story-tree-outline")).toBeTruthy();
   expect(host.querySelector(".story-tree-editor")).toBeNull();
@@ -566,6 +561,17 @@ it("treats deleted canvas nodes as pending generation", async () => {
       episode.sections.map((section) => section.canvasNodeId!),
     ),
   );
+  const sync = vi.spyOn(api, "syncPlayableStoryTree").mockResolvedValue({
+    applied: true,
+    tree: previouslyLinkedTree,
+    revision: "revision-2",
+    addedNodes: 3,
+    addedVideos: 0,
+    skippedVideoAssignments: 0,
+    updatedNodes: 0,
+    pendingLinks: 0,
+    confirmations: [],
+  });
   vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
     tree: previouslyLinkedTree,
     revision: "revision-1",
@@ -601,9 +607,19 @@ it("treats deleted canvas nodes as pending generation", async () => {
   const generateButton = [...host.querySelectorAll("button")].find((button) =>
     button.textContent?.includes("生成节点"),
   );
-  await act(async () => generateButton?.click());
+  await act(async () => {
+    generateButton?.click();
+    await Promise.resolve();
+  });
 
-  expect(host.querySelectorAll(".story-tree-generation-row")).toHaveLength(3);
+  expect(sync).toHaveBeenCalledWith(
+    "project-1",
+    previouslyLinkedTree,
+    "revision-1",
+    false,
+    "generate",
+  );
+  expect(host.querySelector(".story-tree-generation-preview")).toBeNull();
 });
 
 it("focuses the linked canvas node when a story-tree scene is selected", async () => {
@@ -638,98 +654,7 @@ it("focuses the linked canvas node when a story-tree scene is selected", async (
   expect(onCanvasNodeSelect).toHaveBeenCalledWith("canvas-scene-2");
 });
 
-it("opens the generation preview and reports while presets are loading", async () => {
-  let finishPresetLoading!: (
-    result: Awaited<ReturnType<typeof api.listPlayablePresets>>,
-  ) => void;
-  vi.spyOn(api, "listPlayablePresets").mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finishPresetLoading = resolve;
-      }),
-  );
-  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
-    tree,
-    revision: "revision-1",
-  });
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-
-  await act(async () => {
-    root?.render(
-      createElement(PlayableStoryTreePanel, {
-        projectId: "project-1",
-        visible: true,
-      }),
-    );
-    await Promise.resolve();
-  });
-
-  const generateButton = [...host.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("生成节点"),
-  );
-  await act(async () => generateButton?.click());
-
-  expect(
-    host.querySelector(".story-tree-generation-preview")?.textContent,
-  ).toContain("正在加载场景预设");
-
-  await act(async () => {
-    finishPresetLoading({
-      presets: [
-        { id: "blank", label: "Blank", summary: "Continue" },
-        { id: "choice", label: "Choice", summary: "Choose" },
-        { id: "ending", label: "Ending", summary: "Finish" },
-      ],
-    });
-    await Promise.resolve();
-  });
-
-  expect(host.querySelectorAll(".story-tree-generation-row")).toHaveLength(3);
-});
-
-it("shows the generation error when the canvas sync request fails", async () => {
-  vi.spyOn(api, "syncPlayableStoryTree").mockRejectedValue(
-    new Error("无法写入画布节点"),
-  );
-  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
-    tree,
-    revision: "revision-1",
-  });
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-
-  await act(async () => {
-    root?.render(
-      createElement(PlayableStoryTreePanel, {
-        projectId: "project-1",
-        visible: true,
-      }),
-    );
-    await Promise.resolve();
-  });
-
-  const generateButton = [...host.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("生成节点"),
-  );
-  await act(async () => generateButton?.click());
-
-  const confirm = host.querySelector<HTMLButtonElement>(
-    ".story-tree-generation-preview > footer > button",
-  );
-  await act(async () => {
-    confirm?.click();
-    await Promise.resolve();
-  });
-
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
-    "无法写入画布节点",
-  );
-});
-
-it("reviews per-scene preset recommendations before generating nodes", async () => {
+it("generates directly and automatically matches videos without a setup preview", async () => {
   const beforeSync = vi.fn(async () => {});
   const canvasSyncComplete = vi.fn();
   const canvasSyncProgressChange = vi.fn();
@@ -738,7 +663,7 @@ it("reviews per-scene preset recommendations before generating nodes", async () 
     tree,
     revision: "revision-2",
     addedNodes: 3,
-    addedVideos: 0,
+    addedVideos: 1,
     skippedVideoAssignments: 0,
     updatedNodes: 0,
     pendingLinks: 0,
@@ -748,6 +673,19 @@ it("reviews per-scene preset recommendations before generating nodes", async () 
     tree,
     revision: "revision-1",
   });
+  vi.spyOn(api, "listLibraryAssets").mockResolvedValue([
+    {
+      id: "video-first-scene",
+      name: "序章_第1集_初遇.mp4",
+      size: 1024,
+      mediaType: "video",
+      contentType: "video/mp4",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      purpose: "asset",
+      projects: [],
+      referenceOnly: false,
+    },
+  ]);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -773,44 +711,15 @@ it("reviews per-scene preset recommendations before generating nodes", async () 
     await Promise.resolve();
   });
 
-  expect(sync).not.toHaveBeenCalled();
-  const rows = host.querySelectorAll(".story-tree-generation-row");
-  expect(rows).toHaveLength(3);
-  const selects = [
-    ...host.querySelectorAll<HTMLSelectElement>(
-      ".story-tree-preset-choice select",
-    ),
-  ];
-  expect(selects.map((select) => select.value)).toEqual([
-    "blank",
-    "blank",
-    "ending",
-  ]);
-
-  await act(async () => {
-    selects[0]!.value = "choice";
-    selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-
-  const confirm = host.querySelector<HTMLButtonElement>(
-    ".story-tree-generation-preview > footer > button",
-  );
-  await act(async () => {
-    confirm?.click();
-    await Promise.resolve();
-  });
-
+  expect(host.querySelector(".story-tree-generation-preview")).toBeNull();
   expect(sync).toHaveBeenCalledWith(
     "project-1",
     tree,
     "revision-1",
     false,
     "generate",
-    {
-      "scene-1": "choice",
-      "scene-2": "blank",
-      "scene-3": "ending",
-    },
+    undefined,
+    { "scene-1": "video-first-scene" },
   );
   expect(beforeSync).toHaveBeenCalledOnce();
   expect(beforeSync.mock.invocationCallOrder[0]).toBeLessThan(
@@ -824,20 +733,73 @@ it("reviews per-scene preset recommendations before generating nodes", async () 
   expect(host.querySelector(".story-tree-notice")?.textContent).toContain(
     "已生成 3 个画布节点",
   );
+  expect(host.querySelector(".story-tree-notice")?.textContent).toContain(
+    "添加 1 个背景视频",
+  );
 });
 
-it("matches and confirms a background video for a generated scene", async () => {
-  const sync = vi.spyOn(api, "syncPlayableStoryTree").mockResolvedValue({
-    applied: true,
+it("does not generate nodes when the Library scan fails", async () => {
+  const sync = vi.spyOn(api, "syncPlayableStoryTree");
+  vi.spyOn(api, "listLibraryAssets").mockRejectedValue(
+    new Error("Library unavailable"),
+  );
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
     tree,
-    revision: "revision-2",
-    addedNodes: 3,
-    addedVideos: 1,
-    skippedVideoAssignments: 0,
-    updatedNodes: 0,
-    pendingLinks: 0,
-    confirmations: [],
+    revision: "revision-1",
   });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const generateButton = [...host.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("生成节点"),
+  );
+  await act(async () => {
+    generateButton?.click();
+    await Promise.resolve();
+  });
+
+  expect(sync).not.toHaveBeenCalled();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    "未开始生成节点",
+  );
+});
+
+it("keeps automatically matched videos when node changes need confirmation", async () => {
+  const sync = vi.spyOn(api, "syncPlayableStoryTree")
+    .mockResolvedValueOnce({
+      applied: false,
+      revision: "revision-1",
+      addedNodes: 0,
+      addedVideos: 0,
+      skippedVideoAssignments: 0,
+      updatedNodes: 0,
+      pendingLinks: 0,
+      confirmations: [
+        { nodeId: "canvas-scene-1", title: "初遇", changes: ["Story-tree scene content will be updated."] },
+      ],
+    })
+    .mockResolvedValueOnce({
+      applied: true,
+      tree,
+      revision: "revision-2",
+      addedNodes: 3,
+      addedVideos: 1,
+      skippedVideoAssignments: 0,
+      updatedNodes: 0,
+      pendingLinks: 0,
+      confirmations: [],
+    });
   vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
     tree,
     revision: "revision-1",
@@ -877,42 +839,71 @@ it("matches and confirms a background video for a generated scene", async () => 
     await Promise.resolve();
   });
 
-  const presetSelects = [
-    ...host.querySelectorAll<HTMLSelectElement>(
-      ".story-tree-preset-choice select",
-    ),
-  ];
-  const videoSelects = [
-    ...host.querySelectorAll<HTMLSelectElement>(
-      ".story-tree-video-choice select",
-    ),
-  ];
-  expect(presetSelects).toHaveLength(3);
-  expect(videoSelects).toHaveLength(3);
-  expect(videoSelects[0]?.value).toBe("video-first-scene");
-
   const confirm = host.querySelector<HTMLButtonElement>(
-    ".story-tree-generation-preview > footer > button",
+    ".story-tree-confirmation button",
   );
   await act(async () => {
     confirm?.click();
     await Promise.resolve();
   });
 
-  expect(sync).toHaveBeenCalledWith(
+  expect(sync).toHaveBeenNthCalledWith(
+    1,
     "project-1",
     tree,
     "revision-1",
     false,
     "generate",
-    {
-      "scene-1": "blank",
-      "scene-2": "blank",
-      "scene-3": "ending",
-    },
+    undefined,
     { "scene-1": "video-first-scene" },
   );
+  expect(sync).toHaveBeenNthCalledWith(
+    2,
+    "project-1",
+    tree,
+    "revision-1",
+    true,
+    "generate",
+    undefined,
+    { "scene-1": "video-first-scene" },
+  );
+  expect(api.listLibraryAssets).toHaveBeenCalledOnce();
   expect(host.querySelector(".story-tree-notice")?.textContent).toContain(
     "添加 1 个背景视频",
+  );
+});
+
+it("shows a direct generation error when canvas synchronization fails", async () => {
+  vi.spyOn(api, "syncPlayableStoryTree").mockRejectedValue(
+    new Error("无法写入画布节点"),
+  );
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
+    tree,
+    revision: "revision-1",
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const generateButton = [...host.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("生成节点"),
+  );
+  await act(async () => {
+    generateButton?.click();
+    await Promise.resolve();
+  });
+
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+    "无法写入画布节点",
   );
 });

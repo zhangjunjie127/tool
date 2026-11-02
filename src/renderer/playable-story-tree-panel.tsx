@@ -18,7 +18,6 @@ import {
   removePlayableStoryTreeChapter,
   removePlayableStoryTreeEpisode,
   removePlayableStoryTreeSection,
-  recommendedPlayableStoryTreeNodePreset,
   type PlayableStoryTree,
   type PlayableStoryTreeCanvasEdge,
   type PlayableStoryTreeCanvasStatus,
@@ -33,7 +32,6 @@ import {
   analyzePlayableStoryTree as analyzeStoryTreeWithAi,
   getPlayableStoryTree,
   listLibraryAssets,
-  listPlayablePresets,
   savePlayableStoryTree,
   syncPlayableStoryTree,
 } from "./api.js";
@@ -46,7 +44,8 @@ import {
 } from "./playable-story-tree-export.js";
 import { PlayableStoryTreeOutline } from "./playable-story-tree-outline.js";
 import { StoryTreeInlineNameEditor } from "./playable-story-tree-inline-name-editor.js";
-import { t, translateText } from "./i18n.js";
+import { StoryTreePanes } from "./story-tree-panes.js";
+import { t } from "./i18n.js";
 
 interface PlayableStoryTreePanelProps {
   projectId: string;
@@ -116,23 +115,8 @@ export function PlayableStoryTreePanel({
   }>();
   const [warnings, setWarnings] = useState<PlayableStoryTreeWarning[]>([]);
   const [confirmations, setConfirmations] = useState<Confirmation[]>([]);
-  const [generationPreviewOpen, setGenerationPreviewOpen] = useState(false);
-  const [generationPresetOverrides, setGenerationPresetOverrides] = useState<
-    Record<string, string>
-  >({});
-  const [videoCandidates, setVideoCandidates] = useState<
-    Array<{ id: string; name: string }>
-  >([]);
   const [generationVideoAssignments, setGenerationVideoAssignments] =
     useState<Record<string, string>>({});
-  const [videoCatalogLoading, setVideoCatalogLoading] = useState(false);
-  const [videoCatalogError, setVideoCatalogError] = useState("");
-  const videoCatalogRequest = useRef(0);
-  const [nodePresets, setNodePresets] = useState<
-    Awaited<ReturnType<typeof listPlayablePresets>>["presets"]
-  >([]);
-  const [presetCatalogLoading, setPresetCatalogLoading] = useState(true);
-  const [presetCatalogError, setPresetCatalogError] = useState("");
   const [pendingSyncMode, setPendingSyncMode] = useState<"generate" | "update">(
     "update",
   );
@@ -181,46 +165,6 @@ export function PlayableStoryTreePanel({
       ) ?? [],
     [existingCanvasNodeIds, tree],
   );
-  const videoMatchesBySection = useMemo(
-    () =>
-      new Map(
-        pendingNodeSections.map(({ section, chapterTitle, episodeTitle }) => [
-          section.id,
-          rankPlayableStoryVideos(
-            {
-              chapterTitle,
-              episodeTitle,
-              episodeNumber: section.episodeNumber,
-              sceneTitle: section.title,
-            },
-            videoCandidates,
-          ),
-        ]),
-      ),
-    [pendingNodeSections, videoCandidates],
-  );
-
-  useEffect(() => {
-    let disposed = false;
-    setPresetCatalogLoading(true);
-    void listPlayablePresets()
-      .then(({ presets }) => {
-        if (!disposed) {
-          setNodePresets(presets);
-          setPresetCatalogError("");
-        }
-      })
-      .catch((cause) => {
-        if (!disposed) setPresetCatalogError(errorText(cause));
-      })
-      .finally(() => {
-        if (!disposed) setPresetCatalogLoading(false);
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [projectId]);
-
   useEffect(() => {
     if (tree)
       onCanvasStatusChange?.(
@@ -274,7 +218,6 @@ export function PlayableStoryTreePanel({
     setDirty(true);
     setConfirmations([]);
     setPendingAnalysis(undefined);
-    setGenerationPreviewOpen(false);
     setOperation("chapters");
     setNotice("");
     setError("");
@@ -290,7 +233,6 @@ export function PlayableStoryTreePanel({
     setDirty(true);
     setConfirmations([]);
     setPendingAnalysis(undefined);
-    setGenerationPreviewOpen(false);
     setOperation("tree");
     setNotice(t("storyTree.routeConfirmedNotice"));
     setError("");
@@ -307,7 +249,6 @@ export function PlayableStoryTreePanel({
       const parsed = await importPlayableScreenplay(file);
       setWarnings(parsed.warnings);
       setPendingAnalysis(undefined);
-      setGenerationPreviewOpen(false);
       if (parsed.warnings.includes("no-scenes")) {
         throw new Error(t("storyTree.warningNoScenes"));
       }
@@ -416,27 +357,71 @@ export function PlayableStoryTreePanel({
   async function synchronize(
     mode: "generate" | "update",
     confirmOverwrite = false,
-    nodePresetOverrides?: Record<string, string>,
     nodeVideoAssignments?: Record<string, string>,
   ): Promise<void> {
-    if (!tree || revision === undefined || busy) return;
-    setBusy(true);
+    if (busy) return;
     setOperation("tree");
-    setPendingSyncMode(mode);
     setError("");
     setNotice("");
+    if (mode === "generate") {
+      if (loading) {
+        setNotice(t("storyTree.treeStillLoading"));
+        return;
+      }
+      if (!tree || !sections.length) {
+        setNotice(t("storyTree.noScenesToGenerate"));
+        return;
+      }
+      if (!pendingNodeSections.length) {
+        setNotice(t("storyTree.noPendingNodes"));
+        return;
+      }
+    }
+    if (!tree || revision === undefined) return;
+    setBusy(true);
+    setPendingSyncMode(mode);
     onCanvasSyncProgressChange?.(mode);
+    let videoScanFailed = false;
+    let videoAssignments = nodeVideoAssignments;
     try {
       await onBeforeSync?.();
-      const result = Object.keys(nodeVideoAssignments ?? {}).length
+      if (mode === "generate" && videoAssignments === undefined) {
+        videoScanFailed = true;
+        const assets = await listLibraryAssets();
+        const videos = assets
+          .filter(
+            (asset) =>
+              asset.mediaType === "video" &&
+              asset.purpose !== "reference" &&
+              !asset.referenceOnly,
+          )
+          .map(({ id, name }) => ({ id, name }));
+        videoAssignments = {};
+        for (const { section, chapterTitle, episodeTitle } of pendingNodeSections) {
+          const match = rankPlayableStoryVideos(
+            {
+              chapterTitle,
+              episodeTitle,
+              episodeNumber: section.episodeNumber,
+              sceneTitle: section.title,
+            },
+            videos,
+          );
+          if (match.recommendedAssetId)
+            videoAssignments[section.id] = match.recommendedAssetId;
+        }
+        setGenerationVideoAssignments(videoAssignments);
+        videoScanFailed = false;
+      }
+      const result = Object.keys(videoAssignments ?? {}).length
         ? await syncPlayableStoryTree(
             projectId,
             tree,
             revision,
             confirmOverwrite,
             mode,
-            nodePresetOverrides,
-            nodeVideoAssignments,
+            undefined,
+            videoAssignments,
           )
         : await syncPlayableStoryTree(
             projectId,
@@ -444,7 +429,6 @@ export function PlayableStoryTreePanel({
             revision,
             confirmOverwrite,
             mode,
-            nodePresetOverrides,
           );
       if (!result.applied || !result.tree) {
         setConfirmations(result.confirmations);
@@ -461,8 +445,7 @@ export function PlayableStoryTreePanel({
       setConfirmations([]);
       setPendingAnalysis(undefined);
       if (mode === "generate") {
-        setGenerationPreviewOpen(false);
-        videoCatalogRequest.current += 1;
+        setGenerationVideoAssignments({});
       }
       const completion = t(
         mode === "generate"
@@ -483,122 +466,15 @@ export function PlayableStoryTreePanel({
           : completion,
       );
     } catch (cause) {
-      setError(errorText(cause));
+      setError(
+        videoScanFailed
+          ? `${t("storyTree.backgroundVideoScanFailed")} ${errorText(cause)}`
+          : errorText(cause),
+      );
     } finally {
       setBusy(false);
       onCanvasSyncProgressChange?.(undefined);
     }
-  }
-
-  function openGenerationPreview(): void {
-    setOperation("tree");
-    setError("");
-    if (loading) {
-      setGenerationPreviewOpen(false);
-      setNotice(t("storyTree.treeStillLoading"));
-      return;
-    }
-    if (!tree || !sections.length) {
-      setGenerationPreviewOpen(false);
-      setNotice(t("storyTree.noScenesToGenerate"));
-      return;
-    }
-    if (!pendingNodeSections.length) {
-      setGenerationPreviewOpen(false);
-      setNotice(t("storyTree.noPendingNodes"));
-      return;
-    }
-    setNotice("");
-    setGenerationPresetOverrides(
-      Object.fromEntries(
-        pendingNodeSections.map(({ section }) => [
-          section.id,
-          recommendedPlayableStoryTreeNodePreset(section),
-        ]),
-      ),
-    );
-    setVideoCandidates([]);
-    setGenerationVideoAssignments({});
-    setGenerationPreviewOpen(true);
-    setOperation("tree");
-    void loadGenerationVideoCandidates();
-  }
-
-  async function loadGenerationVideoCandidates(): Promise<void> {
-    const requestId = ++videoCatalogRequest.current;
-    setVideoCatalogLoading(true);
-    setVideoCatalogError("");
-    try {
-      const assets = await listLibraryAssets();
-      if (requestId !== videoCatalogRequest.current) return;
-      const videos = assets
-        .filter(
-          (asset) =>
-            asset.mediaType === "video" &&
-            asset.purpose !== "reference" &&
-            !asset.referenceOnly,
-        )
-        .map(({ id, name }) => ({ id, name }));
-      setVideoCandidates(videos);
-      setGenerationVideoAssignments(
-        Object.fromEntries(
-          pendingNodeSections.flatMap(
-            ({ section, chapterTitle, episodeTitle }) => {
-              const match = rankPlayableStoryVideos(
-                {
-                  chapterTitle,
-                  episodeTitle,
-                  episodeNumber: section.episodeNumber,
-                  sceneTitle: section.title,
-                },
-                videos,
-              );
-              return match.recommendedAssetId
-                ? [[section.id, match.recommendedAssetId]]
-                : [];
-            },
-          ),
-        ),
-      );
-    } catch (cause) {
-      if (requestId === videoCatalogRequest.current) {
-        setVideoCatalogError(errorText(cause));
-        setGenerationVideoAssignments({});
-      }
-    } finally {
-      if (requestId === videoCatalogRequest.current)
-        setVideoCatalogLoading(false);
-    }
-  }
-
-  function closeGenerationPreview(): void {
-    videoCatalogRequest.current += 1;
-    setGenerationPreviewOpen(false);
-  }
-
-  function updateGenerationVideo(sectionId: string, assetId: string): void {
-    setGenerationVideoAssignments((current) => {
-      const next = { ...current };
-      if (assetId) next[sectionId] = assetId;
-      else delete next[sectionId];
-      return next;
-    });
-  }
-
-  function retryPresetCatalog(): void {
-    setPresetCatalogLoading(true);
-    setPresetCatalogError("");
-    void listPlayablePresets()
-      .then(({ presets }) => setNodePresets(presets))
-      .catch((cause) => setPresetCatalogError(errorText(cause)))
-      .finally(() => setPresetCatalogLoading(false));
-  }
-
-  function updateGenerationPreset(sectionId: string, presetId: string): void {
-    setGenerationPresetOverrides((current) => ({
-      ...current,
-      [sectionId]: presetId,
-    }));
   }
 
   function patchSection(
@@ -931,7 +807,7 @@ export function PlayableStoryTreePanel({
           {error}
         </div>
       ) : (
-        <div className="story-tree-panes">
+        <StoryTreePanes>
           <section
             className="story-tree-pane story-tree-chapters-pane"
             aria-label={t("storyTree.chapterTab")}
@@ -1124,11 +1000,6 @@ export function PlayableStoryTreePanel({
                                       displayContent={
                                         <>
                                           <span>{section.title}</span>
-                                          {!section.canvasNodeId ? (
-                                            <small className="story-tree-item-status is-pending-generation">
-                                              {t("storyTree.pendingGeneration")}
-                                            </small>
-                                          ) : null}
                                           {section.sourcePending ? (
                                             <i
                                               aria-label={t(
@@ -1407,210 +1278,6 @@ export function PlayableStoryTreePanel({
                 <span>{t("storyTree.canvasUpToDate")}</span>
               ) : null}
             </div>
-            {generationPreviewOpen ? (
-              <section
-                className="story-tree-generation-preview"
-                aria-label={t("storyTree.generationPreview")}
-              >
-                <header>
-                  <div>
-                    <strong>{t("storyTree.generationPreview")}</strong>
-                    <small>
-                      {t("storyTree.generationPreviewCount", {
-                        count: pendingNodeSections.length,
-                      })}
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label={t("storyTree.cancelGeneration")}
-                    disabled={busy}
-                    onClick={closeGenerationPreview}
-                  >
-                    {t("storyTree.cancelGeneration")}
-                  </button>
-                </header>
-                {presetCatalogLoading ? (
-                  <p className="story-tree-generation-state">
-                    <LoaderCircle className="spin" size={14} />
-                    {t("storyTree.loadingPresets")}
-                  </p>
-                ) : presetCatalogError || !nodePresets.length ? (
-                  <div className="story-tree-generation-error" role="alert">
-                    <span>
-                      {presetCatalogError || t("storyTree.presetCatalogUnavailable")}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={presetCatalogLoading}
-                      onClick={retryPresetCatalog}
-                    >
-                      {t("storyTree.retryPresets")}
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="story-tree-video-scan">
-                      {videoCatalogLoading ? (
-                        <span className="story-tree-generation-state">
-                          <LoaderCircle className="spin" size={14} />
-                          {t("storyTree.scanningBackgroundVideos")}
-                        </span>
-                      ) : null}
-                      {!videoCatalogLoading && videoCatalogError ? (
-                        <div
-                          className="story-tree-video-error"
-                          role="status"
-                        >
-                          <span>
-                            {t("storyTree.backgroundVideoScanFailed")}
-                          </span>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              void loadGenerationVideoCandidates()
-                            }
-                          >
-                            {t("storyTree.retryVideoScan")}
-                          </button>
-                        </div>
-                      ) : null}
-                      {!videoCatalogLoading && !videoCatalogError ? (
-                        <small>
-                          {t("storyTree.backgroundVideoSelectionCount", {
-                            selected: Object.keys(generationVideoAssignments)
-                              .length,
-                            total: pendingNodeSections.length,
-                          })}
-                        </small>
-                      ) : null}
-                    </div>
-                    <div className="story-tree-generation-list">
-                      {pendingNodeSections.map(
-                        ({ section, chapterTitle, episodeTitle }) => {
-                          const recommended =
-                            recommendedPlayableStoryTreeNodePreset(section);
-                          const recommendedLabel = nodePresets.find(
-                            (preset) => preset.id === recommended,
-                          )?.label ?? recommended;
-                          return (
-                            <div
-                              className="story-tree-generation-row"
-                              key={section.id}
-                            >
-                              <div className="story-tree-generation-info">
-                                <strong title={section.title}>
-                                  {section.title}
-                                </strong>
-                                <small>
-                                  {chapterTitle} · {episodeTitle} ·{" "}
-                                  {t(storyTreeSectionKindTranslationKey(section.kind))}{" "}
-                                  ·{" "}
-                                  {t("storyTree.recommendedPreset", {
-                                    preset: translateText(recommendedLabel),
-                                  })}
-                                </small>
-                              </div>
-                              <label className="story-tree-preset-choice">
-                                <span className="sr-only">
-                                  {t("storyTree.nodePresetFor", {
-                                    title: section.title,
-                                  })}
-                                </span>
-                                <select
-                                  value={
-                                    generationPresetOverrides[section.id] ??
-                                    recommended
-                                  }
-                                  disabled={busy}
-                                  onChange={(event) =>
-                                    updateGenerationPreset(
-                                      section.id,
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                >
-                                  {nodePresets.map((preset) => (
-                                    <option key={preset.id} value={preset.id}>
-                                      {translateText(preset.label)}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label className="story-tree-video-choice">
-                                <span>
-                                  {t("storyTree.backgroundVideo")}
-                                </span>
-                                <select
-                                  value={
-                                    generationVideoAssignments[section.id] ??
-                                    ""
-                                  }
-                                  disabled={
-                                    busy ||
-                                    videoCatalogLoading ||
-                                    Boolean(videoCatalogError) ||
-                                    !videoCandidates.length
-                                  }
-                                  onChange={(event) =>
-                                    updateGenerationVideo(
-                                      section.id,
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                >
-                                  <option value="">
-                                    {videoCandidates.length
-                                      ? t("storyTree.noBackgroundVideo")
-                                      : t("storyTree.noVideoCandidates")}
-                                  </option>
-                                  {(
-                                    videoMatchesBySection.get(section.id)
-                                      ?.candidates ?? []
-                                  ).map(({ asset }) => (
-                                    <option
-                                      key={asset.id}
-                                      value={asset.id}
-                                    >
-                                      {asset.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                          );
-                        },
-                      )}
-                    </div>
-                    <footer>
-                      <button
-                        className="is-primary"
-                        type="button"
-                        disabled={busy || !pendingNodeSections.length}
-                        onClick={() =>
-                          void synchronize(
-                            "generate",
-                            false,
-                            generationPresetOverrides,
-                            generationVideoAssignments,
-                          )
-                        }
-                      >
-                        {busy && pendingSyncMode === "generate" ? (
-                          <LoaderCircle className="spin" size={14} />
-                        ) : (
-                          <Plus size={14} />
-                        )}
-                        {t("storyTree.confirmGenerateNodes", {
-                          count: pendingNodeSections.length,
-                        })}
-                      </button>
-                    </footer>
-                  </>
-                )}
-              </section>
-            ) : null}
             {!sections.length ? (
               <div
                 className="story-tree-navigation"
@@ -1667,9 +1334,6 @@ export function PlayableStoryTreePanel({
                     void synchronize(
                       pendingSyncMode,
                       true,
-                      pendingSyncMode === "generate"
-                        ? generationPresetOverrides
-                        : undefined,
                       pendingSyncMode === "generate"
                         ? generationVideoAssignments
                         : undefined,
@@ -1736,9 +1400,11 @@ export function PlayableStoryTreePanel({
               <button
                 type="button"
                 disabled={busy}
-                onClick={openGenerationPreview}
+                onClick={() => void synchronize("generate")}
               >
-                {presetCatalogLoading ? (
+                {busy &&
+                operation === "tree" &&
+                pendingSyncMode === "generate" ? (
                   <LoaderCircle className="spin" size={14} />
                 ) : (
                   <Plus size={14} />
@@ -1762,7 +1428,7 @@ export function PlayableStoryTreePanel({
               </button>
             </footer>
           </section>
-        </div>
+        </StoryTreePanes>
       )}
     </section>
   );

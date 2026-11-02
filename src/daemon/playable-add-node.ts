@@ -10,6 +10,11 @@ import { withPlayableEntry } from "../shared/playable-graph.js";
 import { playableEdgeId } from "../shared/playable-editor.js";
 import { layoutPlayableStoryTreeNodes } from "../shared/playable-story-tree-layout.js";
 import { syncPlayableStoryTreeContent } from "../shared/playable-story-tree-content.js";
+import { storyTreeGenerationRoutes, storyTreeOperationMotion, type StoryTreeGenerationRoute } from "../shared/playable-story-tree-actions.js";
+import {
+  completePlayableStoryTreeRoutes,
+  playableStoryTreeExitLabel,
+} from "../shared/playable-story-tree-routes.js";
 import { addPlayableNodeAsset } from "../shared/playable-editor.js";
 import {
   playableBackdrop,
@@ -33,6 +38,7 @@ import {
   playableStoryTreeSections,
   recommendedPlayableStoryTreeNodePreset,
   type PlayableStoryTree,
+  type PlayableStoryTreeCanvasSnapshot,
   type PlayableStoryTreeSection,
 } from "../shared/playable-story-tree.js";
 import {
@@ -325,6 +331,7 @@ export async function syncPlayableStoryTree(
   if (!isPlayableStoryTree(incomingTree)) {
     throw new NodeCodebaseError("The story tree does not match its schema.");
   }
+  incomingTree = completePlayableStoryTreeRoutes(incomingTree);
 
   const sectionIds = new Set(playableStoryTreeSections(incomingTree).map((section) => section.id));
   for (const [sectionId, presetId] of Object.entries(nodePresetOverrides)) {
@@ -465,42 +472,41 @@ export async function syncPlayableStoryTree(
       if (contentSync.editedBeatIds.length) {
         changes.push("A story-tree beat was edited on the canvas and will be replaced.");
       }
-      const outgoingLinks = incomingTree.links
-        .filter((link) => link.fromSectionId === section.id && link.status === "confirmed");
-      const canUpdateExits = outgoingLinks.every((link) => nodeIds.has(link.toSectionId));
+      const outgoingLinks = storyTreeGenerationRoutes(incomingTree, section);
       const desired = outgoingLinks
-        .filter((link) => canUpdateExits)
         .map((link) => ({
-          label: link.label || "继续",
+          label: playableStoryTreeExitLabel(link.label, sections.find((item) => item.id === link.toSectionId)?.title),
           targetSectionId: link.toSectionId,
         }))
         .sort(compareExitTarget);
-      if (canUpdateExits && baseline && !sameExitTargets(baseline.exits, desired)) {
+      const routesChanged = baseline && (
+        !sameExitTargets(baseline.exits, desired) ||
+        !storyActionTargetsMatch(baseline, outgoingLinks)
+      );
+      if (routesChanged) {
         changes.push("The Scene's tree connections will be updated.");
       }
-      if (canUpdateExits && baseline && !liveManagedExitsMatch(node, graph.edges, baseline.exits, previousTree)) {
+      if (routesChanged && !liveManagedExitsMatch(node, graph.edges, baseline.exits, previousTree)) {
         changes.push("Tree-managed connections were edited on the canvas.");
       }
       if (baseline) {
         const buttons = baseline.storyButtons ?? [];
-        const currentLinks = incomingTree.links.filter(
-          (link) => link.fromSectionId === section.id && link.status === "confirmed",
-        );
+        const currentLinks = outgoingLinks;
         for (const [routeIndex, link] of currentLinks.entries()) {
+          const previousActionButton = buttons.find(
+            (button) => link.action && button.beatId === link.action.id,
+          );
           const oldExit = baseline.exits.find(
-            (exit) => exit.targetSectionId === link.toSectionId,
+            (exit) => exit.id === previousActionButton?.signal,
+          ) ?? baseline.exits.find(
+            (exit) => exit.targetSectionId === link.toSectionId &&
+              exit.label === playableStoryTreeExitLabel(link.label, sections.find((item) => item.id === link.toSectionId)?.title),
           ) ?? baseline.exits[routeIndex];
           const managedButton = buttons.find(
             (button) => button.signal === oldExit?.id,
           );
           if (!managedButton) continue;
-          const actionBeat = storyTreeActionBeat(
-            section,
-            link.label,
-            sections.find((item) => item.id === link.toSectionId)?.title,
-            routeIndex,
-            currentLinks.length,
-          );
+          const actionBeat = link.action;
           if (!storyActionChanged(previous, section, managedButton.beatId, actionBeat?.id)) {
             continue;
           }
@@ -553,10 +559,11 @@ export async function syncPlayableStoryTree(
       routeCount: number,
       config?: PlayableMotionConfig,
       beatId?: string,
+      adoptExisting = false,
     ) => {
       let html = await sourceHtml(node);
       if (htmlHasSignal(html, signalId)) {
-        if (createdNodeIds.has(node.id)) {
+        if (createdNodeIds.has(node.id) || adoptExisting) {
           const marked = markStoryTreeButtonBySignal(html, signalId, beatId);
           if (marked !== html) {
             html = marked;
@@ -565,8 +572,14 @@ export async function syncPlayableStoryTree(
           }
           const configured = updateManagedStoryButton(html, signalId, beatId, config);
           if (configured && configured !== html) {
+            html = configured;
             createdSources[node.source.html] = configured;
             sourceHtmlCache.set(node.source.html, configured);
+          }
+          const relabeled = replacePlayableSignalButtonText(html, node.source.html, signalId, label);
+          if (relabeled && relabeled !== html) {
+            createdSources[node.source.html] = relabeled;
+            sourceHtmlCache.set(node.source.html, relabeled);
           }
         }
         return;
@@ -622,9 +635,18 @@ export async function syncPlayableStoryTree(
           css: `nodes/${nodeId}/style.css`,
           javascript: `nodes/${nodeId}/node.js`,
         };
-        const starter = preset.source(section.title);
+        // Compose story choices from the editor's button presets, not the
+        // Choice demo's two buttons beneath the generated story-text panel.
+        const composeChoices = presetId === "choice" &&
+          section.beats.some((beat) => beat.kind === "choice");
+        const starter = (composeChoices ? playablePreset("blank")! : preset).source(section.title);
         createdSources[source.html] =
-          setPlayableNoInputMode(starter.html, "continue") ?? starter.html;
+          setPlayableNoInputMode(
+            starter.html,
+            section.beats.some((beat) => beat.kind === "choice" || beat.kind === "operation")
+              ? "wait"
+              : "continue",
+          ) ?? starter.html;
         createdSources[source.css] = starter.css;
         createdSources[source.javascript] = starter.javascript;
         graph.initialState = { ...preset.initialState, ...graph.initialState };
@@ -636,7 +658,7 @@ export async function syncPlayableStoryTree(
           title: section.title.slice(0, MAX_TITLE_LENGTH),
           source,
           assets: [],
-          signals: preset.signals.map((signal) => ({ ...signal })),
+          signals: composeChoices ? [] : preset.signals.map((signal) => ({ ...signal })),
           ...(preset.story ? { story: { ...preset.story } } : {}),
         };
         graph.nodes.push(node);
@@ -653,10 +675,9 @@ export async function syncPlayableStoryTree(
         const managedTargets = new Set(
           exits.map((exit) => exit.targetSectionId),
         );
-        const linksToNewScenes = incomingTree.links.filter(
+        const linksToNewScenes = storyTreeGenerationRoutes(incomingTree, section).filter(
           (link) =>
             link.fromSectionId === section.id &&
-            link.status === "confirmed" &&
             newlyCreated.has(link.toSectionId) &&
             !managedTargets.has(link.toSectionId),
         );
@@ -674,14 +695,8 @@ export async function syncPlayableStoryTree(
         for (const [routeIndex, link] of linksToNewScenes.entries()) {
           const targetNodeId = nodeIds.get(link.toSectionId);
           if (!targetNodeId) continue;
-          const label = storyExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
-          const actionBeat = storyTreeActionBeat(
-            section,
-            link.label,
-            treeSections.get(link.toSectionId)?.title,
-            routeIndex,
-            linksToNewScenes.length,
-          );
+          const label = playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
+          const actionBeat = link.action;
           const buttonText = actionBeat
             ? storyTreeActionLabel(actionBeat)
             : storyExitButtonText(
@@ -751,13 +766,18 @@ export async function syncPlayableStoryTree(
         markUpdated(nodeId);
       }
 
-      const desiredLinks = incomingTree.links.filter(
-        (link) => link.fromSectionId === section.id && link.status === "confirmed",
-      );
-      const canUpdateExits = desiredLinks.every((link) => nodeIds.has(link.toSectionId));
+      const desiredLinks = storyTreeGenerationRoutes(incomingTree, section);
       const oldManagedExits = oldSection?.canvasSnapshot?.exits ?? [];
+      const canUpdateExits = createdNodeIds.has(nodeId) ||
+        !oldSection?.canvasSnapshot ||
+        !storyActionTargetsMatch(oldSection.canvasSnapshot, desiredLinks) ||
+        !sameExitTargets(oldManagedExits, desiredLinks.map((link) => ({
+          label: playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title),
+          targetSectionId: link.toSectionId,
+        })));
       let exits = oldManagedExits;
       if (canUpdateExits) {
+        if (!createdNodeIds.has(nodeId)) markUpdated(nodeId);
         const oldManagedSignalIds = new Set(oldManagedExits.map((exit) => exit.id));
         node.signals = node.signals.filter((signal) => !oldManagedSignalIds.has(signal.id));
         graph.edges = graph.edges.filter(
@@ -768,16 +788,35 @@ export async function syncPlayableStoryTree(
 
         const usedSignals = new Set(node.signals.map((signal) => signal.id));
         const assignedSignals = new Set<string>();
+        const reservedActionSignals = new Set(
+          (oldSection?.canvasSnapshot?.storyButtons ?? [])
+            .filter((button) => button.beatId && desiredLinks.some((link) => link.action?.id === button.beatId))
+            .map((button) => button.signal),
+        );
         const html = await sourceHtml(node);
         exits = [];
         for (const [routeIndex, link] of desiredLinks.entries()) {
           const targetNodeId = nodeIds.get(link.toSectionId)!;
           const stableId = storySignalId(link.id);
-          const reusableExit = oldManagedExits.find(
+          const previousButton = oldSection?.canvasSnapshot?.storyButtons?.find(
+            (button) => link.action && button.beatId === link.action.id &&
+              !assignedSignals.has(button.signal),
+          );
+          const reusableExit = (previousButton
+            ? oldManagedExits.find((exit) => exit.id === previousButton.signal)
+            : undefined) ?? oldManagedExits.find(
             (exit) =>
+              !assignedSignals.has(exit.id) &&
+              !reservedActionSignals.has(exit.id) &&
               exit.label === (link.label || "继续").slice(0, MAX_TITLE_LENGTH) &&
               exit.targetSectionId === link.toSectionId,
           );
+          const positionalExit = oldManagedExits[routeIndex];
+          const fallbackExit = positionalExit &&
+            !assignedSignals.has(positionalExit.id) &&
+            !reservedActionSignals.has(positionalExit.id)
+              ? positionalExit
+              : undefined;
           const reuseStarterSignal =
             desiredLinks.length === 1 &&
             node.signals.some((signal) => signal.id === "next");
@@ -792,7 +831,7 @@ export async function syncPlayableStoryTree(
           );
           let signalId =
             reusableExit?.id ??
-            oldManagedExits[routeIndex]?.id ??
+            fallbackExit?.id ??
             reusableButtonSignal ??
             (reuseStarterSignal ? "next" : stableId);
           if (assignedSignals.has(signalId)) {
@@ -800,14 +839,8 @@ export async function syncPlayableStoryTree(
           }
           assignedSignals.add(signalId);
           usedSignals.add(signalId);
-          const label = storyExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
-          const actionBeat = storyTreeActionBeat(
-            section,
-            link.label,
-            treeSections.get(link.toSectionId)?.title,
-            routeIndex,
-            desiredLinks.length,
-          );
+          const label = playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
+          const actionBeat = link.action;
           const buttonText = actionBeat
             ? storyTreeActionLabel(actionBeat)
             : storyExitButtonText(
@@ -817,7 +850,11 @@ export async function syncPlayableStoryTree(
           const existingSignal = node.signals.find((signal) => signal.id === signalId);
           if (existingSignal) existingSignal.label = label;
           else node.signals.push({ id: signalId, label });
-          if (!reusableExit) {
+          const missingActionBinding = Boolean(actionBeat) &&
+            !oldSection?.canvasSnapshot?.storyButtons?.some(
+              (button) => button.signal === signalId,
+            );
+          if (!reusableExit || missingActionBinding) {
             await ensureExitButton(
               node,
               signalId,
@@ -828,6 +865,7 @@ export async function syncPlayableStoryTree(
                 ? storyTreeOperationMotion(actionBeat, signalId)
                 : undefined,
               actionBeat?.id,
+              Boolean(reusableButtonSignal) || missingActionBinding,
             );
           }
           if (createdNodeIds.has(nodeId)) {
@@ -843,12 +881,14 @@ export async function syncPlayableStoryTree(
               sourceHtmlCache.set(node.source.html, relabeled);
             }
           }
-          graph.edges.push({
-            id: playableEdgeId(graph.edges, nodeId, signalId),
-            source: { nodeId, signal: signalId },
-            targetNodeId,
-            mode: "replace",
-          });
+          if (targetNodeId && !treeSections.get(link.toSectionId)?.sourceRemoved) {
+            graph.edges.push({
+              id: playableEdgeId(graph.edges, nodeId, signalId),
+              source: { nodeId, signal: signalId },
+              targetNodeId,
+              mode: "replace",
+            });
+          }
           exits.push({
             id: signalId,
             label,
@@ -869,21 +909,23 @@ export async function syncPlayableStoryTree(
           }
         }
       }
-      if (canUpdateExits) {
+      if (!createdNodeIds.has(nodeId)) {
         for (const [routeIndex, link] of desiredLinks.entries()) {
-          const signalId = exits[routeIndex]?.id;
-          if (!signalId || createdNodeIds.has(nodeId)) continue;
+          const oldActionButton = oldSection?.canvasSnapshot?.storyButtons?.find(
+            (button) => link.action && button.beatId === link.action.id,
+          );
+          const signalId = canUpdateExits
+            ? exits[routeIndex]?.id
+            : oldActionButton?.signal ?? exits.find((exit) =>
+              exit.targetSectionId === link.toSectionId &&
+              exit.label === playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title),
+            )?.id;
+          if (!signalId) continue;
           const previousButton = oldSection?.canvasSnapshot?.storyButtons?.find(
             (button) => button.signal === signalId,
           );
           if (!previousButton) continue;
-          const actionBeat = storyTreeActionBeat(
-            section,
-            link.label,
-            treeSections.get(link.toSectionId)?.title,
-            routeIndex,
-            desiredLinks.length,
-          );
+          const actionBeat = link.action;
           if (!storyActionChanged(
             oldSection,
             section,
@@ -1071,48 +1113,15 @@ function uniqueStorySignalId(base: string, taken: ReadonlySet<string>): string {
   return id;
 }
 
-function storyExitLabel(label: string, targetTitle?: string): string {
-  return (label || targetTitle || "继续").slice(0, MAX_TITLE_LENGTH);
-}
-
 function storyExitButtonText(label: string, targetTitle?: string): string {
   const normalized = label.trim();
-  return (!normalized || normalized === "继续" || normalized === "下一集"
+  return (isGenericStoryExitLabel(normalized)
     ? targetTitle || normalized || "继续"
     : normalized).slice(0, MAX_TITLE_LENGTH);
 }
 
-function storyTreeActionBeat(
-  section: PlayableStoryTreeSection,
-  linkLabel: string,
-  targetTitle: string | undefined,
-  routeIndex: number,
-  routeCount: number,
-): PlayableStoryTreeSection["beats"][number] | undefined {
-  const actions = section.beats.filter(
-    (beat) => beat.kind === "choice" || beat.kind === "operation",
-  );
-  const routeLabels = [linkLabel, targetTitle]
-    .filter((value): value is string => Boolean(value))
-    .map(normalizeStoryActionText)
-    .filter((value) => value && value !== "继续" && value !== "下一集");
-  const matched = actions.find((beat) => {
-    const text = normalizeStoryActionText(beat.text);
-    return routeLabels.some(
-      (label) => text.includes(label) || label.includes(text),
-    );
-  });
-  if (matched) return matched;
-
-  const choices = actions.filter((beat) => beat.kind === "choice");
-  if (choices.length === routeCount) return choices[routeIndex];
-  if (choices.length === 1 && routeCount === 1) return choices[0];
-
-  const operations = actions.filter((beat) => beat.kind === "operation");
-  if (choices.length) return undefined;
-  if (operations.length === routeCount) return operations[routeIndex];
-  if (operations.length === 1 && routeCount === 1) return operations[0];
-  return undefined;
+function isGenericStoryExitLabel(label: string): boolean {
+  return !label || ["继续", "下一集", "主线汇合"].includes(label);
 }
 
 function storyTreeActionLabel(
@@ -1122,111 +1131,6 @@ function storyTreeActionLabel(
     .replace(/^(?:选项|选择|操作)\s*(?:[A-Z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/u, "")
     .trim()
     .slice(0, MAX_TITLE_LENGTH) || beat.text.slice(0, MAX_TITLE_LENGTH);
-}
-
-function storyTreeOperationMotion(
-  beat: PlayableStoryTreeSection["beats"][number],
-  signal: string,
-): PlayableMotionConfig | undefined {
-  if (beat.kind !== "operation") return undefined;
-  const text = beat.text;
-  const timeLimit = Number(
-    /(\d+(?:\.\d+)?)\s*(?:秒|s)\s*内/iu.exec(text)?.[1],
-  );
-  const hasTimeLimit = Number.isFinite(timeLimit) && timeLimit > 0;
-  const parseSeconds = (fallback: number) => {
-    const value = Number(
-      /(?:长按|按住|持续按)[^，。；,;]{0,16}?(\d+(?:\.\d+)?)\s*(?:秒|s)/iu.exec(text)?.[1],
-    );
-    return Math.max(0.1, Math.min(3600, Number.isFinite(value) && value > 0 ? value : fallback));
-  };
-  const withSignal = (config: Omit<PlayableMotionConfig, "signal">): PlayableMotionConfig => ({
-    ...config,
-    signal,
-  });
-
-  if (/长按|按住|持续按/u.test(text)) {
-    return withSignal({
-      kind: "hold-charge",
-      mode: "interactive",
-      duration: parseSeconds(0.8),
-      timeoutDuration: hasTimeLimit ? Math.min(3600, timeLimit) : 3600,
-      interaction: "hold",
-      feedback: "bounce-hover-press",
-    });
-  }
-  if (/滑动|拖动|划动|滑向/u.test(text)) {
-    const interaction: PlayableMotionConfig["interaction"] =
-      /向左|左滑/u.test(text) ? "swipe-left"
-        : /向右|右滑/u.test(text) ? "swipe-right"
-          : /向上|上滑/u.test(text) ? "swipe-up"
-            : /向下|下滑/u.test(text) ? "swipe-down"
-              : "swipe-any";
-    return withSignal({
-      kind: "swipe-button",
-      mode: "interactive",
-      duration: 0.8,
-      timeoutDuration: hasTimeLimit ? Math.min(3600, timeLimit) : 3600,
-      interaction,
-    });
-  }
-  if (/连续点击|连点|点击\s*\d+\s*次/u.test(text)) {
-    const requiredCount = Math.max(
-      2,
-      Math.min(20, Number(/(\d+)\s*次/u.exec(text)?.[1] ?? 3)),
-    );
-    return withSignal({
-      kind: "button-feedback",
-      mode: "interactive",
-      duration: 1,
-      timeoutDuration: hasTimeLimit ? Math.min(3600, timeLimit) : 3600,
-      interaction: "multi-click",
-      requiredCount,
-      feedback: "bounce-hover-press",
-    });
-  }
-  if (/双击/u.test(text)) {
-    const duration = hasTimeLimit ? Math.min(3600, timeLimit) : 3;
-    return withSignal({
-      kind: "countdown",
-      mode: "interactive",
-      duration,
-      timeoutDuration: hasTimeLimit ? duration : 3600,
-      interaction: "double-click",
-    });
-  }
-  if (/快速点击|快速点按/u.test(text)) {
-    const duration = hasTimeLimit ? Math.min(3600, timeLimit) : 3;
-    return withSignal({
-      kind: "countdown",
-      mode: "interactive",
-      duration,
-      timeoutDuration: hasTimeLimit ? duration : 3600,
-      interaction: "quick-click",
-    });
-  }
-  if (/限时|倒计时|QTE/u.test(text)) {
-    const seconds = Number(/(\d+(?:\.\d+)?)\s*(?:秒|s)/iu.exec(text)?.[1]);
-    const duration = Math.max(
-      0.1,
-      Math.min(3600, Number.isFinite(seconds) && seconds > 0 ? seconds : 3),
-    );
-    return withSignal({
-      kind: "countdown",
-      mode: "interactive",
-      duration,
-      timeoutDuration: duration,
-      interaction: "click",
-    });
-  }
-  return undefined;
-}
-
-function normalizeStoryActionText(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(/^(?:选项|选择|操作)\s*(?:[a-z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/u, "")
-    .replace(/[\s，。；、：:!！?？"'“”‘’（）()【】\[\]<>《》]/gu, "");
 }
 
 function markStoryTreeButton(
@@ -1460,6 +1364,19 @@ function sameExitTargets(
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
+function storyActionTargetsMatch(
+  snapshot: PlayableStoryTreeCanvasSnapshot,
+  routes: readonly StoryTreeGenerationRoute[],
+): boolean {
+  return routes.every((route) => {
+    const beatId = route.action?.id;
+    if (!beatId) return true;
+    const button = snapshot.storyButtons?.find((item) => item.beatId === beatId);
+    const exit = snapshot.exits.find((item) => item.id === button?.signal);
+    return exit?.targetSectionId === route.toSectionId;
+  });
+}
+
 function liveManagedExitsMatch(
   node: { id: string; signals: PlayableSignal[] },
   edges: NodeGraph["edges"],
@@ -1476,6 +1393,9 @@ function liveManagedExitsMatch(
       (candidate) => candidate.source.nodeId === node.id && candidate.source.signal === exit.id,
     );
     const targetSection = sections.get(exit.targetSectionId);
+    if (!targetSection || targetSection.sourceRemoved) {
+      return Boolean(signal && signal.label === exit.label && !edge);
+    }
     return Boolean(
       signal &&
       edge &&

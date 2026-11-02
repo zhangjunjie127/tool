@@ -3136,26 +3136,35 @@ export function PlayableEditorWorkspace({
     const selectedNodeIds = new Set(
       nodes.filter((node) => node.selected).map((node) => node.id),
     );
+    const provisionalEdges = new Set(
+      (storyTreeCanvasStatus?.provisionalEdges ?? []).map((edge) =>
+        `${edge.sourceNodeId}\0${edge.sourceSignalId}\0${edge.targetNodeId}`,
+      ),
+    );
     return edges.map((edge) => {
       const selectedNodeConnected =
         selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target);
+      const provisional = provisionalEdges.has(
+        `${edge.source}\0${edge.sourceHandle}\0${edge.target}`,
+      );
       const className =
         [
           edge.className,
           selectedNodeConnected ? "playable-edge-node-selected" : undefined,
+          provisional ? "playable-edge-provisional" : undefined,
         ]
           .filter(Boolean)
           .join(" ") || undefined;
       return {
         ...edge,
         ...(className ? { className } : {}),
-        data: { ...edge.data, nodeSelected: selectedNodeConnected },
+        data: { ...edge.data, nodeSelected: selectedNodeConnected, provisional },
         ...(navigation.has(`${edge.source}\u0000${edge.sourceHandle}`)
           ? { hidden: true }
           : {}),
       };
     });
-  }, [nodes, edges]);
+  }, [nodes, edges, storyTreeCanvasStatus]);
   const renderedNodes = useMemo(() => {
     const pendingRemovalNodeIds = new Set(
       storyTreeCanvasStatus?.pendingRemovalNodeIds ?? [],

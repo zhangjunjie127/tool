@@ -11,6 +11,7 @@ import {
 import {
   syncPlayableStoryTree,
 } from "../src/daemon/playable-add-node.js";
+import { playablePreset } from "../src/daemon/playable-presets.js";
 import {
   PlayableStoryTreeConflictError,
   readPlayableStoryTree,
@@ -20,6 +21,7 @@ import {
   removePlayableStoryTreeChapter,
   parseScreenplayText,
   playableStoryTreeSections,
+  playableStoryTreeCanvasStatus,
   reconcilePlayableStoryTree,
 } from "../src/shared/playable-story-tree.js";
 import { addPlayableNodeAsset } from "../src/shared/playable-editor.js";
@@ -53,7 +55,338 @@ function simpleTree() {
   ], "screenplay.txt").tree;
 }
 
+function choiceTree(count: number) {
+  const tree = simpleTree();
+  const episode = tree.chapters[0]!.episodes[0]!;
+  const source = episode.sections[0]!;
+  source.beats = Array.from({ length: count }, (_, index) => ({
+    id: `choice-${index}`,
+    kind: "choice" as const,
+    text: `选项${index + 1}：路线${index + 1}`,
+  }));
+  episode.sections = [source, ...Array.from({ length: count }, (_, index) => ({
+    ...structuredClone(episode.sections[1]!),
+    id: `target-${index}`,
+    title: `目的地${index + 1}`,
+    sceneNumber: index + 2,
+  }))];
+  tree.links = episode.sections.slice(1).map((target, index) => ({
+    id: `route-${index}`,
+    fromSectionId: source.id,
+    toSectionId: target.id,
+    label: "下一集",
+    status: "suggested" as const,
+  }));
+  return tree;
+}
+
 describe("playable story tree canvas sync", () => {
+  it("renames legacy generic exits to their destination scene after confirmation", async () => {
+    const workspace = await createWorkspace();
+    const first = await syncPlayableStoryTree(workspace, undefined, simpleTree());
+    const tree = structuredClone(first.tree!);
+    const [source, target] = playableStoryTreeSections(tree);
+    const codebase = await readNodeCodebase(workspace);
+    const node = codebase.graph.nodes.find((item) => item.id === source!.canvasNodeId)!;
+    const signalId = source!.canvasSnapshot!.exits[0]!.id;
+    const signal = node.signals.find((item) => item.id === signalId)!;
+    signal.label = "下一集";
+    source!.canvasSnapshot!.exits[0]!.label = "下一集";
+    const oldPosition = codebase.editorLayout.nodes[node.id];
+    await writeNodeCodebase(workspace, {
+      graph: codebase.graph,
+      editorLayout: codebase.editorLayout,
+    });
+
+    const preview = await syncPlayableStoryTree(workspace, tree, tree);
+    expect(preview.applied).toBe(false);
+    expect(preview.confirmations).toHaveLength(1);
+    const applied = await syncPlayableStoryTree(workspace, tree, tree, true);
+    const after = await readNodeCodebase(workspace);
+    expect(after.graph.nodes.find((item) => item.id === node.id)!.signals
+      .find((item) => item.id === signalId)!.label).toBe(target!.title);
+    expect(after.editorLayout.nodes[node.id]).toEqual(oldPosition);
+    expect(applied.tree!.chapters[0]!.episodes[0]!.sections[0]!
+      .canvasSnapshot!.exits[0]!.label).toBe(target!.title);
+  });
+
+  it("completes missing routes around cross-episode branches without chaining sibling alternatives", async () => {
+    const workspace = await createWorkspace();
+    const tree = parseScreenplayText([
+      "第3集",
+      "3-1B 赌串摊——延展剧情 选项二：【拒绝赌注，转身离开】",
+      "拿钱离开。",
+      "3-2 古董摊",
+      "选项一：【采用包圆法】",
+      "选项二：【采用捎带法】",
+      "选项三：【采用火中取栗法】",
+      "第4集",
+      "4-1A 古董摊——延展剧情 选项一：【采用包圆法】",
+      "按钮：【划动屏幕擦掉灰尘】",
+      "4-2B 古董摊——延展剧情 选项二：【采用捎带法】",
+      "带着古董离开。",
+      "4-2C 古董摊——延展剧情 选项三：【采用火中取栗法】",
+      "按钮：【长按屏幕摔掉金蟾】",
+      "第5集",
+      "5-1 出租屋",
+      "三条路线在这里继续。",
+    ], "branches.txt").tree;
+    const [refuse, choice, a, b, c, next] = playableStoryTreeSections(tree);
+    tree.links = [
+      { id: "merge", fromSectionId: refuse!.id, toSectionId: choice!.id, label: "主线汇合", status: "suggested" },
+      { id: "first", fromSectionId: choice!.id, toSectionId: a!.id, label: "下一集", status: "suggested" },
+    ];
+    const original = structuredClone(tree);
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const codebase = await readNodeCodebase(workspace);
+    const generated = new Map(playableStoryTreeSections(result.tree!).map((section) => [section.id, section.canvasNodeId]));
+    const targets = (id: string) => codebase.graph.edges
+      .filter((edge) => edge.source.nodeId === generated.get(id))
+      .map((edge) => edge.targetNodeId);
+    expect(targets(choice!.id)).toEqual([a, b, c].map((section) => generated.get(section!.id)));
+    for (const section of [a, b, c]) {
+      expect(targets(section!.id)).toEqual([generated.get(next!.id)]);
+    }
+    expect(targets(refuse!.id)).toEqual([generated.get(choice!.id)]);
+    expect(result.tree!.links).toHaveLength(7);
+    expect(result.tree!.links.every((link) => link.status === "suggested")).toBe(true);
+    expect(tree).toEqual(original);
+    const repeated = await syncPlayableStoryTree(workspace, result.tree, result.tree!);
+    expect(repeated).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
+    expect((await readNodeCodebase(workspace)).graph).toEqual(codebase.graph);
+  });
+
+  it.each([2, 3, 5])("creates %i provisionally mapped choices instead of limiting exits to the preset", async (count) => {
+    const workspace = await createWorkspace();
+    const tree = choiceTree(count);
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const sections = playableStoryTreeSections(result.tree!);
+    const codebase = await readNodeCodebase(workspace);
+    const node = codebase.graph.nodes.find((item) => item.id === sections[0]!.canvasNodeId)!;
+    const exits = sections[0]!.canvasSnapshot!.exits;
+    expect(node.signals).toHaveLength(count);
+    const generatedHtml = await readFile(path.join(workspace, node.source.html), "utf8");
+    expect(generatedHtml).toContain('data-putenggame-no-input-mode="wait"');
+    expect(generatedHtml).not.toContain('class="choices"');
+    expect(exits).toHaveLength(count);
+    expect(codebase.graph.edges).toHaveLength(count);
+    expect(playableStoryTreeCanvasStatus(result.tree!).provisionalEdges).toHaveLength(count);
+    expect(sections[0]!.canvasSnapshot!.storyButtons!.map((button) => button.beatId))
+      .toEqual(sections[0]!.beats.map((beat) => beat.id));
+
+    const html = await readFile(path.join(workspace, node.source.html), "utf8");
+    const confirmed = structuredClone(result.tree!);
+    confirmed.links.forEach((link) => { link.status = "confirmed"; });
+    const applied = await syncPlayableStoryTree(workspace, result.tree, confirmed);
+    expect(applied).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
+    expect(playableStoryTreeCanvasStatus(applied.tree!).provisionalEdges).toBeUndefined();
+    expect(await readFile(path.join(workspace, node.source.html), "utf8")).toBe(html);
+    expect((await readNodeCodebase(workspace)).graph).toEqual(codebase.graph);
+  });
+
+  it.each([
+    ["长按开门2秒", "hold"],
+    ["向左滑动", "swipe-left"],
+    ["连续点击5次", "multi-click"],
+    ["双击开门", "double-click"],
+    ["快速点击按钮", "quick-click"],
+    ["3秒内完成QTE", "click"],
+  ])("generates and connects the suggested operation %s", async (text, interaction) => {
+    const workspace = await createWorkspace();
+    const tree = simpleTree();
+    const section = playableStoryTreeSections(tree)[0]!;
+    section.beats = [{ id: "operation", kind: "operation", text }];
+    tree.links[0]!.status = "suggested";
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const codebase = await readNodeCodebase(workspace);
+    const node = codebase.graph.nodes.find((item) =>
+      item.id === playableStoryTreeSections(result.tree!)[0]!.canvasNodeId,
+    )!;
+    const html = await readFile(path.join(workspace, node.source.html), "utf8");
+    expect(html).toContain(`data-putenggame-motion-interaction="${interaction}"`);
+    expect(html).toContain('data-putenggame-no-input-mode="wait"');
+    expect(html).toContain('data-putenggame-story-tree-beat-id="operation"');
+    expect(codebase.graph.edges.filter((edge) => edge.source.nodeId === node.id)).toHaveLength(1);
+    expect(result.pendingLinks).toBe(1);
+  });
+
+  it("repairs a legacy two-button scene after confirmation without moving or resizing its buttons", async () => {
+    const workspace = await createWorkspace();
+    const tree = choiceTree(3);
+    const first = await syncPlayableStoryTree(workspace, undefined, tree);
+    const sections = playableStoryTreeSections(first.tree!);
+    const codebase = await readNodeCodebase(workspace);
+    const source = codebase.graph.nodes.find((node) => node.id === sections[0]!.canvasNodeId)!;
+    const preset = playablePreset("choice")!;
+    const legacyHtml = preset.source(source.title).html
+      .replace('style="--delay: 0.6s"', 'style="left:123px;top:234px;width:87px;height:43px" data-author-note="keep"');
+    source.signals = structuredClone(preset.signals);
+    codebase.graph.edges = [];
+    sections[0]!.canvasSnapshot!.exits = [];
+    sections[0]!.canvasSnapshot!.storyButtons = [];
+    await writeNodeCodebase(workspace, {
+      graph: codebase.graph,
+      editorLayout: codebase.editorLayout,
+      sources: { [source.source.html]: legacyHtml },
+    });
+    const preview = await syncPlayableStoryTree(workspace, first.tree, first.tree!);
+    expect(preview.applied).toBe(false);
+    expect(await readFile(path.join(workspace, source.source.html), "utf8")).toBe(legacyHtml);
+    const applied = await syncPlayableStoryTree(workspace, first.tree, first.tree!, true);
+    const after = await readNodeCodebase(workspace);
+    const html = await readFile(path.join(workspace, source.source.html), "utf8");
+    expect(after.graph.edges).toHaveLength(3);
+    expect(after.graph.nodes.find((node) => node.id === source.id)!.signals).toHaveLength(3);
+    expect(after.editorLayout).toEqual(codebase.editorLayout);
+    expect(html).toContain('style="left:123px;top:234px;width:87px;height:43px"');
+    expect(html).toContain('data-author-note="keep"');
+    expect(html).not.toContain("I had no choice.");
+    expect(html).not.toContain("Who else would come?");
+    expect(playableStoryTreeSections(applied.tree!)[0]!.canvasSnapshot!.storyButtons).toHaveLength(3);
+  });
+
+  it("retains an operation with no target and reuses its button when a destination is supplied", async () => {
+    const workspace = await createWorkspace();
+    const tree = simpleTree();
+    tree.links = [];
+    playableStoryTreeSections(tree)[1]!.kind = "branch";
+    playableStoryTreeSections(tree)[0]!.beats = [
+      { id: "hold", kind: "operation", text: "长按开门2秒" },
+    ];
+    const first = await syncPlayableStoryTree(workspace, undefined, tree);
+    const sections = playableStoryTreeSections(first.tree!);
+    const node = (await readNodeCodebase(workspace)).graph.nodes.find((item) =>
+      item.id === sections[0]!.canvasNodeId,
+    )!;
+    const html = await readFile(path.join(workspace, node.source.html), "utf8");
+    expect(node.signals).toHaveLength(1);
+    expect(html).toContain('data-putenggame-motion-interaction="hold"');
+    const repeated = await syncPlayableStoryTree(workspace, first.tree, first.tree!);
+    expect(repeated).toMatchObject({ applied: true, updatedNodes: 0 });
+    const next = structuredClone(first.tree!);
+    next.links.push({
+      id: "hold-destination",
+      fromSectionId: sections[0]!.id,
+      toSectionId: sections[1]!.id,
+      label: "继续",
+      status: "suggested",
+    });
+    const applied = await syncPlayableStoryTree(workspace, first.tree, next, true);
+    const after = await readNodeCodebase(workspace);
+    expect(applied.applied).toBe(true);
+    expect(after.graph.edges).toHaveLength(1);
+    expect(after.graph.edges[0]!.source.signal).toBe(node.signals[0]!.id);
+    expect(await readFile(path.join(workspace, node.source.html), "utf8")).toBe(html);
+  });
+
+  it("keeps existing button identities when a choice is inserted before them or removed", async () => {
+    const workspace = await createWorkspace();
+    const tree = choiceTree(3);
+    tree.links.forEach((link, index) => { link.label = `路线${index + 1}`; });
+    const first = await syncPlayableStoryTree(workspace, undefined, tree);
+    const original = playableStoryTreeSections(first.tree!)[0]!;
+    const before = await readNodeCodebase(workspace);
+    const node = before.graph.nodes.find((item) => item.id === original.canvasNodeId)!;
+    const originalButtons = original.canvasSnapshot!.storyButtons!;
+    const originalHtml = await readFile(path.join(workspace, node.source.html), "utf8");
+    const next = structuredClone(first.tree!);
+    const section = playableStoryTreeSections(next)[0]!;
+    section.beats.unshift({ id: "inserted", kind: "choice", text: "新增路线" });
+    next.links.unshift({
+      id: "inserted-route", fromSectionId: section.id,
+      toSectionId: playableStoryTreeSections(next)[1]!.id,
+      label: "新增路线", status: "suggested",
+    });
+    const applied = await syncPlayableStoryTree(workspace, first.tree, next, true);
+    const newButtons = playableStoryTreeSections(applied.tree!)[0]!.canvasSnapshot!.storyButtons!;
+    expect(newButtons).toHaveLength(4);
+    for (const button of originalButtons) {
+      expect(newButtons.find((item) => item.beatId === button.beatId)).toEqual(button);
+    }
+    const removed = structuredClone(applied.tree!);
+    playableStoryTreeSections(removed)[0]!.beats = original.beats;
+    removed.links = removed.links.filter((link) => link.id !== "inserted-route").reverse();
+    const reapplied = await syncPlayableStoryTree(workspace, applied.tree, removed, true);
+    expect(playableStoryTreeSections(reapplied.tree!)[0]!.canvasSnapshot!.storyButtons!)
+      .toEqual(expect.arrayContaining(originalButtons));
+    expect(await readFile(path.join(workspace, node.source.html), "utf8")).toBe(originalHtml);
+    expect((await readNodeCodebase(workspace)).editorLayout).toEqual(before.editorLayout);
+  });
+
+  it("does not replace a manually redirected edge when the story has not changed", async () => {
+    const workspace = await createWorkspace();
+    const first = await syncPlayableStoryTree(workspace, undefined, choiceTree(3));
+    const before = await readNodeCodebase(workspace);
+    before.graph.edges[0]!.targetNodeId = before.graph.edges[1]!.targetNodeId;
+    await writeNodeCodebase(workspace, { graph: before.graph, editorLayout: before.editorLayout });
+    const repeated = await syncPlayableStoryTree(workspace, first.tree, first.tree!);
+    expect(repeated).toMatchObject({ applied: true, updatedNodes: 0 });
+    expect((await readNodeCodebase(workspace)).graph).toEqual(before.graph);
+  });
+
+  it("updates provisional positional mappings even when their labels are identical", async () => {
+    const workspace = await createWorkspace();
+    const first = await syncPlayableStoryTree(workspace, undefined, choiceTree(3));
+    const section = playableStoryTreeSections(first.tree!)[0]!;
+    const before = await readNodeCodebase(workspace);
+    const source = before.graph.nodes.find((node) => node.id === section.canvasNodeId)!;
+    const html = await readFile(path.join(workspace, source.source.html), "utf8");
+    const next = structuredClone(first.tree!);
+    const firstTarget = next.links[0]!.toSectionId;
+    next.links[0]!.toSectionId = next.links[1]!.toSectionId;
+    next.links[1]!.toSectionId = firstTarget;
+    const preview = await syncPlayableStoryTree(workspace, first.tree, next);
+    expect(preview.applied).toBe(false);
+    const applied = await syncPlayableStoryTree(workspace, first.tree, next, true);
+    const after = await readNodeCodebase(workspace);
+    const firstButton = section.canvasSnapshot!.storyButtons![0]!;
+    const target = playableStoryTreeSections(applied.tree!).find((item) => item.id === next.links[0]!.toSectionId)!;
+    expect(after.graph.edges.find((edge) => edge.source.nodeId === source.id && edge.source.signal === firstButton.signal)!.targetNodeId)
+      .toBe(target.canvasNodeId);
+    expect(await readFile(path.join(workspace, source.source.html), "utf8")).toBe(html);
+    expect(after.editorLayout).toEqual(before.editorLayout);
+  });
+
+  it("generates all three choice buttons and provisionally connects suggested routes", async () => {
+    const workspace = await createWorkspace();
+    const tree = parseScreenplayText([
+      "第1集", "1-1 选择", "选项一：【当场拆穿】",
+      "选项二：【默默离开】", "选项三：【以身入局】",
+      "第2集", "2-1A 当场拆穿", "分支剧情",
+      "2-1B 默默离开", "分支剧情", "2-1C 以身入局", "分支剧情",
+    ], "choices.txt").tree;
+    const sections = playableStoryTreeSections(tree);
+    tree.links = sections.slice(1).map((target, index) => ({
+      id: `choice-${index}`,
+      fromSectionId: sections[0]!.id,
+      toSectionId: target.id,
+      label: index === 0 ? "下一集" : target.title,
+      status: "suggested",
+    }));
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const codebase = await readNodeCodebase(workspace);
+    const generated = playableStoryTreeSections(result.tree!);
+    const source = codebase.graph.nodes.find((node) => node.id === generated[0]!.canvasNodeId)!;
+    const edges = codebase.graph.edges.filter((edge) => edge.source.nodeId === source.id);
+    expect(source.signals.map((signal) => signal.label)).toEqual(
+      sections.slice(1).map((section) => section.title),
+    );
+    expect(source.signals.some((signal) => signal.label === "下一集")).toBe(false);
+    expect(edges).toHaveLength(3);
+    expect(source.signals).toHaveLength(3);
+    const html = await readFile(path.join(workspace, source.source.html), "utf8");
+    for (const beat of sections[0]!.beats.filter((beat) => beat.kind === "choice")) {
+      expect(html).toContain(`data-putenggame-story-tree-beat-id="${beat.id}"`);
+    }
+    expect(new Set(edges.map((edge) => edge.targetNodeId)).size).toBe(3);
+    expect(result.pendingLinks).toBe(3);
+    expect(result.tree!.links.every((link) => link.status === "suggested")).toBe(true);
+    const repeated = await syncPlayableStoryTree(workspace, result.tree, result.tree!);
+    expect(repeated).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
+    expect(await readFile(path.join(workspace, source.source.html), "utf8")).toBe(html);
+    expect((await readNodeCodebase(workspace)).graph).toEqual(codebase.graph);
+  });
+
   it("imports renumbered scenes without rewriting existing buttons, assets, or canvas positions", async () => {
     const workspace = await createWorkspace();
     const first = await syncPlayableStoryTree(workspace, undefined, simpleTree());
@@ -545,13 +878,14 @@ describe("playable story tree canvas sync", () => {
     expect(positions.get(branchA!.id)!.x).toBe(positions.get(branchB!.id)!.x);
     expect(Math.abs(positions.get(branchA!.id)!.y - positions.get(branchB!.id)!.y))
       .toBeGreaterThanOrEqual(rowStep);
-    expect(positions.get(branchA!.id)!.y).toBeGreaterThan(positions.get(start!.id)!.y);
+    expect(positions.get(branchA!.id)!.y).toBe(positions.get(start!.id)!.y);
     expect(positions.get(branchA!.id)!.y).toBe(positions.get(afterA!.id)!.y);
     expect(positions.get(branchB!.id)!.y).toBe(positions.get(afterB!.id)!.y);
     expect(positions.get(afterA!.id)!.x - positions.get(branchA!.id)!.x)
       .toBeGreaterThanOrEqual(columnStep);
     expect(positions.get(merge!.id)!.x - positions.get(afterA!.id)!.x)
       .toBeGreaterThanOrEqual(columnStep);
+    expect(positions.get(merge!.id)!.y).toBe(positions.get(start!.id)!.y);
     expect(codebase.graph.edges).toHaveLength(6);
   });
 
@@ -712,7 +1046,7 @@ describe("playable story tree canvas sync", () => {
     ).toBe(false);
   });
 
-  it("adds confirmed routes from existing scenes to newly generated scenes", async () => {
+  it.each(["confirmed", "suggested"] as const)("adds %s routes from existing scenes to newly generated scenes", async (status) => {
     const workspace = await createWorkspace();
     const first = await syncPlayableStoryTree(workspace, undefined, simpleTree());
     const existingTree = first.tree!;
@@ -750,7 +1084,7 @@ describe("playable story tree canvas sync", () => {
       fromSectionId: existingSections[1]!.id,
       toSectionId: newSection.id,
       label: "继续",
-      status: "confirmed",
+      status,
     });
 
     const result = await syncPlayableStoryTree(
@@ -850,7 +1184,7 @@ describe("playable story tree canvas sync", () => {
     )).toBe(true);
   });
 
-  it("connects a generated Choice preset's own button Signal to its confirmed route", async () => {
+  it("composes a Choice scene from the actual action instead of retaining demo buttons", async () => {
     const workspace = await createWorkspace();
     const tree = parseScreenplayText([
       "第1集",
@@ -868,16 +1202,16 @@ describe("playable story tree canvas sync", () => {
     )!;
     const html = await readFile(path.join(workspace, sourceNode.source.html), "utf8");
 
-    expect(sourceNode.signals.map((signal) => signal.id)).toContain("option-a");
+    expect(sourceNode.signals).toHaveLength(1);
     expect(after.graph.edges).toContainEqual(
       expect.objectContaining({
-        source: { nodeId: sourceNode.id, signal: "option-a" },
+        source: { nodeId: sourceNode.id, signal: sourceNode.signals[0]!.id },
       }),
     );
-    expect(html).toContain('data-signal="option-a"');
-    expect(html).toContain("<kbd>1</kbd>前往左侧</button>");
+    expect(html).toContain(`data-signal="${sourceNode.signals[0]!.id}"`);
+    expect(html).toContain(">前往左侧</button>");
     expect(html).not.toContain("I had no choice.");
-    expect(html).not.toContain("data-putenggame-button-preset");
+    expect(html).toContain("data-putenggame-button-preset");
   });
 
   it("updates only a changed generated operation button and preserves its custom attributes", async () => {
@@ -978,7 +1312,7 @@ describe("playable story tree canvas sync", () => {
       )!.signals.map((signal) => signal.id);
 
     expect(result.addedNodes).toBe(3);
-    expect(signalsFor(0)).toEqual(expect.arrayContaining(["option-a", "option-b"]));
+    expect(signalsFor(0)).toHaveLength(1);
     expect(signalsFor(1)).toEqual(expect.arrayContaining(["success", "fail"]));
     expect(signalsFor(2)).toEqual([]);
   });

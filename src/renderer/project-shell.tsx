@@ -851,6 +851,7 @@ export function ProjectShell({
 
   return (
     <WorkspaceShell chatLayout={chatLayout} agentCollapsed={agentIsCollapsed} viewerCollapsed={viewerCollapsed}
+      agentSidePanelVisible={storyTreeVisible}
       onHome={requestHome} homeLabel={homeLabel} homeIcon={ArrowLeft} onExpandAgent={() => setAgentCollapsed(false)}
       agentSidePanel={project?.type === "interactive-story"
         ? <PlayableStoryTreePanel

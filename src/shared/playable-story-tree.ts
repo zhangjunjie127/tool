@@ -1,3 +1,5 @@
+import { playableStoryTreeExitLabel } from "./playable-story-tree-routes.js";
+
 export type PlayableStoryTreeBeatKind =
   | "plot"
   | "operation"
@@ -129,6 +131,7 @@ export interface PlayableStoryTreeDiff {
 export interface PlayableStoryTreeCanvasStatus {
   pendingRemovalNodeIds: string[];
   pendingGenerationCount: number;
+  provisionalEdges?: PlayableStoryTreeCanvasEdge[];
 }
 
 export interface PlayableStoryTreeCanvasEdge {
@@ -244,7 +247,20 @@ export function playableStoryTreeCanvasStatus(
   existingCanvasNodeIds?: ReadonlySet<string>,
 ): PlayableStoryTreeCanvasStatus {
   const sections = playableStoryTreeSections(tree);
+  const provisionalEdges = tree.links.flatMap((link) => {
+    if (link.status !== "suggested") return [];
+    const source = sections.find((section) => section.id === link.fromSectionId && !section.sourceRemoved);
+    const target = sections.find((section) => section.id === link.toSectionId && !section.sourceRemoved);
+    const exit = source?.canvasSnapshot?.exits.find((item) =>
+      item.targetSectionId === link.toSectionId &&
+      item.label === playableStoryTreeExitLabel(link.label, target?.title),
+    );
+    return source?.canvasNodeId && target?.canvasNodeId && exit
+      ? [{ sourceNodeId: source.canvasNodeId, sourceSignalId: exit.id, targetNodeId: target.canvasNodeId }]
+      : [];
+  });
   return {
+    ...(provisionalEdges.length ? { provisionalEdges } : {}),
     pendingRemovalNodeIds: [...new Set(sections
       .filter((section) =>
         section.sourceRemoved &&
