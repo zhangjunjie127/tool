@@ -13,6 +13,29 @@ import {
 import { DEFAULT_PLAYABLE_GAME_SETTINGS } from "../src/shared/playable-settings.js";
 
 describe("Playable sandbox", () => {
+  it("validates global-font updates and allows clearing the override", () => {
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:global-font",
+        instanceId: "instance",
+        family: "Example UI",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:global-font",
+        instanceId: "instance",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        kind: "putenggame:playable:global-font",
+        instanceId: "instance",
+        family: "   ",
+      }),
+    ).toBe(false);
+  });
+
   it("validates editor keyboard shortcut messages from the preview frame", () => {
     expect(
       isPlayableFrameMessage({
@@ -28,6 +51,15 @@ describe("Playable sandbox", () => {
         shortcut: "launch",
       }),
     ).toBe(false);
+  });
+
+  it("validates delegated button activation messages from the preview frame", () => {
+    expect(
+      isPlayableFrameMessage({
+        kind: "putenggame:playable:button-activated",
+        instanceId: "instance",
+      }),
+    ).toBe(true);
   });
 
   it("validates per-Scene Asset loading messages", () => {
@@ -628,6 +660,7 @@ describe("Playable sandbox", () => {
         signal: "button-1",
         label: "新按钮",
         buttonText: "开始",
+        buttonAction: "back",
         fontFamily: "Microsoft YaHei",
         pressedAssetId: "pressed-image",
         pressedAsset: {
@@ -643,6 +676,12 @@ describe("Playable sandbox", () => {
       },
     };
     expect(isPlayableHostMessage(message)).toBe(true);
+    expect(
+      isPlayableHostMessage({
+        ...message,
+        command: { ...message.command, buttonAction: "unknown" },
+      }),
+    ).toBe(false);
     expect(
       isPlayableHostMessage({
         ...message,

@@ -224,7 +224,20 @@ The player owns one Game settings button for the whole graph, outside individual
 Scene content. It remains available while navigating between Scenes, and its
 optional image and normalized viewport position are stored on the graph as
 `settingsButton`. Authors can choose the image from the Library and drag the
-button in the Workbench preview; these edits do not restart the running Node.
+button in the Workbench preview. The settings and Return buttons each have an
+independent size, edited with the same proportional scale control; old graphs
+without a saved size use the 42-pixel default. Resizing preserves each button's
+saved center position, and these edits do not restart the running Node.
+
+An optional `buttonSoundAssetId` on the graph selects one audio Asset for all
+Scene buttons and player-owned controls. The player applies the saved UI sound
+enabled state and volume to it; the graph-level reference keeps the sound
+available across Scenes and in exported games.
+
+The Return button is also stored once on the graph and shared by every Scene.
+The game menu opens from it or with Escape. The button stays hidden on the
+Entry Scene and appears after the player enters another Scene; the Workbench
+keeps it visible in Select mode so it can still be edited there.
 
 The Runtime applies brightness, subtitle cues, subtitle size, and backdrop
 video volume in each Scene. Audio elements can opt into the shared music or UI
@@ -240,8 +253,8 @@ Runtime supplies settings and a transcription service to each mounted Node.
 `PlayableTranscriptionProvider`; its `transcribe` method receives a declared
 video Asset ID, language, and an `AbortSignal`, and returns timed
 `PlayableSubtitleCue` values. No transcription service is bundled or called by
-default; the Game settings Template keeps generation disabled until one is
-configured. Authors can still add and edit timed cues manually.
+default. Custom Scenes can add and edit timed cues through
+`context.settings`; generation is available only when a provider is configured.
 
 `messageHints` hides elements marked with `data-playable-hint` and the shared
 `.continue-hint` prompt. Mark authored hint text with `data-playable-hint` to
@@ -287,6 +300,8 @@ A Signal says what happened; an edge says where it leads.
 - `replace` exits the current node and enters the target.
 - `push` records the current node on the back stack, then enters the target.
 - `back()` returns to the most recently pushed node, which mounts fresh.
+- The built-in Back button action calls `back()`; it can return only when the
+  current Scene was entered through a `push` edge.
 
 The back stack stores node IDs, not live instances. Anything that must survive
 leaving a node belongs in Project State.

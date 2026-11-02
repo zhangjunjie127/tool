@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { expect, it, vi } from "vitest";
 import {
+  PLAYABLE_MOTION_ATTRIBUTES,
   insertPlayableButtonPreset,
   insertPlayableMediaElement,
   mountPlayableMotionElement,
@@ -557,7 +558,7 @@ it("plays the hold-charge scale hint without an idle outer glow", async () => {
   button.remove();
 });
 
-it("scales the replacement image and button hit area together without cropping", () => {
+it("fits replacement images without changing the button frame's border geometry", () => {
   const button = document.createElement("button");
   button.textContent = "Continue";
   button.style.width = "180px";
@@ -596,7 +597,9 @@ it("scales the replacement image and button hit area together without cropping",
   expect(button.style.scale).toBe("1.5 0.8");
   expect(button.style.backgroundImage).toBe("none");
   expect(button.style.backgroundColor).toBe("transparent");
-  expect(button.style.border).toBe("0px");
+  expect(button.style.border).toBe("1px solid transparent");
+  expect(button.style.borderWidth).toBe("1px");
+  expect(button.style.borderStyle).toBe("solid");
   expect(button.style.isolation).toBe("isolate");
   expect(button.style.width).toBe("180px");
   expect(button.style.height).toBe("48px");
@@ -634,8 +637,15 @@ it("swaps the normal button image for the pressed image while held", () => {
   const button = document.createElement("button");
   button.textContent = "开始";
   button.style.transition = "transform 180ms ease";
+  button.style.left = "42%";
+  button.style.top = "35%";
+  button.style.width = "180px";
+  button.style.height = "48px";
+  button.style.border = "1px solid white";
   button.setAttribute("data-putenggame-button-asset", "normal");
   button.setAttribute("data-putenggame-button-pressed-asset", "pressed");
+  button.setAttribute("data-putenggame-button-asset-scale-x", "150");
+  button.setAttribute("data-putenggame-button-asset-scale-y", "150");
   const click = vi.fn();
   button.addEventListener("click", click);
   const cleanup = mountPlayableMotionElement(button, {
@@ -659,9 +669,21 @@ it("swaps the normal button image for the pressed image while held", () => {
   const normal = button.querySelector<HTMLElement>(
     "[data-putenggame-button-asset-image]",
   )!;
+  const normalImage = normal.querySelector<HTMLImageElement>("img")!;
+  const pressedImage = pressed.querySelector<HTMLImageElement>("img")!;
   expect(pressed.style.visibility).toBe("hidden");
   expect(normal.style.visibility).toBe("visible");
-  expect(button.style.scale).toBe("1 1");
+  expect(normalImage.style.objectFit).toBe("contain");
+  expect(pressedImage.style.objectFit).toBe("contain");
+  expect(button.style.scale).toBe("1.5 1.5");
+  expect(button.style).toMatchObject({
+    left: "42%",
+    top: "35%",
+    width: "180px",
+    height: "48px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+  });
   button.dispatchEvent(
     new PointerEvent("pointerenter", {
       bubbles: true,
@@ -670,7 +692,7 @@ it("swaps the normal button image for the pressed image while held", () => {
   );
   expect(pressed.style.visibility).toBe("visible");
   expect(normal.style.visibility).toBe("hidden");
-  expect(button.style.scale).toBe("1 1");
+  expect(button.style.scale).toBe("1.5 1.5");
   button.dispatchEvent(
     new PointerEvent("pointerleave", {
       bubbles: true,
@@ -693,11 +715,11 @@ it("swaps the normal button image for the pressed image while held", () => {
     }),
   );
   expect(pressed.style.visibility).toBe("visible");
-  expect(button.style.scale).toBe("1.08 1.08");
+  expect(button.style.scale).toBe("1.62 1.62");
   window.dispatchEvent(new PointerEvent("pointerup"));
   expect(pressed.style.visibility).toBe("hidden");
   expect(normal.style.visibility).toBe("visible");
-  expect(button.style.scale).toBe("1 1");
+  expect(button.style.scale).toBe("1.5 1.5");
   expect(button.style.transition).toContain("transform 180ms ease");
   expect(button.style.transition).toContain("scale 120ms ease");
   button.dispatchEvent(
@@ -705,13 +727,13 @@ it("swaps the normal button image for the pressed image while held", () => {
   );
   expect(pressed.style.visibility).toBe("visible");
   expect(normal.style.visibility).toBe("hidden");
-  expect(button.style.scale).toBe("1.08 1.08");
+  expect(button.style.scale).toBe("1.62 1.62");
   button.dispatchEvent(
     new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
   );
   expect(pressed.style.visibility).toBe("hidden");
   expect(normal.style.visibility).toBe("visible");
-  expect(button.style.scale).toBe("1 1");
+  expect(button.style.scale).toBe("1.5 1.5");
   button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   expect(pressed.style.visibility).toBe("visible");
   expect(normal.style.visibility).toBe("hidden");
@@ -722,6 +744,43 @@ it("swaps the normal button image for the pressed image while held", () => {
   expect(click).toHaveBeenCalledOnce();
   expect(button.textContent).toBe("开始");
   cleanup();
+
+  button.setAttribute("data-putenggame-button-asset", "replacement");
+  button.setAttribute("data-putenggame-button-pressed-asset", "pressed-replacement");
+  const replacementCleanup = mountPlayableMotionElement(button, {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: (id: string) => `/assets/${id}.png` },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  });
+  expect(
+    button.querySelector<HTMLImageElement>(
+      "[data-putenggame-button-asset-image] img",
+    )?.src,
+  ).toContain("/assets/replacement.png");
+  expect(
+    button.querySelector<HTMLImageElement>(
+      "[data-putenggame-button-pressed-image] img",
+    )?.src,
+  ).toContain("/assets/pressed-replacement.png");
+  expect(button.style).toMatchObject({
+    left: "42%",
+    top: "35%",
+    width: "180px",
+    height: "48px",
+    scale: "1.5 1.5",
+    borderWidth: "1px",
+    borderStyle: "solid",
+  });
+  replacementCleanup();
 });
 
 it("shows hover feedback from XR pointer movement without treating touch as hover", () => {
@@ -3068,6 +3127,87 @@ it("inserts a source-backed button preset with an independently connectable sign
   ).toBeUndefined();
 });
 
+it("inserts a video-end return button with both image states and its label", () => {
+  const inserted = insertPlayableButtonPreset(
+    "<main></main>",
+    "nodes/ending/index.html",
+    "putenggame-button-back",
+    undefined,
+    "返回",
+    {
+      kind: "button-feedback",
+      mode: "visual",
+      duration: 0.1,
+      feedback: "hover-press",
+    },
+    "back-normal",
+    "back-pressed",
+    "重新选择",
+    undefined,
+    "back",
+  );
+
+  expect(inserted?.html).toContain(
+    'data-putenggame-button-action="back" data-putenggame-show-after-video-end',
+  );
+  expect(inserted?.html).toContain(
+    'data-putenggame-button-asset="back-normal"',
+  );
+  expect(inserted?.html).toContain(
+    'data-putenggame-button-pressed-asset="back-pressed"',
+  );
+  expect(inserted?.html).toContain('aria-label="重新选择"');
+  expect(inserted?.html).toContain(">重新选择</button>");
+  expect(inserted?.html).toContain(
+    "width:14cqw;height:auto;min-width:0;min-height:0;padding:0;border-radius:0;aspect-ratio:auto",
+  );
+});
+
+it("matches the return-button frame to its normal-state image ratio", () => {
+  const button = document.createElement("button");
+  button.style.width = "14cqw";
+  button.style.height = "auto";
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.buttonAction, "back");
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.asset, "return-normal");
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.kind, "button-feedback");
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.mode, "visual");
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.duration, "0.1");
+  button.setAttribute(PLAYABLE_MOTION_ATTRIBUTES.feedback, "hover-press");
+  const cleanup = mountPlayableMotionElement(
+    button,
+    {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: () => "/return.png" },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => false,
+      },
+    },
+    "/return.png",
+  );
+  const image = button.querySelector<HTMLImageElement>(
+    "[data-putenggame-button-asset-image] img",
+  )!;
+  Object.defineProperty(image, "naturalWidth", {
+    configurable: true,
+    value: 240,
+  });
+  Object.defineProperty(image, "naturalHeight", {
+    configurable: true,
+    value: 80,
+  });
+  image.dispatchEvent(new Event("load"));
+
+  expect(button.style.aspectRatio).toBe("240 / 80");
+  cleanup();
+});
+
 it("inserts the circular bouncing click button as a round control", () => {
   const inserted = insertPlayableButtonPreset(
     "<main></main>",
@@ -3406,6 +3546,130 @@ it("plays the particle burst from the button anchor, supports repeat presses, an
     expect(button.style.overflow).toBe("hidden");
     expect(animations.length).toBeGreaterThanOrEqual(60);
     expect(animations.every((animation) => animation.cancel.mock.calls.length === 1)).toBe(true);
+  } finally {
+    cleanup();
+    if (originalAnimate)
+      Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+    else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  }
+});
+
+it("keeps burst sprites a fixed size while larger buttons add particles and spread", () => {
+  const originalAnimate = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "animate",
+  );
+  const animations: {
+    target: HTMLElement;
+    frames: Keyframe[];
+    cancel: ReturnType<typeof vi.fn>;
+  }[] = [];
+  Object.defineProperty(HTMLElement.prototype, "animate", {
+    configurable: true,
+    value: function (this: HTMLElement, frames: Keyframe[]) {
+      const animation = { cancel: vi.fn() };
+      animations.push({ target: this, frames, cancel: animation.cancel });
+      return animation as unknown as Animation;
+    },
+  });
+
+  let size = 48;
+  const button = document.createElement("button");
+  Object.assign(button, {
+    getBoundingClientRect: () =>
+      ({
+        left: 20,
+        top: 20,
+        width: size,
+        height: size,
+        right: 20 + size,
+        bottom: 20 + size,
+      }) as DOMRect,
+  });
+  for (const [name, value] of Object.entries({
+    "data-putenggame-motion": "countdown",
+    "data-putenggame-motion-mode": "visual",
+    "data-putenggame-motion-duration": "5",
+    "data-putenggame-motion-press-effect": "green-particle-burst",
+  }))
+    button.setAttribute(name, value);
+  const context = {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  };
+
+  let cleanup = () => {};
+  try {
+    cleanup = mountPlayableMotionElement(button, context);
+    const press = () =>
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+        }),
+      );
+    const readBurst = () => {
+      const burst = document.body.querySelector<HTMLElement>(
+        "[data-putenggame-particle-burst]",
+      )!;
+      const parts = [...burst.querySelectorAll<HTMLElement>("span")];
+      const core = parts.find((part) => part.style.clipPath)!;
+      const haze = parts.find((part) =>
+        part.style.background.includes("radial-gradient"),
+      )!;
+      const rings = parts.filter((part) => part.style.border);
+      const particles = parts.filter(
+        (part) =>
+          part.style.background &&
+          !part.style.background.includes("gradient") &&
+          !part.style.border,
+      );
+      const maxTravel = Math.max(
+        ...animations
+          .filter((entry) => particles.includes(entry.target))
+          .map((entry) => {
+            const finalTransform = String(entry.frames.at(-1)?.transform);
+            const [x, y] = finalTransform
+              .match(/-?\d+(?:\.\d+)?/g)
+              ?.map(Number) ?? [];
+            return Math.hypot(x!, y!);
+          }),
+      );
+      return {
+        coreWidth: core.style.width,
+        hazeWidth: haze.style.width,
+        ringWidths: rings.map((ring) => ring.style.width),
+        particleCount: particles.length,
+        maxTravel,
+      };
+    };
+
+    press();
+    const small = readBurst();
+    document.body
+      .querySelectorAll("[data-putenggame-particle-burst]")
+      .forEach((burst) => burst.remove());
+
+    size = 120;
+    press();
+    const large = readBurst();
+
+    expect(large.particleCount).toBeGreaterThan(small.particleCount);
+    expect(large.maxTravel).toBeGreaterThan(small.maxTravel);
+    expect(large.coreWidth).toBe(small.coreWidth);
+    expect(large.hazeWidth).toBe(small.hazeWidth);
+    expect(large.ringWidths).toEqual(small.ringWidths);
   } finally {
     cleanup();
     if (originalAnimate)

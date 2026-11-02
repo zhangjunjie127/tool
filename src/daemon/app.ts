@@ -41,7 +41,7 @@ import { isAgentRuntimeId, nativeEffort, type AgentRuntimeId, type AnswerApprova
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { ConversationImageStore } from "./conversation-images.js";
 import { OwnedPlaytestDriver } from "./owned-playtest.js";
-import { generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable, generateProjectName } from "./text-generation.js";
+import { analyzePlayableStoryTree, generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable, generateProjectName } from "./text-generation.js";
 import { ProjectNaming, type ProjectNameGenerator } from "./project-naming.js";
 import { resolveCanvasTextReferences } from "./canvas-text-references.js";
 import type { CanvasDocumentGenerationRequest, CanvasDocumentDetail } from "../shared/canvas-document.js";
@@ -130,7 +130,20 @@ import {
   writeNodeCodebase,
 } from "./playable-codebase.js";
 import type { NodeCodebaseUpdate } from "../shared/playable-codebase.js";
-import { addPlayableNode, type AddPlayableNodeRequest } from "./playable-add-node.js";
+import {
+  addPlayableNode,
+  syncPlayableStoryTree,
+  type AddPlayableNodeRequest,
+} from "./playable-add-node.js";
+import {
+  PlayableStoryTreeConflictError,
+  readPlayableStoryTree,
+  writePlayableStoryTree,
+} from "./playable-story-tree-store.js";
+import {
+  isPlayableStoryTree,
+  type PlayableStoryTree,
+} from "../shared/playable-story-tree.js";
 import { PLAYABLE_PRESETS } from "./playable-presets.js";
 import {
   listPlayableThumbnails,
@@ -1346,6 +1359,234 @@ export function createApp(options: AppOptions = {}) {
       return await openNodeCodebaseDetail(project.workspacePath);
     } catch (cause) {
       return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
+  app.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId/playable/story-tree",
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (project.type !== "interactive-story") {
+        return reply.code(409).send({ error: "Story trees require an Interactive Story project" });
+      }
+      try {
+        return await readPlayableStoryTree(project.workspacePath);
+      } catch (cause) {
+        return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+  );
+
+  app.put<{
+    Params: { projectId: string };
+    Body: { tree: PlayableStoryTree; revision: string };
+  }>("/projects/:projectId/playable/story-tree", {
+    schema: { body: { type: "object" } },
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    if (project.type !== "interactive-story") {
+      return reply.code(409).send({ error: "Story trees require an Interactive Story project" });
+    }
+    if (typeof request.body.revision !== "string") {
+      return reply.code(400).send({ error: "Story tree updates require their current revision" });
+    }
+    try {
+      const saved = await writePlayableStoryTree(
+        project.workspacePath,
+        request.body.tree,
+        request.body.revision,
+      );
+      await projects.touch(project.id).catch((cause) =>
+        request.log.warn({ projectId: project.id, err: cause }, "Story tree was saved, but project metadata could not be updated"),
+      );
+      return saved;
+    } catch (cause) {
+      return reply.code(cause instanceof PlayableStoryTreeConflictError ? 409 : 400)
+        .send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
+  app.post<{
+    Params: { projectId: string };
+    Body: { tree: PlayableStoryTree; revision: string; model?: AgentModelRef };
+  }>("/projects/:projectId/playable/story-tree/analyze", {
+    schema: {
+      body: {
+        type: "object",
+        properties: {
+          model: {
+            type: "object",
+            additionalProperties: false,
+            required: ["provider", "id"],
+            properties: {
+              provider: { type: "string", minLength: 1, maxLength: 100 },
+              id: { type: "string", minLength: 1, maxLength: 200 },
+            },
+          },
+        },
+      },
+    },
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    if (project.type !== "interactive-story") {
+      return reply.code(409).send({ error: "Story trees require an Interactive Story project" });
+    }
+    if (typeof request.body.revision !== "string") {
+      return reply.code(400).send({ error: "Story tree analysis requires its current revision" });
+    }
+    if (!isPlayableStoryTree(request.body.tree)) {
+      return reply.code(400).send({ error: "The story tree does not match its schema." });
+    }
+    if (request.body.model !== undefined && !isAgentModelRef(request.body.model)) {
+      return reply.code(400).send({ error: "The selected language model is invalid." });
+    }
+    try {
+      const current = await readPlayableStoryTree(project.workspacePath);
+      if (request.body.revision !== current.revision) {
+        return reply.code(409).send({ error: "The story tree changed. Reload it before analysis." });
+      }
+      const runtime = await getModelRuntime();
+      const settings = SettingsManager.create(project.workspacePath, piAgentDirectory);
+      const provider = settings.getDefaultProvider();
+      const id = settings.getDefaultModel();
+      const selected = request.body.model ?? (provider && id ? { provider, id } : undefined);
+      if (!selected) return reply.code(409).send({ error: "No language model is configured" });
+      if (!providerEnabled(selected.provider)) {
+        return reply.code(409).send({ error: "The selected provider is disabled. Enable it in Settings to continue." });
+      }
+      const model = resolveModel(runtime, runtime.getModel(selected.provider, selected.id));
+      if (!model || !runtime.hasConfiguredAuth(selected.provider)) {
+        return reply.code(409).send({ error: "The selected language model is not available" });
+      }
+      const analyzed = await analyzePlayableStoryTree(
+        runtime,
+        model,
+        request.body.tree,
+        effectiveReasoningLevel(
+          model,
+          undefined,
+          defaultReasoningLevel(project.workspacePath, piAgentDirectory),
+        ),
+      );
+      const latest = await readPlayableStoryTree(project.workspacePath);
+      if (latest.revision !== current.revision) {
+        return reply.code(409).send({ error: "The story tree changed during analysis. Retry with the latest version." });
+      }
+      return {
+        tree: analyzed.tree,
+        revision: current.revision,
+        analyzedSections: analyzed.analyzedSections,
+      };
+    } catch (cause) {
+      return reply.code(cause instanceof PlayableStoryTreeConflictError ? 409 : 502)
+        .send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
+  app.post<{
+    Params: { projectId: string };
+    Body: {
+      tree: PlayableStoryTree;
+      revision: string;
+      confirmOverwrite?: boolean;
+      mode?: "generate" | "update";
+      nodePresetOverrides?: Record<string, string>;
+      nodeVideoAssignments?: Record<string, string>;
+    };
+  }>("/projects/:projectId/playable/story-tree/sync", {
+    schema: { body: { type: "object" } },
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    if (project.type !== "interactive-story") {
+      return reply.code(409).send({ error: "Story trees require an Interactive Story project" });
+    }
+    if (typeof request.body.revision !== "string") {
+      return reply.code(400).send({ error: "Story tree sync requires its current revision" });
+    }
+    if (!isPlayableStoryTree(request.body.tree)) {
+      return reply.code(400).send({ error: "The story tree does not match its schema." });
+    }
+    const mode = request.body.mode ?? "update";
+    if (mode !== "generate" && mode !== "update") {
+      return reply.code(400).send({ error: "Story tree sync mode must be generate or update." });
+    }
+    const nodePresetOverrides = request.body.nodePresetOverrides;
+    if (
+      nodePresetOverrides !== undefined &&
+      (!nodePresetOverrides ||
+        typeof nodePresetOverrides !== "object" ||
+        Array.isArray(nodePresetOverrides) ||
+        Object.values(nodePresetOverrides).some((preset) => typeof preset !== "string"))
+    ) {
+      return reply.code(400).send({ error: "Node preset selections must map scene IDs to preset IDs." });
+    }
+    const requestedVideoAssignments = request.body.nodeVideoAssignments;
+    if (
+      requestedVideoAssignments !== undefined &&
+      (!requestedVideoAssignments ||
+        typeof requestedVideoAssignments !== "object" ||
+        Array.isArray(requestedVideoAssignments) ||
+        Object.values(requestedVideoAssignments).some(
+          (assetId) => typeof assetId !== "string",
+        ))
+    ) {
+      return reply.code(400).send({ error: "Background video selections must map scene IDs to Library asset IDs." });
+    }
+    const nodeVideoAssignments: Record<
+      string,
+      { assetId: string; name: string }
+    > = {};
+    for (const [sectionId, assetId] of Object.entries(
+      requestedVideoAssignments ?? {},
+    )) {
+      const asset = library.get(assetId);
+      if (
+        !asset ||
+        asset.mediaType !== "video" ||
+        asset.purpose === "reference"
+      ) {
+        return reply.code(400).send({
+          error: `The selected background video for "${sectionId}" is unavailable.`,
+        });
+      }
+      nodeVideoAssignments[sectionId] = { assetId, name: asset.name };
+    }
+    try {
+      const current = await readPlayableStoryTree(project.workspacePath);
+      if (request.body.revision !== current.revision) {
+        return reply.code(409).send({ error: "The story tree changed. Reload it before syncing." });
+      }
+      const sync = await syncPlayableStoryTree(
+        project.workspacePath,
+        current.tree,
+        request.body.tree,
+        request.body.confirmOverwrite === true,
+        mode,
+        nodePresetOverrides,
+        nodeVideoAssignments,
+      );
+      if (!sync.applied || !sync.tree) {
+        return { ...sync, revision: current.revision };
+      }
+      const saved = await writePlayableStoryTree(
+        project.workspacePath,
+        sync.tree,
+        current.revision,
+      );
+      await projects.touch(project.id).catch((cause) =>
+        request.log.warn({ projectId: project.id, err: cause }, "Story tree was synced, but project metadata could not be updated"),
+      );
+      return { ...sync, tree: saved.tree, revision: saved.revision };
+    } catch (cause) {
+      return reply.code(cause instanceof PlayableStoryTreeConflictError ? 409 : 400)
+        .send({ error: cause instanceof Error ? cause.message : String(cause) });
     }
   });
 

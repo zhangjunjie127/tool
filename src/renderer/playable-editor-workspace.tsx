@@ -28,6 +28,9 @@ import {
   type EdgeChange,
   type NodeChange,
   type ReactFlowInstance,
+  useNodesInitialized,
+  useReactFlow,
+  useStore,
 } from "@xyflow/react";
 import { snapCanvasPosition } from "./canvas-alignment.js";
 import {
@@ -49,8 +52,17 @@ import {
   type NodeCodebaseUpdate,
   type NodeEditorLayout,
 } from "../shared/playable-codebase.js";
-import { arrangePlayableNodes } from "./playable-flow.js";
+import {
+  arrangePlayableNodes,
+  fitPlayableCanvasToAllNodes,
+  focusPlayableCanvasNode,
+  unconnectedPlayableNodeIds,
+} from "./playable-flow.js";
 import { type NodeGraph, type PlayableNode } from "../shared/playable-nodes.js";
+import type {
+  PlayableStoryTreeCanvasEdge,
+  PlayableStoryTreeCanvasStatus,
+} from "../shared/playable-story-tree.js";
 import {
   playableTranslateValue,
   setPlayableElementStyle,
@@ -124,7 +136,11 @@ import {
   type PlayableProjectValidationIssue,
   type PlayableThumbnailManifest,
 } from "../shared/playable-editor.js";
-import { normalizePlayableSettingsButtonPosition } from "../shared/playable-settings-button.js";
+import {
+  normalizePlayableSettingsButtonPosition,
+  normalizePlayableSettingsButtonSize,
+} from "../shared/playable-settings-button.js";
+import { normalizePlayableReturnButton } from "../shared/playable-return-button.js";
 import {
   addPlayableNode,
   ApiError,
@@ -253,11 +269,19 @@ export function PlayableEditorWorkspace({
   onHome,
   onToggleChat,
   onChatContextChange,
+  onStoryTreeVisibilityChange,
+  onCanvasNodeIdsChange,
+  onCanvasEdgesChange,
+  storyTreeCanvasStatus,
+  storyTreeCanvasSyncProgress,
+  storyTreeCanvasFitAfterRevision,
+  storyTreeCanvasFocusRequest,
   onAskAgent,
   onSendToAgent,
   designOpen = false,
   onDesignOpenChange,
   onDesignSaveReady,
+  onCanvasSaveReady,
   onDesignContextChange,
   onProjectUpdated,
 }: {
@@ -279,15 +303,27 @@ export function PlayableEditorWorkspace({
   onDesignOpenChange?: (open: boolean) => void;
   /** Receives what the open Workbench adds to the next chat message. */
   onChatContextChange?: (state: PlayableChatState | undefined) => void;
+  onStoryTreeVisibilityChange?: (visible: boolean) => void;
+  onCanvasNodeIdsChange?: (nodeIds: readonly string[]) => void;
+  onCanvasEdgesChange?: (
+    edges: readonly PlayableStoryTreeCanvasEdge[],
+  ) => void;
+  storyTreeCanvasStatus?: PlayableStoryTreeCanvasStatus;
+  storyTreeCanvasSyncProgress?: "generate" | "update";
+  storyTreeCanvasFitAfterRevision?: number;
+  storyTreeCanvasFocusRequest?: { sequence: number; nodeId: string };
   /** Puts a request in the chat prompt. */
   onAskAgent?: (text: string) => void;
   onDesignSaveReady?: (save: (() => Promise<void>) | undefined) => void;
+  onCanvasSaveReady?: (save: (() => Promise<void>) | undefined) => void;
   onDesignContextChange?: (context: PromptContext | undefined) => void;
   /** Sends a request to the AI now, with the open Node as context. */
   onSendToAgent?: (text: string, contexts: PromptContext[]) => Promise<boolean>;
 }) {
   const projectId = project.id;
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [loadedWorkspaceRevision, setLoadedWorkspaceRevision] =
+    useState<number>();
   const [notice, setNotice] = useState<string>();
   const [graphMeta, setGraphMeta] = useState<GraphMeta>();
   const [nodes, setNodes] = useState<PlayableFlowNode[]>([]);
@@ -368,6 +404,11 @@ export function PlayableEditorWorkspace({
   const historyGestureBase = useRef<NodeCodebase | undefined>(undefined);
   const historySequence = useRef(0);
   const [historyRevision, setHistoryRevision] = useState(0);
+  const handledStoryTreeCanvasRequest = useRef(0);
+  const handledStoryTreeCanvasFitRevision = useRef<number | undefined>(
+    undefined,
+  );
+  const handledStoryTreeCanvasFocusSequence = useRef(0);
 
   const codebase = useMemo(
     () =>
@@ -375,6 +416,10 @@ export function PlayableEditorWorkspace({
         ? buildCodebase(graphMeta, nodes, edges, editorLayout, workspaceView)
         : undefined,
     [graphMeta, nodes, edges, editorLayout, workspaceView],
+  );
+  const canvasNodeIdsKey = useMemo(
+    () => nodes.map((node) => node.id).join("\u0000"),
+    [nodes],
   );
   latestCodebase.current = codebase;
   const playerViewport = graphMeta?.viewport ?? { width: 1280, height: 720 };
@@ -410,6 +455,68 @@ export function PlayableEditorWorkspace({
     !designOpen && workspaceView === "canvas" && phase === "ready"
       ? nodes.find((node) => node.id === openedNodeId)?.data.node
       : undefined;
+
+  useEffect(() => {
+    onStoryTreeVisibilityChange?.(
+      !designOpen && workspaceView === "canvas" && !openedNodeId,
+    );
+  }, [designOpen, onStoryTreeVisibilityChange, openedNodeId, workspaceView]);
+
+  useEffect(() => {
+    const request = storyTreeCanvasFocusRequest;
+    if (
+      !request ||
+      request.sequence <= handledStoryTreeCanvasRequest.current
+    )
+      return;
+    handledStoryTreeCanvasRequest.current = request.sequence;
+    if (designOpen) onDesignOpenChange?.(false);
+    setWorkspaceView("canvas");
+    setOpenedNodeId(undefined);
+  }, [
+    designOpen,
+    onDesignOpenChange,
+    storyTreeCanvasFocusRequest,
+  ]);
+
+  const selectStoryTreeCanvasNode = useCallback((nodeId: string) => {
+    setCanvasContextMenu(undefined);
+    setSelectedEdgeId(undefined);
+    setNodes((current) =>
+      current.map((node) => ({ ...node, selected: node.id === nodeId })),
+    );
+  }, []);
+
+  const saveCanvasViewport = useCallback(
+    (viewport: { x: number; y: number; zoom: number }) => {
+      setEditorLayout((current) => ({ ...current, viewport }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (phase === "ready")
+      onCanvasNodeIdsChange?.(
+        canvasNodeIdsKey ? canvasNodeIdsKey.split("\u0000") : [],
+      );
+  }, [canvasNodeIdsKey, onCanvasNodeIdsChange, phase]);
+
+  useEffect(() => {
+    if (phase !== "ready") return;
+    onCanvasEdgesChange?.(
+      edges.flatMap((edge) =>
+        edge.sourceHandle
+          ? [
+              {
+                sourceNodeId: edge.source,
+                sourceSignalId: edge.sourceHandle,
+                targetNodeId: edge.target,
+              },
+            ]
+          : [],
+      ),
+    );
+  }, [edges, onCanvasEdgesChange, phase]);
 
   // A Playtest window asks the editor to open the Node it is showing.
   useEffect(
@@ -527,6 +634,8 @@ export function PlayableEditorWorkspace({
   useEffect(() => {
     let disposed = false;
     setPhase("loading");
+    setLoadedWorkspaceRevision(undefined);
+    canvas.current = null;
     resetHistory();
     setCanvasContextMenu(undefined);
     setCopiedSelection(undefined);
@@ -540,6 +649,7 @@ export function PlayableEditorWorkspace({
       .then(([loaded, effects, catalog]) => {
         if (disposed) return;
         applyCodebase(loaded, { diskRevision: loaded.revision });
+        setLoadedWorkspaceRevision(workspaceRevision);
         setBackdropEffects(effects);
         setPresets(catalog.presets);
         setPhase("ready");
@@ -1132,7 +1242,7 @@ export function PlayableEditorWorkspace({
     [projectId],
   );
 
-  useDesktopSave(async () => {
+  const flushCurrentCanvas = useCallback(async () => {
     const pending = latestCodebase.current;
     if (!pending) return saveChain.current;
     // React Flow delays onMoveEnd while scrolling; read the displayed view on close.
@@ -1145,7 +1255,15 @@ export function PlayableEditorWorkspace({
         ? { ...pending, editorLayout: { ...pending.editorLayout, viewport } }
         : pending,
     );
-  });
+  }, [designOpen, save, workspaceView]);
+
+  useDesktopSave(flushCurrentCanvas);
+
+  useEffect(() => {
+    if (phase !== "ready") return;
+    onCanvasSaveReady?.(flushCurrentCanvas);
+    return () => onCanvasSaveReady?.(undefined);
+  }, [flushCurrentCanvas, onCanvasSaveReady, phase]);
 
   useEffect(() => {
     if (phase !== "ready" || !codebase) return;
@@ -1331,9 +1449,9 @@ export function PlayableEditorWorkspace({
 
   async function writeSettingsButtonIcon(
     asset: PlayableAssetRequest,
-  ): Promise<boolean> {
+  ): Promise<string | undefined> {
     const current = latestCodebase.current ?? codebase;
-    if (!current || asset.type !== "image") return false;
+    if (!current || asset.type !== "image") return undefined;
     const declared = addPlayableGraphAsset(current.graph, asset);
     const position = normalizePlayableSettingsButtonPosition(
       current.graph.settingsButton,
@@ -1341,15 +1459,20 @@ export function PlayableEditorWorkspace({
     );
     const graph = declared.graph;
     const previousAssetId = graph.settingsButton?.iconAssetId;
-    graph.settingsButton = { ...position, iconAssetId: declared.assetId };
+    graph.settingsButton = {
+      ...graph.settingsButton,
+      ...position,
+      iconAssetId: declared.assetId,
+    };
     if (
       previousAssetId &&
       previousAssetId !== declared.assetId &&
+      graph.returnButton?.iconAssetId !== previousAssetId &&
       !graph.nodes.some((node) => node.assets.includes(previousAssetId))
     )
       delete graph.assets[previousAssetId];
     await writeGraph(graph, t("playableWorkbench.historySetSettingsButtonIcon"));
-    return true;
+    return declared.assetId;
   }
 
   async function writeSettingsButtonPosition(position: {
@@ -1371,6 +1494,140 @@ export function PlayableEditorWorkspace({
     };
     await writeGraph(graph, t("playableWorkbench.historyMoveSettingsButton"));
     return true;
+  }
+
+  async function writeSettingsButtonSize(size: number): Promise<boolean> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current) return false;
+    const graph = { ...current.graph };
+    graph.settingsButton = {
+      ...normalizePlayableSettingsButtonPosition(
+        graph.settingsButton,
+        graph.viewport,
+      ),
+      ...graph.settingsButton,
+      size: normalizePlayableSettingsButtonSize(size),
+    };
+    await writeGraph(
+      graph,
+      t("playableWorkbench.historySetSettingsButtonSize"),
+    );
+    return true;
+  }
+
+  async function writeReturnButtonIcon(
+    asset: PlayableAssetRequest,
+  ): Promise<string | undefined> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current || asset.type !== "image") return undefined;
+    const declared = addPlayableGraphAsset(current.graph, asset);
+    const normalized = normalizePlayableReturnButton(
+      current.graph.returnButton,
+      current.graph.viewport,
+    );
+    const graph = declared.graph;
+    const previousAssetId = graph.returnButton?.iconAssetId;
+    graph.returnButton = {
+      ...normalized,
+      ...graph.returnButton,
+      iconAssetId: declared.assetId,
+    };
+    if (
+      previousAssetId &&
+      previousAssetId !== declared.assetId &&
+      graph.settingsButton?.iconAssetId !== previousAssetId &&
+      !graph.nodes.some((node) => node.assets.includes(previousAssetId))
+    )
+      delete graph.assets[previousAssetId];
+    await writeGraph(graph, t("playableWorkbench.historySetReturnButtonIcon"));
+    return declared.assetId;
+  }
+
+  async function writeReturnButtonPosition(position: {
+    x: number;
+    y: number;
+  }): Promise<boolean> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current) return false;
+    const normalized = normalizePlayableReturnButton(
+      { ...current.graph.returnButton, ...position },
+      current.graph.viewport,
+    );
+    const graph = {
+      ...current.graph,
+      returnButton: {
+        ...current.graph.returnButton,
+        ...normalized,
+      },
+    };
+    await writeGraph(graph, t("playableWorkbench.historyMoveReturnButton"));
+    return true;
+  }
+
+  async function writeReturnButtonSize(size: number): Promise<boolean> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current) return false;
+    const normalized = normalizePlayableReturnButton(
+      { ...current.graph.returnButton, size },
+      current.graph.viewport,
+    );
+    const graph = {
+      ...current.graph,
+      returnButton: {
+        ...normalized,
+        ...current.graph.returnButton,
+        size: normalized.size,
+      },
+    };
+    await writeGraph(graph, t("playableWorkbench.historySetReturnButtonSize"));
+    return true;
+  }
+
+  async function writeButtonSound(asset: PlayableAssetRequest): Promise<void> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current || asset.type !== "audio") return;
+    const declared = addPlayableGraphAsset(current.graph, asset);
+    const graph = declared.graph;
+    const previousAssetId = graph.buttonSoundAssetId;
+    graph.buttonSoundAssetId = declared.assetId;
+    if (
+      previousAssetId &&
+      previousAssetId !== declared.assetId &&
+      graph.settingsButton?.iconAssetId !== previousAssetId &&
+      graph.returnButton?.iconAssetId !== previousAssetId &&
+      !graph.nodes.some((node) => node.assets.includes(previousAssetId))
+    )
+      delete graph.assets[previousAssetId];
+    await writeGraph(graph, t("playableWorkbench.historySetButtonSound"));
+  }
+
+  async function removeButtonSound(): Promise<void> {
+    const current = latestCodebase.current ?? codebase;
+    const previousAssetId = current?.graph.buttonSoundAssetId;
+    if (!current || !previousAssetId) return;
+    const graph = { ...current.graph };
+    delete graph.buttonSoundAssetId;
+    if (
+      graph.settingsButton?.iconAssetId !== previousAssetId &&
+      graph.returnButton?.iconAssetId !== previousAssetId &&
+      !graph.nodes.some((node) => node.assets.includes(previousAssetId))
+    )
+      delete graph.assets[previousAssetId];
+    await writeGraph(graph, t("playableWorkbench.historyRemoveButtonSound"));
+  }
+
+  async function writeGlobalFontFamily(fontFamily: string): Promise<void> {
+    const current = latestCodebase.current ?? codebase;
+    if (!current) return;
+    const family = fontFamily.trim();
+    if (family.length > 120 || current.graph.globalFontFamily === family) return;
+    const graph = structuredClone(current.graph);
+    if (family) graph.globalFontFamily = family;
+    else delete graph.globalFontFamily;
+    await writeGraph(
+      graph,
+      t("playableWorkbench.historySetGlobalFont"),
+    );
   }
 
   /**
@@ -1850,15 +2107,9 @@ export function PlayableEditorWorkspace({
     const withAsset = addPlayableNodeAsset(graph, node.id, asset);
     let html = setPlayableElementAttributes(before, location, pick.tag, {
       [PLAYABLE_MOTION_ATTRIBUTES.asset]: withAsset.assetId,
-      [PLAYABLE_MOTION_ATTRIBUTES.assetScale]: undefined,
-      [PLAYABLE_MOTION_ATTRIBUTES.assetScaleX]: undefined,
-      [PLAYABLE_MOTION_ATTRIBUTES.assetScaleY]: undefined,
     });
     if (html === undefined) return undefined;
-    for (const [property, value] of [
-      ["background", "transparent"],
-      ["border", "0"],
-    ] as const) {
+    for (const [property, value] of [["background", "transparent"]] as const) {
       const updated = setPlayableElementStyle(
         html,
         location,
@@ -1971,11 +2222,13 @@ export function PlayableEditorWorkspace({
     const requestedSignal =
       buttonAction === "story-map"
         ? "story-map"
+        : buttonAction === "back" || buttonAction === "continue"
+          ? undefined
         : reuseExistingSignals
           ? buttonSignal || config?.signal
           : undefined;
     const signal =
-      buttonAction === "continue"
+      buttonAction === "continue" || buttonAction === "back"
         ? undefined
         : requestedSignal &&
             (usedSignals.has(requestedSignal) || buttonAction === "story-map")
@@ -2623,6 +2876,21 @@ export function PlayableEditorWorkspace({
     );
   }
 
+  function selectCanvasNode(nodeId: string): void {
+    setSelectedEdgeId(undefined);
+    setNodes((current) =>
+      current.map((node) => ({ ...node, selected: node.id === nodeId })),
+    );
+  }
+
+  function updateCanvasViewport(viewport: {
+    x: number;
+    y: number;
+    zoom: number;
+  }): void {
+    setEditorLayout((current) => ({ ...current, viewport }));
+  }
+
   /**
    * Creates a Node through the same endpoint the Agent uses, so a Node added
    * here and a Node added in chat are identical, then reloads the written files.
@@ -2889,6 +3157,13 @@ export function PlayableEditorWorkspace({
     });
   }, [nodes, edges]);
   const renderedNodes = useMemo(() => {
+    const pendingRemovalNodeIds = new Set(
+      storyTreeCanvasStatus?.pendingRemovalNodeIds ?? [],
+    );
+    const unconnectedNodeIds = unconnectedPlayableNodeIds(
+      nodes.map((node) => node.id),
+      edges,
+    );
     const titles = new Map(
       nodes.map((node) => [node.id, node.data.node.title]),
     );
@@ -2937,6 +3212,12 @@ export function PlayableEditorWorkspace({
           issues: nodeIssues.get(node.id) ?? [],
           connected: connected.get(node.id) ?? {},
           failed: failed.has(node.id),
+          ...(unconnectedNodeIds.has(node.id) ? { unconnected: true } : {}),
+          ...(pendingRemovalNodeIds.has(node.id)
+            ? { storyTreeStatus: "pending-removal" as const }
+            : node.data.node.storyTreeDetached
+              ? { storyTreeStatus: "detached" as const }
+              : {}),
           ...(cached
             ? {
                 thumbnail: {
@@ -2960,6 +3241,7 @@ export function PlayableEditorWorkspace({
     codebase,
     thumbnails,
     builtDefinition,
+    storyTreeCanvasStatus,
   ]);
   const canvasPlayer = useMemo(
     () => ({
@@ -3209,6 +3491,20 @@ export function PlayableEditorWorkspace({
                   }
                   defaultViewport={editorLayout.viewport}
                 >
+                  <PlayableStoryTreeCanvasController
+                    workspaceReady={
+                      loadedWorkspaceRevision === workspaceRevision
+                    }
+                    workspaceRevision={workspaceRevision}
+                    fitAfterRevision={storyTreeCanvasFitAfterRevision}
+                    focusRequest={storyTreeCanvasFocusRequest}
+                    handledFitRevision={handledStoryTreeCanvasFitRevision}
+                    handledFocusSequence={
+                      handledStoryTreeCanvasFocusSequence
+                    }
+                    onSelectNode={selectStoryTreeCanvasNode}
+                    onViewportChange={saveCanvasViewport}
+                  />
                   {nodes.length ? null : (
                     <PlayableEmptyCanvas
                       presets={presets}
@@ -3284,6 +3580,29 @@ export function PlayableEditorWorkspace({
                 <div>
                   <strong>{translateText("The project does not compile")}</strong>
                   <span>{projectIssues[0]!.message}</span>
+                </div>
+              </div>
+            ) : null}
+            {storyTreeCanvasSyncProgress ? (
+              <div
+                className="story-tree-canvas-sync-overlay"
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <div className="story-tree-canvas-sync-card">
+                  <LoaderCircle
+                    className="spin story-tree-canvas-sync-spinner"
+                    size={24}
+                    aria-hidden="true"
+                  />
+                  <strong>
+                    {t(
+                      storyTreeCanvasSyncProgress === "generate"
+                        ? "storyTree.generateCanvasProgress"
+                        : "storyTree.updateCanvasProgress",
+                    )}
+                  </strong>
                 </div>
               </div>
             ) : null}
@@ -3395,6 +3714,13 @@ export function PlayableEditorWorkspace({
           }}
           onSetSettingsButtonIcon={writeSettingsButtonIcon}
           onWriteSettingsButtonPosition={writeSettingsButtonPosition}
+          onWriteSettingsButtonSize={writeSettingsButtonSize}
+          onSetReturnButtonIcon={writeReturnButtonIcon}
+          onWriteReturnButtonPosition={writeReturnButtonPosition}
+          onWriteReturnButtonSize={writeReturnButtonSize}
+          onSetButtonSound={writeButtonSound}
+          onRemoveButtonSound={removeButtonSound}
+          onWriteGlobalFontFamily={writeGlobalFontFamily}
           onSetBackdrop={(asset) => writeBackdrop(openedNode.id, asset)}
           onRemoveBackdrop={() => removeBackdrop(openedNode.id)}
           onWriteBackdropLoop={(loop) => writeBackdropLoop(openedNode.id, loop)}
@@ -3463,6 +3789,92 @@ export function PlayableEditorWorkspace({
       ) : null}
     </section>
   );
+}
+
+function PlayableStoryTreeCanvasController({
+  workspaceReady,
+  workspaceRevision,
+  fitAfterRevision,
+  focusRequest,
+  handledFitRevision,
+  handledFocusSequence,
+  onSelectNode,
+  onViewportChange,
+}: {
+  workspaceReady: boolean;
+  workspaceRevision: number;
+  fitAfterRevision?: number;
+  focusRequest?: { sequence: number; nodeId: string };
+  handledFitRevision: { current: number | undefined };
+  handledFocusSequence: { current: number };
+  onSelectNode: (nodeId: string) => void;
+  onViewportChange: (viewport: { x: number; y: number; zoom: number }) => void;
+}) {
+  const nodesInitialized = useNodesInitialized();
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+  const { fitView, getNodes, getViewport } =
+    useReactFlow<PlayableFlowNode, Edge>();
+
+  useEffect(() => {
+    if (!workspaceReady || !nodesInitialized || width <= 0 || height <= 0)
+      return;
+
+    const nodes = getNodes();
+    const focusPending =
+      focusRequest &&
+      focusRequest.sequence > handledFocusSequence.current;
+    const fitPending =
+      fitAfterRevision !== undefined &&
+      fitAfterRevision <= workspaceRevision &&
+      fitAfterRevision > (handledFitRevision.current ?? -1);
+
+    if (focusPending) {
+      handledFocusSequence.current = focusRequest.sequence;
+      if (nodes.some((node) => node.id === focusRequest.nodeId)) {
+        if (fitPending) handledFitRevision.current = fitAfterRevision;
+        onSelectNode(focusRequest.nodeId);
+        let disposed = false;
+        void focusPlayableCanvasNode(fitView, focusRequest.nodeId).then(
+          (focused) => {
+            if (!disposed && focused) onViewportChange(getViewport());
+          },
+        );
+        return () => {
+          disposed = true;
+        };
+      }
+    }
+
+    if (fitPending) {
+      handledFitRevision.current = fitAfterRevision;
+      if (!nodes.length) return;
+      let disposed = false;
+      void fitPlayableCanvasToAllNodes(fitView).then((fitted) => {
+        if (!disposed && fitted) onViewportChange(getViewport());
+      });
+      return () => {
+        disposed = true;
+      };
+    }
+  }, [
+    fitAfterRevision,
+    focusRequest,
+    fitView,
+    getNodes,
+    getViewport,
+    handledFitRevision,
+    handledFocusSequence,
+    height,
+    nodesInitialized,
+    onSelectNode,
+    onViewportChange,
+    workspaceReady,
+    workspaceRevision,
+    width,
+  ]);
+
+  return null;
 }
 
 async function readNodeSources(

@@ -47,9 +47,10 @@ describe("Playable Presets", () => {
       }
     }
     expect(playablePreset("nope")).toBeUndefined();
+    expect(playablePreset("game-settings")).toBeUndefined();
   });
 
-  it("has a picture for every Preset in Add a Scene", async () => {
+  it("retains thumbnail assets for each built-in scene preset", async () => {
     for (const id of PLAYABLE_PRESET_IDS) {
       await access(path.join(import.meta.dirname, "../src/renderer/assets/templates", `${id}.webp`));
     }
@@ -61,26 +62,6 @@ describe("Playable Presets", () => {
     );
   });
 
-  it("provides a reusable player-settings Scene with a separate back/reset/save flow", () => {
-    const preset = playablePreset("game-settings")!;
-    const source = preset.source("Settings");
-
-    expect(preset.signals).toEqual([]);
-    expect(preset.story).toEqual({ hidden: true });
-    expect(source.html).toContain('data-setting="videoVolume"');
-    expect(source.html).toContain('data-setting="subtitleFontSize"');
-    expect(source.javascript).toContain("context.settings.save()");
-    expect(source.javascript).toContain("context.settings.reset()");
-    expect(source.javascript).toContain("context.settings.discard()");
-    expect(source.javascript).toContain("context.navigation.back()");
-    expect(source.javascript).toContain("context.transcription.available");
-    expect(source.javascript).toContain("const readCueDraft = () =>");
-    expect(source.javascript).toContain("const otherVideoCues =");
-    expect(source.javascript).toContain("cueList.contains(document.activeElement)");
-    expect(source.javascript).toContain("Speech transcription provider connected");
-    expect(source.javascript).toContain("Could not save settings.");
-    expect(source.javascript).toContain("Could not return.");
-  });
 });
 
 /** Just enough DOM for playScene: elements with children, attributes, and listeners. */

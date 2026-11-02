@@ -71,10 +71,30 @@ describe("Node Graph contract", () => {
     graph.settingsButton = {
       x: 0.04,
       y: 0.08,
+      size: 84,
       iconAssetId: "background",
     };
 
     expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("accepts one game-wide font family", () => {
+    const graph = createNodeGraphFixture();
+    graph.globalFontFamily = "Example UI";
+
+    expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("rejects a settings button size outside the shared function-button range", () => {
+    const graph = createNodeGraphFixture();
+    graph.settingsButton = { x: 0.04, y: 0.08, size: 200 };
+
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "schema",
+        path: "/settingsButton/size",
+      }),
+    );
   });
 
   it("rejects a settings button icon that is missing or not an image", () => {
@@ -104,6 +124,99 @@ describe("Node Graph contract", () => {
       expect.objectContaining({
         code: "schema",
         path: "/settingsButton/x",
+      }),
+    );
+  });
+
+  it("accepts a return button with an image Asset", () => {
+    const graph = createNodeGraphFixture();
+    graph.returnButton = {
+      x: 0.96,
+      y: 0.05,
+      size: 48,
+      iconAssetId: "background",
+    };
+
+    expect(validateNodeGraph(graph)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("rejects a return button icon that is missing or not an image", () => {
+    const graph = createNodeGraphFixture();
+    graph.returnButton = {
+      x: 0.96,
+      y: 0.05,
+      size: 42,
+      iconAssetId: "theme",
+    };
+
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-return-button-asset",
+        path: "/returnButton/iconAssetId",
+      }),
+    );
+    graph.returnButton.iconAssetId = "missing";
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-return-button-asset",
+        path: "/returnButton/iconAssetId",
+      }),
+    );
+  });
+
+  it("accepts a game-wide button sound that references an audio Asset", () => {
+    const graph = createNodeGraphFixture();
+
+    expect(
+      validateNodeGraph({
+        ...graph,
+        buttonSoundAssetId: "theme",
+      }),
+    ).toEqual({ ok: true, issues: [] });
+  });
+
+  it("rejects a game-wide button sound that is missing or not audio", () => {
+    const graph = createNodeGraphFixture();
+
+    expect(
+      validateNodeGraph({
+        ...graph,
+        buttonSoundAssetId: "background",
+      }).issues,
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-button-sound-asset",
+        path: "/buttonSoundAssetId",
+      }),
+    );
+    expect(
+      validateNodeGraph({
+        ...graph,
+        buttonSoundAssetId: "missing",
+      }).issues,
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-button-sound-asset",
+        path: "/buttonSoundAssetId",
+      }),
+    );
+  });
+
+  it("rejects a return button outside the viewport or outside its size range", () => {
+    const graph = createNodeGraphFixture();
+    graph.returnButton = { x: 1.1, y: 0.05, size: 42 };
+
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "schema",
+        path: "/returnButton/x",
+      }),
+    );
+    graph.returnButton = { x: 0.96, y: 0.05, size: 200 };
+    expect(validateNodeGraph(graph).issues).toContainEqual(
+      expect.objectContaining({
+        code: "schema",
+        path: "/returnButton/size",
       }),
     );
   });

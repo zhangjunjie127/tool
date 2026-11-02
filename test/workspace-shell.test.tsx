@@ -21,9 +21,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(layout: "left" | "right", collapsed = false) {
+async function render(layout: "left" | "right", collapsed = false, withSidePanel = false) {
   await act(async () => root.render(<WorkspaceShell chatLayout={layout} agentCollapsed={collapsed}
     onHome={() => {}} onExpandAgent={() => {}}
+    agentSidePanel={withSidePanel ? <aside aria-label="Story tree">Story tree</aside> : undefined}
     agent={<WorkspaceAgentPane actions={null}><input aria-label="Draft" defaultValue="Saved draft" /></WorkspaceAgentPane>}>
     <section className="viewer-pane">Preview</section>
   </WorkspaceShell>));
@@ -32,6 +33,13 @@ const shell = () => container.querySelector<HTMLElement>("main")!;
 const separator = () => container.querySelector<HTMLElement>('[role="separator"]')!;
 
 describe("shared workspace layout", () => {
+  it.each(["left", "right"] as const)("keeps the story tree beside the %s chat pane", async layout => {
+    await render(layout, false, true);
+    expect(shell().classList.contains("workspace-shell-has-agent-side-panel")).toBe(true);
+    expect(container.querySelector(".workspace-agent-side-panel [aria-label='Story tree']")).not.toBeNull();
+    expect(container.querySelector(".workspace-agent-side-panel")?.nextElementSibling?.classList.contains("viewer-pane")).toBe(true);
+  });
+
   it.each(["left", "right"] as const)("resizes %s chat in the arrow's physical direction and restores its width in another workspace", async layout => {
     await render(layout);
     await act(async () => separator().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
@@ -72,7 +80,7 @@ describe("shared workspace layout", () => {
     await render("left", true);
     expect(separator().tabIndex).toBe(-1);
     expect(separator().getAttribute("aria-hidden")).toBe("true");
-    expect(container.querySelector('[aria-label="Show agent"]')).not.toBeNull();
+    expect(container.querySelectorAll(".workspace-navigation-actions button")).toHaveLength(2);
     await render("left");
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("Unsent changes");
     expect(separator().tabIndex).toBe(0);

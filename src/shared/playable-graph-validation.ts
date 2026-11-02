@@ -14,6 +14,8 @@ export interface NodeGraphValidationIssue {
     | "duplicate-route"
     | "missing-asset"
     | "invalid-settings-button-asset"
+    | "invalid-return-button-asset"
+    | "invalid-button-sound-asset"
     | "missing-file"
     | "file-list-required"
     | "unconnected-signal"
@@ -158,6 +160,28 @@ export function validateNodeGraph(
         "invalid-settings-button-asset",
         "/settingsButton/iconAssetId",
         `Settings button Asset "${graph.settingsButton.iconAssetId}" must reference an image in graph.assets.`,
+      );
+    }
+  }
+  if (graph.returnButton?.iconAssetId) {
+    const icon = graph.assets[graph.returnButton.iconAssetId];
+    if (!icon || icon.type !== "image") {
+      issue(
+        issues,
+        "invalid-return-button-asset",
+        "/returnButton/iconAssetId",
+        `Return button Asset "${graph.returnButton.iconAssetId}" must reference an image in graph.assets.`,
+      );
+    }
+  }
+  if (graph.buttonSoundAssetId) {
+    const sound = graph.assets[graph.buttonSoundAssetId];
+    if (!sound || sound.type !== "audio") {
+      issue(
+        issues,
+        "invalid-button-sound-asset",
+        "/buttonSoundAssetId",
+        `Button sound Asset "${graph.buttonSoundAssetId}" must reference an audio file in graph.assets.`,
       );
     }
   }

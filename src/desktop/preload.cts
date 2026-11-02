@@ -59,6 +59,11 @@ if (process.isMainFrame) {
     selectPluginDirectory: () => ipcRenderer.invoke("ohmygame:select-plugin-directory") as Promise<string | undefined>,
     selectProjectDirectory: () => ipcRenderer.invoke("ohmygame:select-project-directory") as Promise<string | undefined>,
     selectLibraryDirectory: () => ipcRenderer.invoke("ohmygame:select-library-directory") as Promise<string | undefined>,
+    fonts: Object.freeze({
+      list: () => ipcRenderer.invoke("ohmygame:list-fonts") as Promise<string[]>,
+      addDirectory: () =>
+        ipcRenderer.invoke("ohmygame:add-font-directory") as Promise<string[] | undefined>,
+    }),
     clipboard: Object.freeze({
       files: () => ipcRenderer.invoke("ohmygame:clipboard-files") as Promise<DesktopClipboardFile[]>,
       paste: () => ipcRenderer.invoke("ohmygame:paste-native") as Promise<void>,

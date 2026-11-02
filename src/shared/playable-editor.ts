@@ -267,13 +267,18 @@ export function playableRuntimeKey(definition: NodePlayerDefinition): string {
     title: _title,
     nodes,
     settingsButton,
+    returnButton,
+    buttonSoundAssetId,
+    globalFontFamily: _globalFontFamily,
     assets,
     ...graph
   } = definition.graph;
   const sceneAssets = Object.fromEntries(
     Object.entries(assets).filter(
       ([assetId]) =>
-        assetId !== settingsButton?.iconAssetId ||
+        (assetId !== settingsButton?.iconAssetId &&
+          assetId !== returnButton?.iconAssetId &&
+          assetId !== buttonSoundAssetId) ||
         nodes.some((node) => node.assets.includes(assetId)),
     ),
   );

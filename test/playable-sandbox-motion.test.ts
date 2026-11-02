@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { PlayableNodeContext } from "../src/shared/playable-nodes.js";
 import { DocumentPlayableSurfaceHost } from "../src/shared/playable-sandbox.js";
 import {
@@ -101,4 +101,84 @@ it("updates a selected button's effect color in the live surface without replaci
   expect(
     button.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.effectColor),
   ).toBe("#fe4120");
+});
+
+it("shows the back preset after the backdrop video ends and returns to the prior scene", async () => {
+  Object.defineProperty(window, "origin", {
+    configurable: true,
+    value: "null",
+  });
+  Object.defineProperty(window, "top", {
+    configurable: true,
+    value: {},
+  });
+  host = new DocumentPlayableSurfaceHost(document, async () => ({
+    mount: () => undefined,
+  }));
+  const back = vi.fn(async () => {});
+
+  await host.mountNode(
+    {
+      id: "ending",
+      html: `<main><div data-media="backdrop"></div><button id="back" data-putenggame-button-preset ${PLAYABLE_MOTION_ATTRIBUTES.buttonAction}="back" ${PLAYABLE_MOTION_ATTRIBUTES.showAfterVideoEnd}>返回</button></main>`,
+      css: "",
+      javascript: "",
+      inputs: [],
+    },
+    {
+      assets: { url: () => "" },
+      state: {
+        get: () => ({}),
+        set: async () => {},
+        patch: async () => {},
+        subscribe: () => () => {},
+      },
+      session: {
+        hasSave: () => false,
+        reset: async () => {},
+        continue: async () => {},
+        save: async () => {},
+        restart: async () => {},
+      },
+      story: { map: () => ({ nodes: [], edges: [] }) },
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back,
+        connected: () => false,
+      },
+    } as Omit<PlayableNodeContext, "root">,
+  );
+
+  const surface = document.querySelector<HTMLElement>(
+    '[data-playable-surface="ending"]',
+  )!;
+  const button = surface.shadowRoot!.querySelector<HTMLButtonElement>("#back")!;
+  expect(button.hasAttribute("data-playable-timing-hidden")).toBe(true);
+
+  const backdrop = surface.shadowRoot!.querySelector<HTMLElement>(
+    '[data-media="backdrop"]',
+  )!;
+  const video = document.createElement("video");
+  backdrop.append(video);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  let currentTime = 0;
+  Object.defineProperty(video, "duration", { configurable: true, value: 10 });
+  Object.defineProperty(video, "currentTime", {
+    configurable: true,
+    get: () => currentTime,
+  });
+
+  video.dispatchEvent(new Event("timeupdate"));
+  expect(button.hasAttribute("data-playable-timing-hidden")).toBe(true);
+  expect(back).not.toHaveBeenCalled();
+
+  currentTime = 10;
+  video.dispatchEvent(new Event("timeupdate"));
+  expect(button.hasAttribute("data-playable-timing-hidden")).toBe(false);
+  button.click();
+  await Promise.resolve();
+  expect(back).toHaveBeenCalledOnce();
 });

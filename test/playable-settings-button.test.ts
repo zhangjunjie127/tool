@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultPlayableSettingsButtonPosition,
+  normalizePlayableSettingsButtonSize,
   normalizePlayableSettingsButtonPosition,
 } from "../src/shared/playable-settings-button.js";
 
@@ -33,5 +34,11 @@ describe("Playable game settings button placement", () => {
         viewport,
       ),
     ).toEqual(defaultPlayableSettingsButtonPosition(viewport));
+  });
+
+  it("normalizes the shared function-button size range", () => {
+    expect(normalizePlayableSettingsButtonSize(96)).toBe(96);
+    expect(normalizePlayableSettingsButtonSize(1000)).toBe(128);
+    expect(normalizePlayableSettingsButtonSize(1)).toBe(24);
   });
 });

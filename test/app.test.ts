@@ -2149,7 +2149,7 @@ describe("Playable Nodes projects", () => {
     const presets = await app.inject({ method: "GET", url: "/playable/presets" });
     expect(presets.statusCode).toBe(200);
     expect(presets.json().presets.map((preset: { id: string }) => preset.id)).toEqual([
-      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map", "affection", "game-settings",
+      "blank", "main-menu", "choice", "qte", "hotspot", "ending", "story-map", "affection",
     ]);
 
     const created = await app.inject({

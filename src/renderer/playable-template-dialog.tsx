@@ -9,7 +9,6 @@ import mainMenu from "./assets/templates/main-menu.webp";
 import qte from "./assets/templates/qte.webp";
 import storyMap from "./assets/templates/story-map.webp";
 import affection from "./assets/templates/affection.webp";
-import gameSettings from "./assets/templates/game-settings.webp";
 import blankZh from "./assets/templates/blank-zh.webp";
 import choiceZh from "./assets/templates/choice-zh.webp";
 import endingZh from "./assets/templates/ending-zh.webp";
@@ -18,7 +17,6 @@ import mainMenuZh from "./assets/templates/main-menu-zh.webp";
 import qteZh from "./assets/templates/qte-zh.webp";
 import storyMapZh from "./assets/templates/story-map-zh.webp";
 import affectionZh from "./assets/templates/affection-zh.webp";
-import gameSettingsZh from "./assets/templates/game-settings-zh.webp";
 import { useLanguage } from "./i18n.js";
 import { translateText } from "./i18n.js";
 
@@ -38,7 +36,6 @@ const TEMPLATE_PICTURES: Record<string, string> = {
   qte,
   "story-map": storyMap,
   affection,
-  "game-settings": gameSettings,
 };
 
 const TEMPLATE_PICTURES_ZH: Record<string, string> = {
@@ -50,7 +47,6 @@ const TEMPLATE_PICTURES_ZH: Record<string, string> = {
   qte: qteZh,
   "story-map": storyMapZh,
   affection: affectionZh,
-  "game-settings": gameSettingsZh,
 };
 
 /** Add a Scene: a grid of Templates, each with a picture and one line. */
@@ -101,19 +97,20 @@ export function PlayableTemplateDialog({ presets, busy, onChoose, onClose }: {
         <button type="button" aria-label={translateText("Close")} onClick={onClose}><X size={16} /></button>
       </header>
       <div className="playable-template-grid">
-        {presets.map((preset) => <button
-          type="button"
-          className="playable-template"
-          key={preset.id}
-          disabled={busy}
-          onClick={() => onChoose(preset.id)}
-        >
-          <span className="playable-template-picture">
-            {pictures[preset.id] ? <img src={pictures[preset.id]} alt="" /> : null}
-          </span>
-          <strong>{translateText(preset.label)}</strong>
-          <small>{translateText(preset.summary)}</small>
-        </button>)}
+        {presets
+          .map((preset) => <button
+            type="button"
+            className="playable-template"
+            key={preset.id}
+            disabled={busy}
+            onClick={() => onChoose(preset.id)}
+          >
+            <span className="playable-template-picture">
+              {pictures[preset.id] ? <img src={pictures[preset.id]} alt="" /> : null}
+            </span>
+            <strong>{translateText(preset.label)}</strong>
+            <small>{translateText(preset.summary)}</small>
+          </button>)}
       </div>
     </section>
   </div>;

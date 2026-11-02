@@ -52,13 +52,16 @@ function PlayableNodeCard({ id, data, selected }: NodeProps<PlayableFlowNode>) {
     issues,
     connected,
     failed,
+    unconnected,
+    storyTreeStatus,
     thumbnail,
     coverAsset,
   } = data;
   const displayTitle = playableNodeTitle(node.title);
+  const removedFromTree = storyTreeStatus !== undefined;
   return (
     <div
-      className={`story-node story-media-node story-presentation-node-card playable-node-card${selected ? " is-selected" : ""}`}
+      className={`story-node story-media-node story-presentation-node-card playable-node-card${selected ? " is-selected" : ""}${unconnected ? " is-canvas-unconnected" : ""}${removedFromTree ? ` is-story-tree-removed is-story-tree-${storyTreeStatus}` : ""}`}
       style={CARD_STYLE}
     >
       <Handle
@@ -98,6 +101,26 @@ function PlayableNodeCard({ id, data, selected }: NodeProps<PlayableFlowNode>) {
               title={translateText("Counted as an ending on the Story map")}
             >
               <span>{translateText("Ending")}</span>
+            </span>
+          ) : null}
+          {removedFromTree ? (
+            <span
+              className={`playable-node-badge is-story-tree-removed is-story-tree-${storyTreeStatus}`}
+              title={storyTreeStatus === "pending-removal"
+                ? t("storyTree.pendingDetachTitle")
+                : t("storyTree.detachedTitle")}
+            >
+              <span>{t(storyTreeStatus === "pending-removal"
+                ? "storyTree.pendingDetach"
+                : "storyTree.detached")}</span>
+            </span>
+          ) : null}
+          {unconnected ? (
+            <span
+              className="playable-node-badge is-canvas-unconnected"
+              title={t("sceneCard.unconnectedNodeTitle")}
+            >
+              <span>{t("sceneCard.unconnectedNode")}</span>
             </span>
           ) : null}
         </div>

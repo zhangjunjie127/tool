@@ -132,6 +132,84 @@ Connecting can happen two ways, and both produce the same edges:
 - ask the Agent, for example "connect Start to the lobby, and let Archive
   open the case archive with Back allowed".
 
+### Story tree panel
+
+On the canvas, the Story Tree panel stays beside the Agent chat, with the
+**Chapters** and **Story Tree** panes visible side by side. The Chapters pane
+owns chapter, episode, and scene organization. Import a screenplay as
+`.docx` or `.txt`; the editor groups recognizable chapter, episode, and numbered
+scene headings, labels dialogue, operations, choices, and state changes, and
+proposes links from screenplay evidence. A unique match between a choice or
+outcome and a branch scene is confirmed automatically; a clear, non-branching
+continuation may also be confirmed. Ambiguous destinations, missing outcomes,
+and routes inferred only from numbering or adjacency stay marked **Suggested**
+for review. Scene headings and screenplay lines are retained as source text;
+the importer may add structure and labels but does not rewrite or reorder the
+screenplay. AI analysis adds scene metadata and route suggestions without
+replacing the original story beats.
+
+The **Story Tree** pane is a read-only view of the story flow: chapter, episode,
+and scene order, scene metadata, and branch destinations. It does not repeat
+the content and structure editors from the Chapters pane. Choose **Analyze
+with AI** to analyze scenes whose screenplay inputs changed; inspect the
+preview and apply it to update only changed scene metadata and routes. The
+analysis keeps screenplay text, chapter, episode, and scene order, and leaves
+unchanged sections and manually confirmed routes intact. Importing a revised
+screenplay compares it with the saved tree: changed source is shown for review when that section
+was edited by hand, and removed sections are marked rather than deleted
+automatically. Fixed-plot lines are grouped in the outline and can be expanded
+for the full source detail; AI analysis never rewrites or condenses the source
+beats.
+
+Choose **Generate nodes** to review the recommended Scene preset for each
+missing Scene, adjust any recommendation, and add the missing nodes without
+replacing existing canvas Scenes. Confirmed routes are added as Exits on their
+source Scenes, including newly generated ones. If an existing button already
+emits the matching Signal, that button is reused; otherwise a button preset is
+added to the source Scene, with multiple new buttons spaced along the lower
+part of the screen. The target Scene only receives the graph connection; no
+extra entrance button is added there. During **Update nodes**, only changed
+tree-managed titles, story beats, operation buttons, and routes are updated.
+Unchanged Scene source, unrelated manual markup, assets, custom Exits, and
+canvas positions are preserved. Replacing a tree-managed beat or operation
+button that was manually edited requires confirmation. A generated operation
+button maps recognized long-press, directional swipe, repeated-click,
+double-click, quick-click, and timed-QTE instructions to the corresponding
+existing button behavior. Variable/state mutations, multi-step gestures, and
+other instructions that do not map to an existing editor behavior remain
+story text and need to be configured in the Scene editor. The editor reports when the
+tree is still loading, contains no Scenes, or has no missing nodes. Deleting a
+linked canvas Scene makes it eligible for generation again; the editor flushes
+pending canvas changes before syncing and refreshes the canvas when syncing
+succeeds. After
+generation, the canvas fits all Scenes into view without moving or rearranging
+them. Episodes containing player operations, choices, or branching exits show
+an **Interactive** marker. Selecting a linked Scene in the tree switches to
+the canvas, selects that Scene, and centers and zooms in on it without opening
+its Workbench. The
+preview also shows while presets are loading. Ending sections recommend the
+Ending preset, explicit
+choice beats recommend Choice, and other sections recommend Blank. **Update
+nodes** uses the same recommendations when it creates newly added Scenes, then
+synchronizes changed titles and tree-managed connections. Changes to linked
+Scenes are previewed and require confirmation before they are applied. Neither
+operation replaces existing Scene source files or assets, and existing canvas
+positions are preserved. The tree can be exported as PDF, Word, or Markdown.
+Removing a linked Scene or chapter from the tree detaches its canvas Node: the
+Node stays at its existing position as an ordinary Scene and remains outlined
+in red. Only confirmed tree routes are connected. Suggested routes show their
+candidate destination and can be confirmed inline; confirmation marks the tree
+route; save the tree, then choose **Generate nodes** or **Update nodes** to apply
+it to the canvas. Each episode with a suggested route, a missing incoming or
+outgoing route, or a confirmed route missing from the canvas shows a red warning
+marker. Hover over it to see the issue counts. A first Scene does not need an
+incoming route, and an ending does not need an outgoing route. New tree Scenes
+are arranged from left to right by tree links, with branches on separate rows
+and clear fixed gaps; existing Nodes are not moved.
+Nodes with no incoming or outgoing canvas connection receive a warning outline.
+PDF, Word, and Markdown exports use a connected text-tree layout with visible
+vertical and branch lines.
+
 ## Creating a Scene
 
 A new project opens with an empty Story canvas. Use the toolbar's **Add Scene**
@@ -212,6 +290,12 @@ always returns to **Play**.
   is renamed too, and a short message confirms it. Otherwise (text set by a
   script, or mixed content) the change is sent to the Agent, and the chat
   shows it working.
+  Font selectors use fonts discovered in the system font folders. The
+  **Game function settings** panel can scan system fonts, add a `.ttf`, `.otf`,
+  or `.ttc` font folder, and set one global font. A global font overrides each
+  element's individual font across every Scene. Desktop folder paths are
+  remembered locally; browsers that support persistent folder access remember
+  the selected folder in the browser.
 - **Move** drags an element to a new place; Esc during a drag puts it back.
   A press on inline text moves the box that holds it, and the Scene's root
   and background stay put. When the element was written in the Scene's HTML,
@@ -221,16 +305,46 @@ always returns to **Play**.
   the move is sent to the Agent.
 - **Game settings** is one player-facing entry shared by every Scene. Choose
   its icon from **Media**, then drag it in the Scene preview to set its
-  game-wide position. Moving or changing the icon does not restart the preview
-  or its background video.
+  game-wide position. In **Select**, use the same proportional scale control
+  as other selected buttons to resize it independently. Resizing preserves its
+  position; moving or changing its icon does not restart the preview or its
+  background video.
+- **Game-wide button sound** in **Media** selects one audio Asset for all
+  placed buttons and the player-owned Game settings and Return controls. It
+  follows the game's UI sound toggle and volume. Choose another Asset to replace
+  it, or remove it to silence button clicks. Audio uploads currently support
+  MP3 and WAV.
+- **Return** is a player control shared by every Scene. It stays hidden on the
+  Entry Scene while the game is at its home screen, then appears after the
+  player enters another Scene. In the Workbench, switch to **Select** to edit
+  it even on the Entry Scene: choose its icon and confirm the replacement in
+  **Media**, use the same proportional scale control to resize it independently,
+  or drag it to another position. Resizing preserves its position. Clicking it
+  while playing opens the game menu; Esc opens the same menu.
+  The default position is opposite the game settings control so both remain
+  reachable. Its icon stays proportional inside the configured frame when
+  replaced.
 - **Button settings** can replace a charge button's progress image without
   removing its timing or hold behavior. The image replaces the built-in rail,
   and its layer can be moved above or below the button label. Button presets
-  can also select a press effect from the built-in effect library and place its
+  keep normal and pressed images proportional within the current button frame
+  when those images are replaced. Button presets can also select a press effect
+  from the built-in effect library and place its
   attachment point with horizontal and vertical percentages, and choose its
   color. The effect plays on button press in both the editor preview and the
   game. Optional X/Y pixel offsets fine-tune its position without changing the
   button's layout or hit area.
+- Built-in button presets are grouped by behavior. Rectangle and circle
+  variants share one preset and use **Button shape**; click presets share one
+  entry with selectable standard, idle-hint, or bounce feedback. Swipe presets
+  share one entry with separate background and success-disappearance options.
+  Expanding hint and each navigation action remain distinct.
+- **Back button** is an optional button preset for a branch result where the
+  player should be able to choose again. It stays hidden while the Scene's
+  background video plays and appears when the video ends. Its normal image
+  sets the button's aspect ratio; the pressed image and text use the same
+  frame. The incoming branch Exit must allow Back (`push`) so the button can
+  return to the previous Scene.
 - **Guides** adds persistent horizontal or vertical alignment lines over the
   preview. Add as many as needed, drag a line to position it, select one to
   remove it, or clear all guides. Guide positions are saved per Scene in the
@@ -506,7 +620,6 @@ sample story partly played, since a new one has nothing seen to show.
 | Ending    | Stamped ending title, closing lines, and Play again    | none                   |
 | Story map | The branches seen so far, locked ones, endings found   | none (Back)            |
 | Affection | Relationship meters and threshold-based choices        | `closer`, `distant`, `reassure`, `guarded` |
-| Game settings | Reusable player options, timed subtitles, and Back/Reset/Save | none (Back) |
 
 Starter Signals are ordinary declared Signals; the author or Agent renames
 and adds them freely. The set follows the old editor's story nodes: Open UI

@@ -56,6 +56,17 @@ class FakeSurfaceHost implements PlayableSurfaceHost {
 }
 
 describe("Node Runtime", () => {
+  it("shares the global font with every mounted Scene", async () => {
+    const graph = createNodeGraphFixture();
+    graph.globalFontFamily = "Example UI";
+    const { runtime, host } = createRuntime({ graph });
+
+    await runtime.start();
+    expect(nodeContext(host, "menu").globalFontFamily).toBe("Example UI");
+    await nodeContext(host, "menu").navigation.emit("start");
+    expect(nodeContext(host, "lobby").globalFontFamily).toBe("Example UI");
+  });
+
   it("shares saved player preferences across nodes without adding them to story State", async () => {
     let persistedBrightness = 0;
     const settings = createPlayableSettingsService(undefined, async (value) => {
@@ -252,6 +263,72 @@ describe("Node Runtime", () => {
 
     expect(runtime.snapshot()).toMatchObject({ currentNodeId: "menu", backStack: [] });
     expect(host.nodeContexts.map(({ id }) => id)).toEqual(["menu", "archive", "menu"]);
+  });
+
+  it("returns to the entry Scene without resetting shared State", async () => {
+    const { runtime, host } = createRuntime();
+    await runtime.start();
+    await nodeContext(host, "menu").state.set("hasKey", true);
+    await nodeContext(host, "menu").navigation.emit("start");
+
+    await runtime.returnToEntry();
+
+    expect(runtime.snapshot()).toMatchObject({
+      currentNodeId: "menu",
+      backStack: [],
+      state: { hasKey: true },
+    });
+    expect(host.nodeContexts.map(({ id }) => id)).toEqual([
+      "menu",
+      "lobby",
+      "menu",
+    ]);
+  });
+
+  it("opens the entry Scene's connected Story Map route from any Scene", async () => {
+    const graph = createNodeGraphFixture();
+    graph.nodes[0]!.signals.push({
+      id: "story-map",
+      label: "Story map",
+      role: "navigation",
+    });
+    graph.nodes.push({
+      id: "map",
+      title: "Story map",
+      source: {
+        html: "nodes/map/index.html",
+        css: "nodes/map/style.css",
+        javascript: "nodes/map/node.js",
+      },
+      assets: [],
+      signals: [],
+    });
+    graph.edges.push({
+      id: "open-story-map",
+      source: { nodeId: "menu", signal: "story-map" },
+      targetNodeId: "map",
+      mode: "replace",
+    });
+    const compiled = createCompiledGraph();
+    compiled.nodes.map = {
+      id: "map",
+      html: "",
+      css: "",
+      javascript: "export function mount() {}",
+      inputs: [],
+    };
+    const { runtime, host } = createRuntime({ graph, compiled });
+    await runtime.start();
+    await nodeContext(host, "menu").navigation.emit("start");
+
+    await runtime.openStoryMap();
+
+    expect(runtime.snapshot().currentNodeId).toBe("map");
+    expect(host.nodeContexts.map(({ id }) => id)).toEqual([
+      "menu",
+      "lobby",
+      "map",
+    ]);
   });
 
   it("routes a shared component's Signal as the Signal of the Scene that shows it", async () => {

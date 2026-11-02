@@ -119,6 +119,72 @@ it("exposes and activates published buttons without editor source attributes", a
   expect(clicked).toHaveBeenCalledOnce();
 });
 
+it("updates the global font on mounted and subsequently mounted Scenes", async () => {
+  Object.defineProperty(window, "origin", {
+    configurable: true,
+    value: "null",
+  });
+  Object.defineProperty(window, "top", {
+    configurable: true,
+    value: {},
+  });
+  host = new DocumentPlayableSurfaceHost(document, async () => ({
+    mount: () => undefined,
+  }));
+  const context = {
+    assets: { url: () => "" },
+    state: {
+      get: () => ({}),
+      set: async () => {},
+      patch: async () => {},
+      subscribe: () => () => {},
+    },
+    session: {
+      hasSave: () => false,
+      reset: async () => {},
+      continue: async () => {},
+      save: async () => {},
+      restart: async () => {},
+    },
+    story: { map: () => ({ nodes: [], edges: [] }) },
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  } as never;
+
+  await host.mountNode(
+    { id: "first", html: "<main>First</main>", css: "", javascript: "", inputs: [] },
+    context,
+  );
+  const firstStyle = document.querySelector<HTMLElement>(
+    '[data-playable-surface="first"]',
+  )!.shadowRoot!.querySelector<HTMLStyleElement>(
+    "style[data-playable-global-font]",
+  )!;
+
+  host.setGlobalFontFamily("Example UI");
+  expect(firstStyle.textContent).toContain('"Example UI" !important');
+
+  await host.mountNode(
+    { id: "second", html: "<main>Second</main>", css: "", javascript: "", inputs: [] },
+    context,
+  );
+  const secondStyle = document.querySelector<HTMLElement>(
+    '[data-playable-surface="second"]',
+  )!.shadowRoot!.querySelector<HTMLStyleElement>(
+    "style[data-playable-global-font]",
+  )!;
+  expect(secondStyle.textContent).toContain('"Example UI" !important');
+
+  host.setGlobalFontFamily(undefined);
+  expect(firstStyle.textContent).toBe("");
+  expect(secondStyle.textContent).toBe("");
+});
+
 it("keeps the backdrop container and video when applying the same asset", async () => {
   Object.defineProperty(window, "origin", {
     configurable: true,

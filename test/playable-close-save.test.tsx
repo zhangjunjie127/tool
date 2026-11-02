@@ -16,6 +16,8 @@ let move!: (event: unknown, viewport: { x: number; y: number; zoom: number }) =>
 let viewport = { x: 32, y: 64, zoom: 1.2 };
 let workbenchProps: Record<string, any> | undefined;
 let editorCanvasProps: Record<string, any> | undefined;
+let canvasNodeIdsChanged: ReturnType<typeof vi.fn>;
+let flushCanvas: (() => Promise<void>) | undefined;
 let htmlSource = "<main>Original</main>";
 let persistedCodebase: NodeCodebaseUpdate | undefined;
 vi.doMock(path.resolve("src/renderer/editor-canvas.tsx"), async original => ({
@@ -95,12 +97,16 @@ beforeEach(async () => {
   persistedCodebase = undefined;
   workbenchProps = undefined;
   editorCanvasProps = undefined;
+  canvasNodeIdsChanged = vi.fn();
+  flushCanvas = undefined;
   viewport = { x: 32, y: 64, zoom: 1.2 };
   desktopSave.cancel();
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
   await act(async () => root.render(<PlayableEditorWorkspace
     project={{ id: "p", type: "interactive-story" } as ProjectState} agentBusy={false} publishing={false}
     onPublish={async () => false} onOpenPublish={() => {}} onClosePublish={() => {}}
+    onCanvasNodeIdsChange={canvasNodeIdsChanged}
+    onCanvasSaveReady={(save) => { flushCanvas = save; }}
   />));
   await act(async () => move(null, { x: 32, y: 64, zoom: 1.2 }));
   expect(update).not.toHaveBeenCalled();
@@ -143,6 +149,26 @@ it("saves the displayed viewport when close precedes the delayed move-end event"
   expect(update).toHaveBeenCalledExactlyOnceWith("p", expect.objectContaining({
     editorLayout: expect.objectContaining({ viewport }),
   }));
+});
+
+it("reports deleted canvas nodes and flushes them before story-tree sync", async () => {
+  expect(canvasNodeIdsChanged).toHaveBeenLastCalledWith(["start"]);
+  expect(flushCanvas).toBeDefined();
+
+  await act(async () => {
+    editorCanvasProps!.onNodesDelete([{ id: "start" }]);
+    await Promise.resolve();
+  });
+
+  expect(canvasNodeIdsChanged).toHaveBeenLastCalledWith([]);
+  await act(async () => flushCanvas!());
+
+  expect(update).toHaveBeenCalledExactlyOnceWith(
+    "p",
+    expect.objectContaining({
+      graph: expect.objectContaining({ nodes: [] }),
+    }),
+  );
 });
 
 it("flushes a pending scene edit when the page is refreshed before autosave", async () => {

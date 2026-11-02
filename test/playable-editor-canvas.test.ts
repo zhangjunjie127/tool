@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   arrangePlayableNodes,
   buildCodebase,
+  fitPlayableCanvasToAllNodes,
+  focusPlayableCanvasNode,
   nodeIdForIssuePath,
   toFlowEdge,
   toPlayableEdge,
+  unconnectedPlayableNodeIds,
   uniqueNodeId,
   type GraphMeta,
   type PlayableFlowNode,
@@ -52,6 +55,33 @@ const LAYOUT: NodeEditorLayout = {
 };
 
 describe("playable canvas serialization", () => {
+  it("fits all canvas nodes without changing their positions", async () => {
+    const fitView = vi.fn(async () => true);
+
+    await fitPlayableCanvasToAllNodes(fitView);
+
+    expect(fitView).toHaveBeenCalledWith({
+      padding: 0.2,
+      minZoom: 0.1,
+      maxZoom: 1,
+      duration: 250,
+    });
+  });
+
+  it("centers and zooms in on a selected story-tree scene", async () => {
+    const fitView = vi.fn(async () => true);
+
+    await focusPlayableCanvasNode(fitView, "scene-2");
+
+    expect(fitView).toHaveBeenCalledWith({
+      nodes: [{ id: "scene-2" }],
+      padding: 0.3,
+      minZoom: 0.5,
+      maxZoom: 1.4,
+      duration: 250,
+    });
+  });
+
   it("arranges branches by signal order and keeps disconnected nodes after the story", () => {
     const nodes = [
       flowNode(playableNode("start", ["first", "second"]), { x: 0, y: 0 }),
@@ -107,6 +137,26 @@ describe("playable canvas serialization", () => {
 
     expect(positions.loop!.x).toBeGreaterThan(positions.start!.x);
     expect(positions.isolated!.x).toBeGreaterThan(positions.loop!.x);
+  });
+
+  it("marks only Nodes with no incoming or outgoing canvas edge as unconnected", () => {
+    const edges = [
+      toFlowEdge({
+        id: "start-next",
+        source: { nodeId: "start", signal: "next" },
+        targetNodeId: "middle",
+        mode: "replace",
+      }),
+      toFlowEdge({
+        id: "middle-next",
+        source: { nodeId: "middle", signal: "next" },
+        targetNodeId: "end",
+        mode: "replace",
+      }),
+    ];
+
+    expect(unconnectedPlayableNodeIds(["start", "middle", "end", "orphan"], edges))
+      .toEqual(new Set(["orphan"]));
   });
 
   it("writes the graph from canvas state with rounded positions", () => {

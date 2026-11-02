@@ -4,6 +4,7 @@ import type {
   PlayableTranscriptionService,
 } from "./playable-settings.js";
 import type { PlayableSettingsButton } from "./playable-settings-button.js";
+import type { PlayableReturnButton } from "./playable-return-button.js";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
@@ -68,6 +69,8 @@ export interface PlayableNode {
   signals: PlayableSignal[];
   /** When enabled, a single-play background video routes its sole story Exit only after it ends. */
   videoEndAutoAdvance?: boolean;
+  /** This canvas Node was removed from story-tree management and is retained as an ordinary Scene. */
+  storyTreeDetached?: boolean;
   story?: PlayableStoryOptions;
 }
 
@@ -98,6 +101,12 @@ export interface NodeGraph {
   assets: Record<string, PlayableAssetDefinition>;
   /** One settings entry shared by every Scene in the game. */
   settingsButton?: PlayableSettingsButton;
+  /** One return-to-pause-menu entry shared by every Scene in the game. */
+  returnButton?: PlayableReturnButton;
+  /** One button sound shared by every Scene and player-owned control. */
+  buttonSoundAssetId?: string;
+  /** One font family that overrides text and button fonts across every Scene. */
+  globalFontFamily?: string;
   nodes: PlayableNode[];
   edges: PlayableEdge[];
 }
@@ -112,6 +121,7 @@ export interface PlayableStateService {
 
 export interface NodeRuntimeContext {
   root: ShadowRoot;
+  globalFontFamily?: string;
   assets: {
     url(id: string): string;
     list?(): Array<{ id: string; type: PlayableAssetType }>;

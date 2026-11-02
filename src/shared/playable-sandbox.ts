@@ -56,6 +56,7 @@ import {
   updatePlayableButtonLabelScale,
 } from "./playable-motion.js";
 import { PLAYABLE_SOURCE_ATTRIBUTE } from "./playable-source-locations.js";
+import { cssFontFamilyName } from "./playable-fonts.js";
 import { createPlayableSettingsService } from "./playable-settings.js";
 import type {
   PlayableMountedSurface,
@@ -118,6 +119,8 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   #pausedVideos = new WeakMap<HTMLElement, HTMLVideoElement[]>();
   #timingTimer?: number;
   #backdropEffects?: PlayableBackdropEffects;
+  #globalFontFamily?: string;
+  #globalFontFamilyOverridden = false;
   #playerPaused = false;
 
   constructor(
@@ -404,13 +407,27 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           PLAYABLE_MOTION_ATTRIBUTES.buttonAction,
           command.buttonAction,
         );
+      if (command.buttonAction === "back")
+        element.setAttribute(
+          PLAYABLE_MOTION_ATTRIBUTES.showAfterVideoEnd,
+          "",
+        );
       Object.assign(element.style, {
         position: "absolute",
         left: "50cqw",
         top: "50cqh",
         transform: "translate(-50%, -50%)",
-        minWidth: "14cqw",
-        padding: "1cqh 2cqw",
+        ...(command.buttonAction === "back"
+          ? {
+              width: "14cqw",
+              height: "auto",
+              minWidth: "0",
+              minHeight: "0",
+              padding: "0",
+              borderRadius: "0",
+              aspectRatio: "auto",
+            }
+          : { minWidth: "14cqw", padding: "1cqh 2cqw" }),
         ...PLAYABLE_BUTTON_PRESET_STYLE,
       });
       if (command.fontFamily) element.style.fontFamily = command.fontFamily;
@@ -465,6 +482,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
             ? { swipeAsset: command.swipeAsset }
             : {}),
         });
+      this.#updateTimedVisibility();
       this.#picking?.refresh();
       return;
     }
@@ -825,6 +843,20 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
       "[data-playable-surface]",
     )) {
       this.#applyBackdropEffects(host, effects);
+    }
+  }
+
+  setGlobalFontFamily(family: string | undefined): void {
+    this.#globalFontFamily = family;
+    this.#globalFontFamilyOverridden = true;
+    const style = globalFontStyleText(family);
+    for (const host of this.#projectRoot.querySelectorAll<HTMLElement>(
+      "[data-playable-surface]",
+    )) {
+      const fontStyle = host.shadowRoot?.querySelector<HTMLStyleElement>(
+        "style[data-playable-global-font]",
+      );
+      if (fontStyle) fontStyle.textContent = style;
     }
   }
 
@@ -2294,6 +2326,10 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
     picking?.stop();
   }
 
+  get isPicking(): boolean {
+    return this.#picking !== undefined;
+  }
+
   setPickingLocks(picks: readonly PlayablePickResult[]): void {
     this.#picking?.setLockedPicks(picks);
   }
@@ -2673,9 +2709,16 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
   text-shadow: 0 1px 3px #000;
   pointer-events: none;
 }`;
+    const globalFontStyle = this.#document.createElement("style");
+    globalFontStyle.dataset.playableGlobalFont = "";
+    globalFontStyle.textContent = globalFontStyleText(
+      this.#globalFontFamilyOverridden
+        ? this.#globalFontFamily
+        : context.globalFontFamily,
+    );
     const template = this.#document.createElement("template");
     template.innerHTML = surface.html;
-    root.append(style, template.content.cloneNode(true));
+    root.append(style, globalFontStyle, template.content.cloneNode(true));
     let backdropVideo: HTMLVideoElement | undefined;
     const attachBackdropVideoEnded = () => {
       const next = root.querySelector<HTMLVideoElement>(
@@ -3021,6 +3064,13 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
           void context.session.continue().catch(() => {});
         return;
       }
+      if (
+        element.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.buttonAction) ===
+        "back"
+      ) {
+        void context.navigation.back().catch(() => {});
+        return;
+      }
       const signal = element.getAttribute("data-signal");
       if (signal) void context.navigation.emit(signal).catch(() => {});
     };
@@ -3139,7 +3189,7 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
               (effectiveNow - (this.#surfaceStartedAt.get(surface) ?? now)) / 1000,
             );
       for (const element of root.querySelectorAll<HTMLElement>(
-        "[style*='--putenggame-appear-at'], [style*='--putenggame-disappear-at']",
+        "[style*='--putenggame-appear-at'], [style*='--putenggame-disappear-at'], [data-putenggame-show-after-video-end]",
       )) {
         const style = this.#document.defaultView!.getComputedStyle(element);
         const appearAt = parseDelaySeconds(
@@ -3163,7 +3213,19 @@ export class DocumentPlayableSurfaceHost implements PlayableSurfaceHost {
               startedAt + disappearAt * 1000,
             );
         }
+        const videoEnded =
+          Boolean(
+            video &&
+              (video.ended ||
+                (Number.isFinite(video.duration) &&
+                  video.duration > 0 &&
+                  currentTime >= video.duration - 0.05)),
+          );
         const hidden =
+          (element.hasAttribute(
+            PLAYABLE_MOTION_ATTRIBUTES.showAfterVideoEnd,
+          ) &&
+            !videoEnded) ||
           currentTime < appearAt ||
           (disappearAt !== undefined &&
             currentTime >= disappearAt &&
@@ -4068,6 +4130,14 @@ function setLayerStyle(layer: HTMLElement, zIndex: number): void {
   layer.style.position = "absolute";
   layer.style.inset = "0";
   layer.style.zIndex = String(zIndex);
+}
+
+function globalFontStyleText(family: string | undefined): string {
+  return family
+    ? `:host, :host *, :host *::before, :host *::after {
+  font-family: ${cssFontFamilyName(family)} !important;
+}`
+    : "";
 }
 
 function isPlayableSurfaceModule(

@@ -83,6 +83,7 @@ import type { ExampleSummary } from "../shared/examples.js";
 import type { PlaytestWatchState } from "../shared/playtest.js";
 import type { NodeRuntimeResponse } from "../shared/playable-player-protocol.js";
 import type { NodeCodebaseDetail, NodeCodebaseUpdate } from "../shared/playable-codebase.js";
+import type { PlayableStoryTree } from "../shared/playable-story-tree.js";
 import type { PlayableBackdropEffects } from "../shared/playable-backdrop-effects.js";
 import type { PlayableAddedNode, PlayablePresetSummary, PlayableProjectValidationResult as PlayableProjectValidation, PlayableThumbnailManifest } from "../shared/playable-editor.js";
 import type { InstallPluginRequest, PluginCatalog, PluginDetail, PluginInstallInspection, PluginSettings, PluginSkillContent } from "../shared/plugins.js";
@@ -185,7 +186,7 @@ declare global {
     putengGameDesktop?: {
       fonts?: {
         list: () => Promise<string[]>;
-        onChanged: (listener: (fonts: string[]) => void) => () => void;
+        addDirectory: () => Promise<string[] | undefined>;
       };
       selectLibraryDirectory?: () => Promise<string | undefined>;
       captureNodeThumbnail?: NonNullable<Window["ohMyGameDesktop"]>["captureNodeThumbnail"];
@@ -706,6 +707,68 @@ export async function getNodeRuntime(projectId: string): Promise<NodeRuntimeResp
 
 export async function getNodeCodebase(projectId: string): Promise<NodeCodebaseDetail> {
   return request(`/projects/${projectId}/playable/codebase`);
+}
+
+export async function getPlayableStoryTree(projectId: string): Promise<{
+  tree?: PlayableStoryTree;
+  revision: string;
+}> {
+  return request(`/projects/${projectId}/playable/story-tree`);
+}
+
+export async function savePlayableStoryTree(
+  projectId: string,
+  tree: PlayableStoryTree,
+  revision: string,
+): Promise<{ tree: PlayableStoryTree; revision: string }> {
+  return request(`/projects/${projectId}/playable/story-tree`, {
+    method: "PUT",
+    body: JSON.stringify({ tree, revision }),
+  });
+}
+
+export async function analyzePlayableStoryTree(
+  projectId: string,
+  tree: PlayableStoryTree,
+  revision: string,
+  model?: AgentModelRef,
+): Promise<{ tree: PlayableStoryTree; revision: string; analyzedSections: number }> {
+  return request(`/projects/${projectId}/playable/story-tree/analyze`, {
+    method: "POST",
+    body: JSON.stringify({ tree, revision, ...(model ? { model } : {}) }),
+  });
+}
+
+export async function syncPlayableStoryTree(
+  projectId: string,
+  tree: PlayableStoryTree,
+  revision: string,
+  confirmOverwrite = false,
+  mode: "generate" | "update" = "update",
+  nodePresetOverrides?: Record<string, string>,
+  nodeVideoAssignments?: Record<string, string>,
+): Promise<{
+  applied: boolean;
+  tree?: PlayableStoryTree;
+  revision: string;
+  addedNodes: number;
+  addedVideos: number;
+  skippedVideoAssignments: number;
+  updatedNodes: number;
+  pendingLinks: number;
+  confirmations: Array<{ nodeId: string; title: string; changes: string[] }>;
+}> {
+  return request(`/projects/${projectId}/playable/story-tree/sync`, {
+    method: "POST",
+    body: JSON.stringify({
+      tree,
+      revision,
+      confirmOverwrite,
+      mode,
+      ...(nodePresetOverrides ? { nodePresetOverrides } : {}),
+      ...(nodeVideoAssignments ? { nodeVideoAssignments } : {}),
+    }),
+  });
 }
 
 export async function getPlayableValidation(

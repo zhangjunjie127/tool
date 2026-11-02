@@ -33,3 +33,23 @@ their code, documentation, and tests.
   [UI languages](docs/ui-languages.md).
 - Use the [checks guidance](CONTRIBUTING.md#make-and-check-your-change) for the
   change type. Record skipped checks and manual validation still needed.
+
+## Interactive Story Editing Rules
+
+- Keep the editing hierarchy clear: chapters contain episodes, episodes contain
+  scenes, and the story tree visualizes their order and branching flow. Manage
+  chapter, episode, and scene structure in the Chapters tab; keep the Story Tree
+  tab read-only as a story-flow view, without duplicate content editors or
+  structure controls.
+- Treat the story tree as the source for generating and synchronizing canvas
+  nodes. Preserve independent canvas edits; only sync actual differences and
+  require confirmation before overwriting edited nodes.
+- Removing a scene from the story tree detaches its canvas node as an ordinary
+  node and keeps the red removal marker on the canvas. New story-tree content
+  creates corresponding canvas nodes and connections.
+- Keep red removal warnings and detached-node lists out of the Story Tree tab.
+  Recovery controls may live in the Chapters tab; canvas removal markers remain
+  visible on the canvas.
+- For inline chapter, episode, and scene renaming, replace the displayed name
+  area with the input when editing; do not constrain the editor to the pencil
+  button's narrow width.

@@ -74,6 +74,7 @@ export function PlaytestPage({ projectId }: { projectId: string }) {
           frameUrl={playableSandboxUrl()}
           assets={playable.assets}
           saveKey={saveKey}
+          showPauseMenu
           {...(start ? {
             storage,
             preview: { policy: "follow" as const, startNodeId: start.nodeId },

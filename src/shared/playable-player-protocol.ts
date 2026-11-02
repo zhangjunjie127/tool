@@ -325,7 +325,14 @@ export type PlayableHostMessage =
       settings?: unknown;
       /** What the player has seen in earlier sessions, for the Story Map. */
       seen?: unknown;
+      /** Enables the player-owned pause menu in Playtest and published games. */
+      pauseMenuEnabled?: boolean;
       preview?: PlayablePreviewOptions;
+    }
+  | {
+      kind: "putenggame:playable:runtime-command";
+      instanceId: string;
+      command: "return-to-entry" | "open-story-map";
     }
   | {
       kind: "putenggame:playable:assets-result";
@@ -417,6 +424,11 @@ export type PlayableHostMessage =
       kind: "putenggame:playable:backdrop-effects";
       instanceId: string;
       effects: PlayableBackdropEffects;
+    }
+  | {
+      kind: "putenggame:playable:global-font";
+      instanceId: string;
+      family?: string;
     }
   | {
       kind: "putenggame:playable:text-created-result";
@@ -570,6 +582,8 @@ export type PlayableFrameMessage =
       instanceId: string;
       shortcut: PlayablePreviewShortcut;
     }
+  | { kind: "putenggame:playable:pause-menu-toggle"; instanceId: string }
+  | { kind: "putenggame:playable:button-activated"; instanceId: string }
   | { kind: "putenggame:playable:activity"; instanceId: string }
   | { kind: "putenggame:playable:pick-cancelled"; instanceId: string };
 
@@ -586,9 +600,23 @@ export function isPlayableHostMessage(
     return (
       isRecord(value.definition) &&
       isRecord(value.assets) &&
+      (value.pauseMenuEnabled === undefined ||
+        typeof value.pauseMenuEnabled === "boolean") &&
       (value.preview === undefined || isRecord(value.preview))
     );
   }
+  if (value.kind === "putenggame:playable:runtime-command")
+    return (
+      value.command === "return-to-entry" ||
+      value.command === "open-story-map"
+    );
+  if (value.kind === "putenggame:playable:global-font")
+    return (
+      value.family === undefined ||
+      (typeof value.family === "string" &&
+        value.family.trim().length > 0 &&
+        value.family.length <= 120)
+    );
   if (value.kind === "putenggame:playable:assets-result")
     return (
       typeof value.requestId === "string" &&
@@ -943,7 +971,8 @@ export function isPlayableHostMessage(
           (value.command.buttonAction === undefined ||
             value.command.buttonAction === "new-game" ||
             value.command.buttonAction === "continue" ||
-            value.command.buttonAction === "story-map") &&
+            value.command.buttonAction === "story-map" ||
+            value.command.buttonAction === "back") &&
           (value.command.fontFamily === undefined ||
             typeof value.command.fontFamily === "string") &&
           (value.command.assetId === undefined ||
@@ -1034,6 +1063,7 @@ export function isPlayableHostMessage(
           value.command.time >= 0))
     );
   if (value.kind === "putenggame:playable:pick-cancel") return true;
+  if (value.kind === "putenggame:playable:pause-menu-toggle") return true;
   if (value.kind === "putenggame:playable:settings-command")
     return value.action === "patch"
       ? isPlayableGameSettings(value.settings)
@@ -1082,6 +1112,8 @@ export function isPlayableFrameMessage(
   if (value.kind === "putenggame:playable:settings-change")
     return isPlayableGameSettings(value.settings);
   if (value.kind === "putenggame:playable:seen") return isRecord(value.seen);
+  if (value.kind === "putenggame:playable:pause-menu-toggle") return true;
+  if (value.kind === "putenggame:playable:button-activated") return true;
   if (value.kind === "putenggame:playable:snapshot")
     return isRecord(value.snapshot);
   if (value.kind === "putenggame:playable:picked")

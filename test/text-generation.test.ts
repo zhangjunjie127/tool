@@ -1,7 +1,11 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable, generateProjectName } from "../src/daemon/text-generation.js";
+import { analyzePlayableStoryTree, generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable, generateProjectName } from "../src/daemon/text-generation.js";
 import { createCanvasTable } from "../src/shared/canvas-table.js";
+import {
+  parseScreenplayText,
+  playableStoryTreeAnalysisFingerprint,
+} from "../src/shared/playable-story-tree.js";
 import type { RuntimeModel } from "../src/daemon/agent.js";
 
 const model: RuntimeModel = {
@@ -11,6 +15,206 @@ const model: RuntimeModel = {
 };
 
 describe("text generation", () => {
+  it("uses screenplay evidence to confirm clear branch routes and reserve review for ambiguity", async () => {
+    const tree = parseScreenplayText([
+      "第1集",
+      "1-1 选择去处",
+      "选项A：前往仓库",
+      "选项B：前往医院",
+      "1-2 仓库",
+      "主角进入仓库，找到钥匙。",
+      "1-3 医院",
+      "主角进入医院，找到病历。",
+      "1-4 住处",
+      "主角回到住处。",
+    ], "screenplay.txt").tree;
+    tree.links = [];
+    const sections = tree.chapters[0]!.episodes[0]!.sections;
+    const response = JSON.stringify({
+      sections: sections.map((section) => ({
+        id: section.id,
+        kind: "scene",
+        objective: "",
+        prerequisite: "",
+      })),
+      links: [
+        {
+          fromSectionId: sections[0]!.id,
+          toSectionId: sections[1]!.id,
+          label: "选项A：前往仓库",
+          status: "confirmed",
+        },
+        {
+          fromSectionId: sections[0]!.id,
+          toSectionId: sections[2]!.id,
+          label: "选项B：前往医院",
+          status: "confirmed",
+        },
+        {
+          fromSectionId: sections[1]!.id,
+          toSectionId: sections[3]!.id,
+          label: "离开后去向未说明",
+          status: "suggested",
+        },
+      ],
+    });
+    const { runtime, completeSimple } = fixture(assistant(response));
+
+    const result = await analyzePlayableStoryTree(runtime, model, tree);
+
+    expect(result.tree.links.map(({ fromSectionId, toSectionId, status }) => ({
+      fromSectionId,
+      toSectionId,
+      status,
+    })))
+      .toEqual([
+        {
+          fromSectionId: sections[0]!.id,
+          toSectionId: sections[1]!.id,
+          status: "confirmed",
+        },
+        {
+          fromSectionId: sections[0]!.id,
+          toSectionId: sections[2]!.id,
+          status: "confirmed",
+        },
+        {
+          fromSectionId: sections[1]!.id,
+          toSectionId: sections[3]!.id,
+          status: "suggested",
+        },
+      ]);
+    const systemPrompt = completeSimple.mock.calls[0]![1].systemPrompt;
+    expect(systemPrompt).toContain("uniquely corresponding supplied scene title or branch heading");
+    expect(systemPrompt).toContain("scene adjacency or numbering alone");
+    expect(systemPrompt).toContain("multiple targets remain plausible");
+  });
+
+  it("analyzes only changed scenes and preserves unchanged scene and beat identities", async () => {
+    const tree = parseScreenplayText([
+      "第1篇章，序章",
+      "第1集",
+      "1-1 醒来",
+      "苏尘在房间醒来。",
+      "1-2 走廊",
+      "他听到走廊传来声音。",
+    ], "screenplay.txt").tree;
+    const chapter = tree.chapters[0]!;
+    const episode = chapter.episodes[0]!;
+    const [changed, unchanged] = episode.sections;
+    changed!.beats = [{ id: "beat-existing", kind: "plot", text: "苏尘在房间醒来。" }];
+    const manualRoute = tree.links[0]!;
+    manualRoute.label = "用户确认的路线";
+    unchanged!.analysisFingerprint = playableStoryTreeAnalysisFingerprint(
+      chapter,
+      episode,
+      unchanged!,
+    );
+    const unchangedBefore = structuredClone(unchanged);
+    const response = JSON.stringify({
+      sections: [{
+        id: changed!.id,
+        kind: "branch",
+        objective: "查明声音来源",
+        prerequisite: "",
+      }],
+      links: [],
+    });
+    const { runtime, completeSimple } = fixture(assistant(response));
+
+    const result = await analyzePlayableStoryTree(runtime, model, tree);
+
+    expect(result.analyzedSections).toBe(1);
+    const prompt = JSON.parse(
+      completeSimple.mock.calls[0]![1].messages[0]!.content as string,
+    ) as {
+      analyze: Array<{
+        id: string;
+        current: { sourceBeats: Array<{ id: string; kind: string; text: string }> };
+      }>;
+      targets: Array<{ id: string }>;
+    };
+    const systemPrompt = completeSimple.mock.calls[0]![1].systemPrompt;
+    expect(prompt.analyze.map((scene) => scene.id)).toEqual([changed!.id]);
+    expect(prompt.analyze[0]?.current.sourceBeats).toEqual(changed!.beats);
+    expect(prompt.targets.map((target) => target.id)).toEqual(
+      [changed!.id, unchanged!.id],
+    );
+    expect(systemPrompt).toContain("sourceBeats are immutable source material");
+    expect(systemPrompt).toContain("Do not return beat text");
+    expect(result.tree.chapters[0]!.episodes[0]!.sections[1]).toEqual(unchangedBefore);
+    expect(result.tree.chapters[0]!.episodes[0]!.sections[0]!.beats).toEqual([
+      { id: "beat-existing", kind: "plot", text: "苏尘在房间醒来。" },
+    ]);
+    expect(result.tree.chapters[0]!.episodes[0]!.sections[0]!.analysisFingerprint)
+      .toBeTruthy();
+    expect(result.tree.links).toContainEqual(manualRoute);
+  });
+
+  it("adopts a revised screenplay verbatim after analysis without accepting model-written beats", async () => {
+    const tree = parseScreenplayText([
+      "第1集",
+      "1-1 门外",
+      "旧内容。",
+    ], "screenplay.txt").tree;
+    const section = tree.chapters[0]!.episodes[0]!.sections[0]!;
+    const pendingBeats = [
+      { id: `${section.id}-beat-1`, kind: "plot" as const, text: "  新内容。  " },
+      { id: `${section.id}-beat-2`, kind: "operation" as const, text: "\t长按门把手。\t" },
+    ];
+    section.sourcePending = {
+      heading: "1-1  门外  ",
+      body: "  新内容。  \n\n\t长按门把手。\t",
+      title: "门外",
+      beats: pendingBeats,
+    };
+    const { runtime } = fixture(assistant(JSON.stringify({
+      sections: [{
+        id: section.id,
+        kind: "branch",
+        objective: "进入房间",
+        prerequisite: "",
+      }],
+      links: [],
+    })));
+
+    const result = await analyzePlayableStoryTree(runtime, model, tree);
+    const updated = result.tree.chapters[0]!.episodes[0]!.sections[0]!;
+
+    expect(updated).toMatchObject({
+      scriptText: "  新内容。  \n\n\t长按门把手。\t",
+      beats: pendingBeats,
+      sourceSnapshot: {
+        heading: "1-1  门外  ",
+        body: "  新内容。  \n\n\t长按门把手。\t",
+        beats: pendingBeats,
+      },
+    });
+    expect(updated.sourcePending).toBeUndefined();
+  });
+
+  it("does not call the model when all screenplay inputs are unchanged", async () => {
+    const tree = parseScreenplayText([
+      "第1集",
+      "1-1 开场",
+      "主角醒来。",
+    ], "screenplay.txt").tree;
+    const chapter = tree.chapters[0]!;
+    const episode = chapter.episodes[0]!;
+    const section = episode.sections[0]!;
+    section.analysisFingerprint = playableStoryTreeAnalysisFingerprint(
+      chapter,
+      episode,
+      section,
+    );
+    const { runtime, completeSimple } = fixture(assistant("{}"));
+
+    const result = await analyzePlayableStoryTree(runtime, model, tree);
+
+    expect(result).toEqual({ tree, analyzedSections: 0 });
+    expect(completeSimple).not.toHaveBeenCalled();
+  });
+
   it("names a project using the selected model, bounded input and a separate request", async () => {
     const { runtime, completeSimple } = fixture(assistant('{"name":"月球花园"}'));
     const signal = new AbortController().signal;

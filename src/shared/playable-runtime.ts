@@ -362,6 +362,71 @@ export class NodeRuntime {
     };
   }
 
+  /** Returns to the project's entry Scene without resetting shared State. */
+  async returnToEntry(): Promise<void> {
+    this.#assertStarted();
+    if (this.#policy === "report") return;
+    if (
+      this.#navigation.currentNodeId === this.#graph.entryNodeId &&
+      this.#navigation.backStack.length === 0
+    )
+      return;
+    await this.#navigate(() => ({
+      currentNodeId: this.#graph.entryNodeId,
+      backStack: [],
+    }));
+  }
+
+  /** Opens the connected Story Map Scene, or falls back to story navigation. */
+  async openStoryMap(): Promise<void> {
+    this.#assertStarted();
+    if (this.#policy === "report") return;
+    const routes = this.#graph.nodes.flatMap((node) =>
+      node.signals
+        .filter(
+          (signal) =>
+            signal.id === "story-map" && signal.role === "navigation",
+        )
+        .flatMap((signal) => {
+          const edge = playableEdgeForSignal(this.#graph, node.id, signal.id);
+          return edge ? [{ sourceNodeId: node.id, edge }] : [];
+        }),
+    );
+    const route =
+      routes.find(
+        (candidate) => candidate.sourceNodeId === this.#graph.entryNodeId,
+      ) ??
+      routes.find(
+        (candidate) =>
+          candidate.sourceNodeId === this.#navigation.currentNodeId,
+      ) ??
+      routes[0];
+    if (route) {
+      const currentNodeId = this.#navigation.currentNodeId;
+      await this.#navigate(
+        () => ({
+          currentNodeId: route.edge.targetNodeId,
+          backStack:
+            route.edge.mode === "push"
+              ? [...this.#navigation.backStack, currentNodeId]
+              : [...this.#navigation.backStack],
+        }),
+        undefined,
+        this.#navigation.backStack.length,
+      );
+      return;
+    }
+    if (this.#navigation.backStack.length) {
+      await this.#navigate(
+        () => navigatePlayableBack(this.#navigation),
+        undefined,
+        this.#leftStoryAt,
+      );
+      return;
+    }
+    await this.returnToEntry();
+  }
+
   /**
    * Records an error raised by surface code outside a Runtime call, such as
    * an exception in an event handler. Errors already recorded are ignored.
@@ -678,6 +743,9 @@ export class NodeRuntime {
     declaredAssets: readonly string[],
   ): Omit<NodeRuntimeContext, "root"> {
     return {
+      ...(this.#graph.globalFontFamily
+        ? { globalFontFamily: this.#graph.globalFontFamily }
+        : {}),
       assets: {
         url: this.#guard(token, (id: string) =>
           this.#assetUrl(token, declaredAssets, id),

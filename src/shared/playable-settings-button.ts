@@ -1,11 +1,28 @@
+import {
+  MAX_PLAYABLE_FUNCTION_BUTTON_SIZE,
+  MIN_PLAYABLE_FUNCTION_BUTTON_SIZE,
+  normalizePlayableFunctionButtonSize,
+  PLAYABLE_FUNCTION_BUTTON_SIZE,
+} from "./playable-function-button.js";
+
 export interface PlayableSettingsButton {
   /** Button center in normalized game-viewport coordinates. */
   x: number;
   y: number;
+  /** Button size in the game's reference-resolution pixels. */
+  size?: number;
   iconAssetId?: string;
 }
 
-export const PLAYABLE_SETTINGS_BUTTON_SIZE = 42;
+export const PLAYABLE_SETTINGS_BUTTON_SIZE = PLAYABLE_FUNCTION_BUTTON_SIZE;
+export const MIN_PLAYABLE_SETTINGS_BUTTON_SIZE =
+  MIN_PLAYABLE_FUNCTION_BUTTON_SIZE;
+export const MAX_PLAYABLE_SETTINGS_BUTTON_SIZE =
+  MAX_PLAYABLE_FUNCTION_BUTTON_SIZE;
+
+export function normalizePlayableSettingsButtonSize(value: number): number {
+  return normalizePlayableFunctionButtonSize(value);
+}
 
 export function defaultPlayableSettingsButtonPosition(viewport: {
   width: number;

@@ -14,6 +14,10 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   color: #f2f3f5;
 }
 
+.playable-player[data-global-font] :is(*, *::before, *::after) {
+  font-family: var(--playable-global-font-family) !important;
+}
+
 .playable-vr-control {
   position: absolute;
   z-index: 6;
@@ -25,6 +29,7 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
 }
 
 .playable-vr-enter {
+  display: none;
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid rgb(255 255 255 / 28%);
@@ -226,17 +231,17 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   display: grid;
   padding: 0;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 25%);
+  border: 1px solid transparent;
   border-radius: 7px;
-  background: rgb(16 20 20 / 82%);
+  background: transparent;
   color: #f2f5f4;
   cursor: pointer;
-  backdrop-filter: blur(8px);
+  backdrop-filter: none;
   transform: translate(-50%, -50%);
   touch-action: none;
 }
 
-.playable-player-settings-trigger img {
+.playable-player-button-icon {
   display: block;
   width: 100%;
   height: 100%;
@@ -253,20 +258,20 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   cursor: grabbing;
 }
 
-.playable-player-settings-trigger:hover,
 .playable-player-settings-trigger:focus-visible {
-  border-color: #7bd3c1;
-  background: rgb(25 39 37 / 94%);
   outline: 2px solid rgb(123 211 193 / 42%);
   outline-offset: 2px;
 }
 
-.playable-player-settings-trigger.is-selected {
-  border-color: #9ae7d6;
-  background: rgb(25 54 48 / 96%);
-  outline: 2px solid rgb(123 211 193 / 75%);
-  outline-offset: 3px;
-  box-shadow: 0 0 0 6px rgb(123 211 193 / 16%);
+.playable-player-settings-selection-box {
+  position: absolute;
+  z-index: 1;
+  inset: -6px;
+  box-sizing: border-box;
+  border: 1px dashed #d5fff4;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 82%);
+  pointer-events: none;
 }
 
 .playable-game-settings-backdrop {
@@ -509,9 +514,175 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
   background: #2e7869;
 }
 
+.playable-player-return-trigger {
+  position: absolute;
+  z-index: 8;
+  display: grid;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: none;
+}
+
+.playable-player-return-trigger:focus-visible {
+  outline: 2px solid rgb(255 255 255 / 34%);
+  outline-offset: 2px;
+}
+
+.playable-player-return-trigger.is-editable {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.playable-player-return-trigger.is-editable:active {
+  cursor: grabbing;
+}
+
+.playable-pause-menu,
+.playable-player-exited {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  background: rgb(0 0 0 / 78%);
+  backdrop-filter: blur(3px);
+  font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+}
+
+.playable-pause-menu-content {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 32px;
+  transform: translateY(-12px);
+}
+
+.playable-pause-menu-items {
+  display: grid;
+  gap: 14px;
+}
+
+.playable-pause-menu-item {
+  display: grid;
+  min-width: 0;
+  min-height: 52px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: rgb(238 238 238 / 68%);
+  font: 24px/1.35 "Noto Serif SC", "Songti SC", "STSong", serif;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease, font-size 120ms ease;
+}
+
+.playable-pause-menu-item:hover,
+.playable-pause-menu-item:focus-visible,
+.playable-pause-menu-item.is-selected {
+  color: #fff;
+  font-size: 32px;
+  font-weight: 700;
+  outline: none;
+}
+
+.playable-pause-menu-indicator {
+  width: 14px;
+  height: 14px;
+  justify-self: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+}
+
+.playable-pause-menu-item.is-selected .playable-pause-menu-indicator {
+  border-color: currentColor;
+}
+
+.playable-pause-menu-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 32px;
+  color: rgb(240 240 240 / 54%);
+  font: 13px/1.4 Inter, system-ui, sans-serif;
+}
+
+.playable-pause-menu-hints span {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.playable-pause-menu-hints kbd {
+  font: inherit;
+}
+
+.playable-player-exited section {
+  width: min(420px, 100%);
+  text-align: center;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.playable-player-exited h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.playable-player-exited p {
+  color: rgb(240 240 240 / 68%);
+  font-size: 14px;
+}
+
+.playable-player-exited button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 8%);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
 @media (max-width: 560px) {
   .playable-game-settings-dialog {
     width: min(440px, 100%);
+  }
+
+  .playable-pause-menu-content {
+    width: min(360px, 100%);
+    gap: 24px;
+  }
+
+  .playable-pause-menu-items {
+    gap: 10px;
+  }
+
+  .playable-pause-menu-item {
+    min-height: 46px;
+    font-size: 21px;
+  }
+
+  .playable-pause-menu-item:hover,
+  .playable-pause-menu-item:focus-visible,
+  .playable-pause-menu-item.is-selected {
+    font-size: 28px;
+  }
+
+  .playable-pause-menu-hints {
+    font-size: 12px;
   }
 
   .playable-game-settings-header {

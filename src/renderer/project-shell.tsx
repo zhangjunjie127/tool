@@ -20,6 +20,10 @@ import {
   Suspense,
 } from "react";
 import type { AgentContextUsage, AgentModel, AgentModelRef, AgentReasoningLevel, CheckpointChangeItem, ConversationCapabilities, ConversationSummary, PendingPrompt, PluginMention, ProjectState, PromptAttachment, PromptContext, PromptImage, PromptMode, PromptReference, ThreadItem } from "../shared/contracts.js";
+import type {
+  PlayableStoryTreeCanvasEdge,
+  PlayableStoryTreeCanvasStatus,
+} from "../shared/playable-story-tree.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
 import { isWebRuntimeProjectType, supportsWebPreview } from "../shared/project-runtime.js";
 import {
@@ -66,6 +70,7 @@ import { AgentTimeline } from "./agent-timeline.js";
 import type { TurnChangesControls } from "./turn-changes.js";
 import { CodingWorkspace } from "./coding-workspace.js";
 import { PlayableEditorWorkspace } from "./playable-editor-workspace.js";
+import { PlayableStoryTreePanel } from "./playable-story-tree-panel.js";
 import type { PlayableChatState } from "./playable-chat.js";
 import { Composer, type ComposerDraft } from "./composer.js";
 import { composerDrafts } from "./composer-drafts.js";
@@ -131,6 +136,42 @@ export function ProjectShell({
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [agentCollapsed, setAgentCollapsed] = useState(view === "design" && !initialPrompt && !initialDraft);
   const [designOpen, setDesignOpen] = useState(view === "design");
+  const [storyTreeVisible, setStoryTreeVisible] = useState(false);
+  const [storyTreeCanvasStatus, setStoryTreeCanvasStatus] = useState<{
+    projectId: string;
+    status: PlayableStoryTreeCanvasStatus;
+  }>();
+  const [storyTreeCanvasSyncProgress, setStoryTreeCanvasSyncProgress] =
+    useState<{
+      projectId: string;
+      mode: "generate" | "update";
+    }>();
+  const [storyTreeCanvasNodeIds, setStoryTreeCanvasNodeIds] = useState<{
+    projectId: string;
+    nodeIds: readonly string[];
+  }>();
+  const [storyTreeCanvasEdges, setStoryTreeCanvasEdges] = useState<{
+    projectId: string;
+    edges: readonly PlayableStoryTreeCanvasEdge[];
+  }>();
+  const [storyTreeCanvasFitAfterRevision, setStoryTreeCanvasFitAfterRevision] =
+    useState<{ projectId: string; revision: number }>();
+  const [storyTreeCanvasFocusRequest, setStoryTreeCanvasFocusRequest] = useState<{
+    projectId: string;
+    sequence: number;
+    nodeId: string;
+  }>();
+  const storyTreeCanvasFocusSequence = useRef(0);
+  const canvasSave = useRef<(() => Promise<void>) | undefined>(undefined);
+  const registerCanvasSave = useCallback(
+    (save: (() => Promise<void>) | undefined) => {
+      canvasSave.current = save;
+    },
+    [],
+  );
+  const flushCanvasBeforeTreeSync = useCallback(async () => {
+    await canvasSave.current?.();
+  }, []);
   useEffect(() => { setDesignOpen(view === "design"); }, [view]);
   const changeWorkspaceView = useCallback((open: boolean, options?: { replace?: boolean }): void => {
     setDesignOpen(open);
@@ -155,6 +196,28 @@ export function ProjectShell({
   const registerDesignSave = useCallback((save: (() => Promise<void>) | undefined) => { saveDesign.current = save; }, []);
   const [designContext, setDesignContext] = useState<PromptContext>();
   const [dismissedDesign, setDismissedDesign] = useState<string>();
+  const handleStoryTreeCanvasSyncComplete = useCallback(
+    (mode: "generate" | "update") => {
+      const nextRevision = workspaceRevision + 1;
+      setWorkspaceRevision(nextRevision);
+      const projectId = state.project?.id;
+      if (mode === "generate" && projectId)
+        setStoryTreeCanvasFitAfterRevision({
+          projectId,
+          revision: nextRevision,
+        });
+    },
+    [state.project?.id, workspaceRevision],
+  );
+  const handleStoryTreeCanvasNodeSelect = useCallback((nodeId: string) => {
+    const projectId = state.project?.id;
+    if (!projectId) return;
+    setStoryTreeCanvasFocusRequest({
+      projectId,
+      sequence: ++storyTreeCanvasFocusSequence.current,
+      nodeId,
+    });
+  }, [state.project?.id]);
   // "Ask AI to fix" in the Playtest window lands in this chat, ready to send.
   usePlaytestAskRequests(state.project?.id, requestPrompt);
   const modelCatalog = useAgentModels({ agentRuntimes: true });
@@ -387,6 +450,27 @@ export function ProjectShell({
   }, [auth.state.status, state.phase, state.project?.id, state.project?.type, state.agent.status, sendingInitialPrompt, publishing]);
 
   const project = state.project;
+  const handleStoryTreeCanvasStatusChange = useCallback(
+    (status: PlayableStoryTreeCanvasStatus) => {
+      if (!project) return;
+      setStoryTreeCanvasStatus({ projectId: project.id, status });
+    },
+    [project?.id],
+  );
+  const handleStoryTreeCanvasNodeIdsChange = useCallback(
+    (nodeIds: readonly string[]) => {
+      if (!project) return;
+      setStoryTreeCanvasNodeIds({ projectId: project.id, nodeIds });
+    },
+    [project?.id],
+  );
+  const handleStoryTreeCanvasEdgesChange = useCallback(
+    (edges: readonly PlayableStoryTreeCanvasEdge[]) => {
+      if (!project) return;
+      setStoryTreeCanvasEdges({ projectId: project.id, edges });
+    },
+    [project?.id],
+  );
   const conversation = state.conversation;
   const publishDialogStatus = publishDialog?.projectId === project?.id ? publishDialog?.status : undefined;
 
@@ -768,6 +852,30 @@ export function ProjectShell({
   return (
     <WorkspaceShell chatLayout={chatLayout} agentCollapsed={agentIsCollapsed} viewerCollapsed={viewerCollapsed}
       onHome={requestHome} homeLabel={homeLabel} homeIcon={ArrowLeft} onExpandAgent={() => setAgentCollapsed(false)}
+      agentSidePanel={project?.type === "interactive-story"
+        ? <PlayableStoryTreePanel
+            projectId={project.id}
+            visible={storyTreeVisible}
+            model={effectiveModel && !isAgentRuntimeId(effectiveModel.provider)
+              ? { provider: effectiveModel.provider, id: effectiveModel.id }
+              : undefined}
+            canvasNodeIds={storyTreeCanvasNodeIds?.projectId === project.id
+              ? storyTreeCanvasNodeIds.nodeIds
+              : undefined}
+            canvasEdges={storyTreeCanvasEdges?.projectId === project.id
+              ? storyTreeCanvasEdges.edges
+              : undefined}
+            onBeforeSync={flushCanvasBeforeTreeSync}
+            onCanvasSyncComplete={handleStoryTreeCanvasSyncComplete}
+            onCanvasSyncProgressChange={(mode) =>
+              setStoryTreeCanvasSyncProgress(
+                mode ? { projectId: project.id, mode } : undefined,
+              )
+            }
+            onCanvasNodeSelect={handleStoryTreeCanvasNodeSelect}
+            onCanvasStatusChange={handleStoryTreeCanvasStatusChange}
+          />
+        : undefined}
       agent={<WorkspaceAgentPane bodyRef={timeline} onScroll={(event) => {
         const element = event.currentTarget;
         followTimeline.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
@@ -968,6 +1076,25 @@ export function ProjectShell({
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
       /></Suspense> : <PlayableEditorWorkspace
         project={project}
+        onCanvasNodeIdsChange={handleStoryTreeCanvasNodeIdsChange}
+        onCanvasEdgesChange={handleStoryTreeCanvasEdgesChange}
+        onCanvasSaveReady={registerCanvasSave}
+        storyTreeCanvasFitAfterRevision={
+          storyTreeCanvasFitAfterRevision?.projectId === project.id
+            ? storyTreeCanvasFitAfterRevision.revision
+            : undefined
+        }
+        storyTreeCanvasFocusRequest={
+          storyTreeCanvasFocusRequest?.projectId === project.id
+            ? storyTreeCanvasFocusRequest
+            : undefined
+        }
+        storyTreeCanvasStatus={storyTreeCanvasStatus?.projectId === project.id ? storyTreeCanvasStatus.status : undefined}
+        storyTreeCanvasSyncProgress={
+          storyTreeCanvasSyncProgress?.projectId === project.id
+            ? storyTreeCanvasSyncProgress.mode
+            : undefined
+        }
         onProjectUpdated={(updated) => dispatch({ type: "project-updated", project: updated })}
         designOpen={designOpen}
         onDesignOpenChange={changeWorkspaceView}
@@ -986,6 +1113,7 @@ export function ProjectShell({
         onHome={requestHome}
         onToggleChat={() => setAgentCollapsed((collapsed) => !collapsed)}
         onChatContextChange={setPlayableChat}
+        onStoryTreeVisibilityChange={setStoryTreeVisible}
         onAskAgent={requestPrompt}
         onSendToAgent={sendEditorRequest}
       />}

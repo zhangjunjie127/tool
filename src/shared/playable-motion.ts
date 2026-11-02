@@ -1,5 +1,13 @@
-import { offsetOf, startTagEnd } from "./playable-text-edit.js";
-import { annotatePlayableSourceLocations } from "./playable-source-locations.js";
+import {
+  offsetOf,
+  parsePlayableSourceLocation,
+  replacePlayableElementText,
+  startTagEnd,
+} from "./playable-text-edit.js";
+import {
+  PLAYABLE_SOURCE_ATTRIBUTE,
+  annotatePlayableSourceLocations,
+} from "./playable-source-locations.js";
 import type { PlayableSourceLocation } from "./playable-text-edit.js";
 import type { PlayableNodeContext } from "./playable-nodes.js";
 
@@ -10,7 +18,11 @@ export type PlayableMotionKind =
   | "hold-charge"
   | "swipe-button"
   | "button-feedback";
-export type PlayableButtonAction = "new-game" | "continue" | "story-map";
+export type PlayableButtonAction =
+  | "new-game"
+  | "continue"
+  | "story-map"
+  | "back";
 
 export type PlayableMotionMode = "interactive" | "visual";
 export type PlayableNoInputMode = "continue" | "wait";
@@ -113,6 +125,7 @@ export const PLAYABLE_MOTION_ATTRIBUTES = {
   assetScaleY: "data-putenggame-button-asset-scale-y",
   labelTranslate: "data-putenggame-button-label-translate",
   buttonAction: "data-putenggame-button-action",
+  showAfterVideoEnd: "data-putenggame-show-after-video-end",
 } as const;
 
 const PLAYABLE_MOTION_PAUSE_EVENT = "putenggame:motion-pause";
@@ -694,6 +707,7 @@ export function insertPlayableButtonPreset(
   buttonText = label,
   fontFamily?: string,
   buttonAction?: PlayableButtonAction,
+  position?: { x: number; y: number },
 ): { html: string; source: string } | undefined {
   const isRippleHint = config?.feedback === "ripple-hint";
   if (
@@ -705,7 +719,14 @@ export function insertPlayableButtonPreset(
     (!buttonText.trim() && !isRippleHint) ||
     buttonText.length > 120 ||
     (fontFamily !== undefined &&
-      (!fontFamily.trim() || fontFamily.length > 120))
+      (!fontFamily.trim() || fontFamily.length > 120)) ||
+    (position !== undefined &&
+      (!Number.isFinite(position.x) ||
+        !Number.isFinite(position.y) ||
+        position.x < 0 ||
+        position.x > 100 ||
+        position.y < 0 ||
+        position.y > 100))
   )
     return undefined;
   const root = /<([A-Za-z][\w-]*)\b[^>]*>/i.exec(html);
@@ -735,7 +756,17 @@ export function insertPlayableButtonPreset(
   const actionAttribute = buttonAction
     ? ` ${PLAYABLE_MOTION_ATTRIBUTES.buttonAction}="${buttonAction}"`
     : "";
-  const element = `<button id="${id}" type="button" aria-label="${escapeAttribute(buttonText.trim() || label)}"${signal ? ` data-signal="${signal}"` : ""} data-putenggame-button-preset${actionAttribute}${assetId ? ` ${PLAYABLE_MOTION_ATTRIBUTES.asset}="${escapeAttribute(assetId)}"` : ""}${pressedAssetId ? ` ${PLAYABLE_MOTION_ATTRIBUTES.pressedAsset}="${escapeAttribute(pressedAssetId)}"` : ""}${config ? ` ${motionAttributes(config)}` : ""} style="position:absolute;left:50cqw;top:50cqh;transform:translate(-50%,-50%);${shape}${presetStyle}font:inherit;${safeFontFamily ? `font-family:${escapeAttribute(safeFontFamily)};` : ""}cursor:pointer">${escapeAttribute(buttonText)}</button>`;
+  const returnVisibilityAttribute =
+    buttonAction === "back"
+      ? ` ${PLAYABLE_MOTION_ATTRIBUTES.showAfterVideoEnd}`
+      : "";
+  const returnShape = buttonAction === "back"
+    ? "width:14cqw;height:auto;min-width:0;min-height:0;padding:0;border-radius:0;aspect-ratio:auto;"
+    : shape;
+  const positionStyle = position
+    ? `left:${roundButtonPosition(position.x)}cqw;top:${roundButtonPosition(position.y)}cqh;`
+    : "left:50cqw;top:50cqh;";
+  const element = `<button id="${id}" type="button" aria-label="${escapeAttribute(buttonText.trim() || label)}"${signal ? ` data-signal="${signal}"` : ""} data-putenggame-button-preset${actionAttribute}${returnVisibilityAttribute}${assetId ? ` ${PLAYABLE_MOTION_ATTRIBUTES.asset}="${escapeAttribute(assetId)}"` : ""}${pressedAssetId ? ` ${PLAYABLE_MOTION_ATTRIBUTES.pressedAsset}="${escapeAttribute(pressedAssetId)}"` : ""}${config ? ` ${motionAttributes(config)}` : ""} style="position:absolute;${positionStyle}transform:translate(-50%,-50%);${returnShape}${presetStyle}font:inherit;${safeFontFamily ? `font-family:${escapeAttribute(safeFontFamily)};` : ""}cursor:pointer">${escapeAttribute(buttonText)}</button>`;
   const offset = lastClosing.index;
   const updated = `${html.slice(0, offset)}${element}${html.slice(offset)}`;
   const annotated = annotatePlayableSourceLocations(updated, file);
@@ -747,6 +778,37 @@ export function insertPlayableButtonPreset(
     annotated.slice(start, end),
   )?.[1];
   return source ? { html: updated, source } : undefined;
+}
+
+/** Updates a Signal button's direct text without replacing nested icons or keys. */
+export function replacePlayableSignalButtonText(
+  html: string,
+  file: string,
+  signal: string,
+  text: string,
+): string | undefined {
+  if (!/^[a-z][a-z0-9-]*$/.test(signal) || !text.trim() || text.length > 120)
+    return undefined;
+  const annotated = annotatePlayableSourceLocations(html, file);
+  const opening = new RegExp(
+    `<button\\b(?=[^>]*\\bdata-signal=(["'])${escapeRegExp(signal)}\\1)[^>]*\\b${PLAYABLE_SOURCE_ATTRIBUTE}=(["'])([^"']+)\\2[^>]*>`,
+    "i",
+  ).exec(annotated);
+  const location = opening && parsePlayableSourceLocation(opening[3]!);
+  if (!location) return undefined;
+  const start = offsetOf(html, location.line, location.column);
+  if (start === undefined) return undefined;
+  const end = startTagEnd(html, start);
+  if (end === undefined) return undefined;
+  const close = html.indexOf("</button", end);
+  if (close < 0) return undefined;
+  const before = html
+    .slice(end, close)
+    .replace(/<([A-Za-z][\w-]*)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .trim();
+  if (!before) return undefined;
+  return replacePlayableElementText(html, location, before, text.trim());
 }
 
 export function mountPlayableMotionElement(
@@ -948,7 +1010,11 @@ function mountPlayableButtonPressEffect(
     };
     const rect = element.getBoundingClientRect();
     const size = Math.max(rect.width, rect.height, 48);
-    const radius = Math.min(Math.max(size * 1.3, 58), 150);
+    const radius = Math.min(Math.max(size * 1.3, 58), 320);
+    const particleCount = Math.min(
+      64,
+      Math.max(16, Math.round((16 * size) / 48)),
+    );
     const burst = element.ownerDocument.createElement("span");
     burst.dataset.putenggameParticleBurst = config.pressEffect!;
     burst.setAttribute("aria-hidden", "true");
@@ -983,11 +1049,12 @@ function mountPlayableButtonPressEffect(
     };
 
     const makeRing = (delay: number, color: string, width: number) => {
+      const ringSize = 24;
       const ring = addPart({
-        width: `${radius * 0.38}px`,
-        height: `${radius * 0.38}px`,
-        marginLeft: `${-radius * 0.19}px`,
-        marginTop: `${-radius * 0.19}px`,
+        width: `${ringSize}px`,
+        height: `${ringSize}px`,
+        marginLeft: `${-ringSize / 2}px`,
+        marginTop: `${-ringSize / 2}px`,
         boxSizing: "border-box",
         border: `${width}px solid ${color}`,
         borderRadius: "50%",
@@ -1014,11 +1081,12 @@ function mountPlayableButtonPressEffect(
     makeRing(0, effectColor, 2);
     makeRing(75, colorWithAlpha(0.92), 1.5);
 
+    const hazeSize = 52;
     const haze = addPart({
-      width: `${radius * 0.82}px`,
-      height: `${radius * 0.82}px`,
-      marginLeft: `${-radius * 0.41}px`,
-      marginTop: `${-radius * 0.41}px`,
+      width: `${hazeSize}px`,
+      height: `${hazeSize}px`,
+      marginLeft: `${-hazeSize / 2}px`,
+      marginTop: `${-hazeSize / 2}px`,
       borderRadius: "50%",
       background: `radial-gradient(circle, rgba(255,255,255,.9) 0%, ${colorWithAlpha(0.48)} 22%, ${colorWithAlpha(0.12)} 48%, transparent 72%)`,
       filter: "blur(2px)",
@@ -1034,8 +1102,9 @@ function mountPlayableButtonPressEffect(
       { duration: 570, easing: "ease-out", fill: "both" },
     );
 
-    for (let index = 0; index < 16; index += 1) {
-      const angle = (Math.PI * 2 * index) / 16 + (index % 3) * 0.045;
+    for (let index = 0; index < particleCount; index += 1) {
+      const angle =
+        (Math.PI * 2 * index) / particleCount + (index % 3) * 0.045;
       const distance = radius * (0.75 + ((index * 11) % 17) / 22);
       const particleSize = 2 + (index % 4) * 1.2;
       const particle = addPart({
@@ -1075,11 +1144,12 @@ function mountPlayableButtonPressEffect(
       );
     }
 
+    const coreSize = 16;
     const core = addPart({
-      width: `${Math.max(14, size * 0.24)}px`,
-      height: `${Math.max(14, size * 0.24)}px`,
-      marginLeft: `${-Math.max(14, size * 0.24) / 2}px`,
-      marginTop: `${-Math.max(14, size * 0.24) / 2}px`,
+      width: `${coreSize}px`,
+      height: `${coreSize}px`,
+      marginLeft: `${-coreSize / 2}px`,
+      marginTop: `${-coreSize / 2}px`,
       background: `radial-gradient(circle, #fff 0%, ${colorWithAlpha(0.85)} 34%, ${colorWithAlpha(0.95)} 62%, transparent 76%)`,
       filter: `drop-shadow(0 0 7px ${effectColor}) drop-shadow(0 0 18px ${colorWithAlpha(0.8)})`,
       clipPath:
@@ -1200,6 +1270,17 @@ function mountPlayableButtonAsset(
     });
     layer?.append(image);
   }
+  const matchReturnImageAspectRatio = () => {
+    if (
+      element.getAttribute(PLAYABLE_MOTION_ATTRIBUTES.buttonAction) ===
+        "back" &&
+      image?.naturalWidth &&
+      image.naturalHeight
+    )
+      element.style.aspectRatio = `${image.naturalWidth} / ${image.naturalHeight}`;
+  };
+  image?.addEventListener("load", matchReturnImageAspectRatio);
+  if (image?.complete) matchReturnImageAspectRatio();
   let pressedLayer: HTMLSpanElement | undefined;
   if (pressedAssetUrl) {
     pressedLayer = element.ownerDocument.createElement("span");
@@ -1321,7 +1402,7 @@ function mountPlayableButtonAsset(
   if (layer) element.prepend(layer);
   if (assetUrl) {
     element.style.background = "transparent";
-    element.style.border = "0";
+    element.style.borderColor = "transparent";
     element.style.backgroundImage = "none";
     element.style.isolation = "isolate";
     element.style.scale = baseScale || formatScaleAxes(x / 100, y / 100);
@@ -1331,6 +1412,7 @@ function mountPlayableButtonAsset(
   return () => {
     layer?.remove();
     pressedLayer?.remove();
+    image?.removeEventListener("load", matchReturnImageAspectRatio);
     element.removeEventListener("pointerenter", onPointerEnter);
     element.removeEventListener("pointerleave", onPointerLeave);
     element.removeEventListener("pointermove", onPointerMove);
@@ -2694,7 +2776,15 @@ function escapeAttribute(value: string): string {
     .replaceAll("<", "&lt;");
 }
 
-function motionAttributes(config: PlayableMotionConfig): string {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function roundButtonPosition(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function motionAttributes(config: PlayableMotionConfig): string {
   return [
     `${PLAYABLE_MOTION_ATTRIBUTES.kind}="${config.kind}"`,
     `${PLAYABLE_MOTION_ATTRIBUTES.mode}="${config.mode}"`,

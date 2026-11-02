@@ -1,4 +1,4 @@
-import { type Edge, type Node } from "@xyflow/react";
+import { type Edge, type FitViewOptions, type Node } from "@xyflow/react";
 import type { NodeCodebase, NodeEditorLayout } from "../shared/playable-codebase.js";
 import { withPlayableEntry } from "../shared/playable-graph.js";
 import {
@@ -23,6 +23,10 @@ export type PlayableFlowData = {
   connected: Record<string, { edgeId: string; target: string; selected: boolean }>;
   /** The Node does not compile; its card keeps its last good thumbnail, dimmed. */
   failed: boolean;
+  /** The Node has no incoming or outgoing canvas connection. */
+  unconnected?: boolean;
+  /** Why this Node is no longer synchronized with the Story tree. */
+  storyTreeStatus?: "pending-removal" | "detached";
   /** The cached screenshot of the Node, and whether its source changed since. */
   thumbnail?: { capturedAt: string; stale: boolean };
   /** Shown instead of a thumbnail before the Node was ever previewed. */
@@ -30,6 +34,33 @@ export type PlayableFlowData = {
 };
 
 export type PlayableFlowNode = Node<PlayableFlowData, "playable">;
+type PlayableCanvasFitView = (
+  options?: FitViewOptions<PlayableFlowNode>,
+) => Promise<boolean>;
+
+export function fitPlayableCanvasToAllNodes(
+  fitView: PlayableCanvasFitView,
+): Promise<boolean> {
+  return fitView({
+    padding: 0.2,
+    minZoom: 0.1,
+    maxZoom: 1,
+    duration: 250,
+  });
+}
+
+export function focusPlayableCanvasNode(
+  fitView: PlayableCanvasFitView,
+  nodeId: string,
+): Promise<boolean> {
+  return fitView({
+    nodes: [{ id: nodeId }],
+    padding: 0.3,
+    minZoom: 0.5,
+    maxZoom: 1.4,
+    duration: 250,
+  });
+}
 
 /** The single place the editor turns canvas state back into files on disk. */
 export function buildCodebase(
@@ -68,6 +99,20 @@ export function createFlowNode(node: PlayableNode, position: { x: number; y: num
     deletable: true,
     data: { node, entry: false, ending: false, issues: [], connected: {}, failed: false },
   };
+}
+
+/** Nodes with neither an incoming nor an outgoing canvas edge. */
+export function unconnectedPlayableNodeIds(
+  nodeIds: readonly string[],
+  edges: readonly Edge[],
+): Set<string> {
+  const known = new Set(nodeIds);
+  const connected = new Set<string>();
+  for (const edge of edges) {
+    if (known.has(edge.source)) connected.add(edge.source);
+    if (known.has(edge.target)) connected.add(edge.target);
+  }
+  return new Set(nodeIds.filter((id) => !connected.has(id)));
 }
 
 /** Lays out the entry story from left to right, then places remaining components after it. */

@@ -140,9 +140,23 @@ export const PLAYABLE_GRAPH_SCHEMA = {
       properties: {
         x: { type: "number", minimum: 0, maximum: 1 },
         y: { type: "number", minimum: 0, maximum: 1 },
+        size: { type: "number", minimum: 24, maximum: 128 },
         iconAssetId: { $ref: "#/$defs/identifier" },
       },
     },
+    returnButton: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "size"],
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1 },
+        y: { type: "number", minimum: 0, maximum: 1 },
+        size: { type: "number", minimum: 24, maximum: 128 },
+        iconAssetId: { $ref: "#/$defs/identifier" },
+      },
+    },
+    buttonSoundAssetId: { $ref: "#/$defs/identifier" },
+    globalFontFamily: { type: "string", minLength: 1, maxLength: 120 },
     nodes: {
       type: "array",
       maxItems: 500,
@@ -157,6 +171,7 @@ export const PLAYABLE_GRAPH_SCHEMA = {
           assets: assetIds,
           signals,
           videoEndAutoAdvance: { type: "boolean" },
+          storyTreeDetached: { type: "boolean" },
           story: {
             type: "object",
             additionalProperties: false,

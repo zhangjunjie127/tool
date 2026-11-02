@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,6 +23,10 @@ import { WebGamePlayerWindows, type WebGamePlayerTarget } from "./web-game-playe
 import { RendererCloseRequest } from "./renderer-close.js";
 import { AsyncTaskPool } from "./async-task-pool.js";
 import { PROJECT_FILE_OPEN_MODES, type ProjectFileOpenMode } from "../shared/contracts.js";
+import {
+  getDefaultFontDirectories,
+  scanFontFamilies,
+} from "./system-fonts.js";
 import type { PlaytestWatchState } from "../shared/playtest.js";
 import type { WebGamePlayerRequest, WebGamePreviewLayout } from "../shared/web-game-player.js";
 
@@ -37,6 +42,7 @@ let mainWindow: BrowserWindow | undefined;
 const playtestWindows = new Map<string, BrowserWindow | Promise<BrowserWindow>>();
 /** A Node that fails to start never reports back; its window gives up after this. */
 const NODE_THUMBNAIL_TIMEOUT_MS = 20_000;
+const PLAYABLE_FONT_DIRECTORIES_FILE = "playable-font-directories.json";
 const nodeThumbnailCaptures = new AsyncTaskPool(2);
 const nodeThumbnailBatches = new Map<string, { projectId: string; controller: AbortController; requests: number }>();
 /** Hidden Node thumbnail windows by WebContents ID. */
@@ -240,6 +246,40 @@ handle("ohmygame:select-library-directory", async (event) => {
     properties: ["openDirectory"],
   });
   return result.canceled ? undefined : result.filePaths[0];
+});
+handle("ohmygame:list-fonts", async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents)
+    throw new Error("Invalid font-list source");
+  return scanFontFamilies([
+    ...getDefaultFontDirectories(process.platform),
+    ...(await readPlayableFontDirectories()),
+  ]);
+});
+handle("ohmygame:add-font-directory", async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents)
+    throw new Error("Invalid font-directory source");
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory"],
+  });
+  const selectedDirectory = result.filePaths[0];
+  if (result.canceled || !selectedDirectory) return undefined;
+
+  const directories = await readPlayableFontDirectories();
+  const normalized = path.resolve(selectedDirectory);
+  const key = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  const existing = new Set(
+    directories.map((directory) =>
+      process.platform === "win32" ? directory.toLowerCase() : directory,
+    ),
+  );
+  if (!existing.has(key)) {
+    directories.push(normalized);
+    await writePlayableFontDirectories(directories);
+  }
+  return scanFontFamilies([
+    ...getDefaultFontDirectories(process.platform),
+    ...directories,
+  ]);
 });
 handle("ohmygame:capture-page", async (event, rectangle: unknown) => {
   const window = mainWindow && event.sender === mainWindow.webContents
@@ -671,6 +711,40 @@ async function captureNodeThumbnail(projectId: string, nodeId: string, viewport:
 
 function validRouteId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("/");
+}
+
+async function readPlayableFontDirectories(): Promise<string[]> {
+  try {
+    const value: unknown = JSON.parse(
+      await readFile(
+        path.join(app.getPath("userData"), PLAYABLE_FONT_DIRECTORIES_FILE),
+        "utf8",
+      ),
+    );
+    return Array.isArray(value)
+      ? value.filter(
+          (directory): directory is string =>
+            typeof directory === "string" &&
+            path.isAbsolute(directory) &&
+            directory.length <= 4_000,
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writePlayableFontDirectories(
+  directories: readonly string[],
+): Promise<void> {
+  const filePath = path.join(
+    app.getPath("userData"),
+    PLAYABLE_FONT_DIRECTORIES_FILE,
+  );
+  const temporaryPath = `${filePath}.tmp`;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(temporaryPath, JSON.stringify(directories, null, 2), "utf8");
+  await rename(temporaryPath, filePath);
 }
 
 function packagedEsbuildBinary(): string {

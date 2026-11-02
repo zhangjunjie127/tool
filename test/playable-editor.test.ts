@@ -264,6 +264,100 @@ describe("Playable editor graph changes", () => {
         graph: { ...withSettingsButton, settingsButton: { x: 0.6, y: 0.7, iconAssetId: "settings" } },
       }),
     ).toBe(playableRuntimeKey(definition));
+    expect(
+      playableRuntimeKey({
+        ...definition,
+        graph: {
+          ...withSettingsButton,
+          settingsButton: {
+            ...withSettingsButton.settingsButton,
+            size: 84,
+          },
+        },
+      }),
+    ).toBe(playableRuntimeKey(definition));
+  });
+
+  it("keeps the preview running when only the return button changes", () => {
+    const graph = createNodeGraphFixture();
+    const definition = { version: 1, graph, compiled: {}, graphSignature: "a" } as unknown as NodePlayerDefinition;
+    const withReturnButton = {
+      ...graph,
+      assets: {
+        ...graph.assets,
+        "return-icon": {
+          type: "image" as const,
+          source: { kind: "library" as const, assetId: "library-return-icon" },
+        },
+      },
+      returnButton: {
+        x: 0.96,
+        y: 0.05,
+        size: 42,
+        iconAssetId: "return-icon",
+      },
+    };
+    const runtimeKey = playableRuntimeKey({
+      ...definition,
+      graph: withReturnButton,
+    });
+
+    expect(runtimeKey).toBe(playableRuntimeKey(definition));
+    expect(
+      playableRuntimeKey({
+        ...definition,
+        graph: {
+          ...withReturnButton,
+          returnButton: {
+            ...withReturnButton.returnButton,
+            x: 0.7,
+            size: 64,
+          },
+        },
+      }),
+    ).toBe(runtimeKey);
+  });
+
+  it("keeps the preview running when only the game-wide button sound changes", () => {
+    const graph = createNodeGraphFixture();
+    const definition = { version: 1, graph, compiled: {}, graphSignature: "a" } as unknown as NodePlayerDefinition;
+
+    expect(
+      playableRuntimeKey({
+        ...definition,
+        graph: { ...graph, buttonSoundAssetId: "theme" },
+      }),
+    ).toBe(playableRuntimeKey(definition));
+  });
+
+  it("keeps the preview running when only the global font changes", () => {
+    const graph = createNodeGraphFixture();
+    const definition = { version: 1, graph, compiled: {}, graphSignature: "a" } as unknown as NodePlayerDefinition;
+
+    expect(
+      playableRuntimeKey({
+        ...definition,
+        graph: { ...graph, globalFontFamily: "Example UI" },
+      }),
+    ).toBe(playableRuntimeKey(definition));
+  });
+
+  it("keeps a global icon in the runtime when a Scene also uses that Asset", () => {
+    const graph = createNodeGraphFixture();
+    const definition = { version: 1, graph, compiled: {}, graphSignature: "a" } as unknown as NodePlayerDefinition;
+    const withReturnIcon = {
+      ...graph,
+      returnButton: {
+        x: 0.96,
+        y: 0.05,
+        size: 42,
+        iconAssetId: "background",
+      },
+    };
+
+    expect(
+      playableRuntimeKey({ ...definition, graph: withReturnIcon }),
+    ).toBe(playableRuntimeKey(definition));
   });
 
   it("hashes what a Node thumbnail shows", () => {

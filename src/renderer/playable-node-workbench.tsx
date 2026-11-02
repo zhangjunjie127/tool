@@ -11,13 +11,16 @@ import {
   ArrowRight,
   ArrowUp,
   Brush,
+  Check,
   Film,
+  FolderOpen,
   GuideHorizontal,
   GuideVertical,
   Lock,
   LockOpen,
   Image,
   ImageOff,
+  Music2,
   InfoCircle,
   History,
   Heart,
@@ -30,6 +33,7 @@ import {
   Redo2,
   RotateCcw,
   ArrowDownToLine,
+  ChevronDown,
   Trash2,
   Type,
   Undo2,
@@ -111,6 +115,11 @@ import {
 import { createMemoryStorage, NodePlayer } from "./playable-player.js";
 import { loadPlayableAssets } from "./playable-assets.js";
 import {
+  chooseBrowserFontDirectory,
+  rememberedBrowserFontDirectory,
+  scanBrowserSystemFonts,
+} from "./browser-fonts.js";
+import {
   playablePickKey,
   usePlayableChatReport,
   type PlayableChatState,
@@ -132,16 +141,23 @@ import {
 } from "../shared/playable-motion.js";
 import { interactionTimingEditsAreUnchanged } from "../shared/playable-move.js";
 import { parsePlayableSourceLocation } from "../shared/playable-text-edit.js";
+import { PLAYABLE_RETURN_BUTTON_SIZE } from "../shared/playable-return-button.js";
+import {
+  MAX_PLAYABLE_FUNCTION_BUTTON_SIZE,
+  MIN_PLAYABLE_FUNCTION_BUTTON_SIZE,
+  PLAYABLE_FUNCTION_BUTTON_SIZE,
+} from "../shared/playable-function-button.js";
 import { readLanguage, t, translateText } from "./i18n.js";
 
 const ASSET_UPLOAD_ACCEPT = ".png,.jpg,.jpeg,.webp,.mp4,.mov,.webm";
 const PICKER_CATEGORIES: readonly {
-  id: "video" | "image" | "custom";
+  id: "video" | "image" | "audio" | "custom";
   label: string;
   icon: IconComponent;
 }[] = [
   { id: "video", label: "Videos", icon: Film },
   { id: "image", label: "Images", icon: Image },
+  { id: "audio", label: "Audio", icon: Music2 },
   { id: "custom", label: "Custom", icon: Layers3 },
 ];
 const SESSION_IMPORTED_ASSET_IDS = new Set<string>();
@@ -258,6 +274,13 @@ export function PlayableNodeWorkbench({
   onAddAsset,
   onSetSettingsButtonIcon,
   onWriteSettingsButtonPosition,
+  onWriteSettingsButtonSize,
+  onSetReturnButtonIcon,
+  onWriteReturnButtonPosition,
+  onWriteReturnButtonSize,
+  onSetButtonSound,
+  onRemoveButtonSound,
+  onWriteGlobalFontFamily,
   onSetBackdrop,
   onRemoveBackdrop,
   onWriteBackdropLoop,
@@ -369,8 +392,19 @@ export function PlayableNodeWorkbench({
   onWriteAffection: (config: PlayableAffectionConfig) => Promise<void>;
   /** Declares an asset on the Scene and resolves with its ID once saved. */
   onAddAsset: (asset: PlayableAssetRequest) => Promise<string>;
-  onSetSettingsButtonIcon: (asset: PlayableAssetRequest) => Promise<boolean>;
+  onSetSettingsButtonIcon: (
+    asset: PlayableAssetRequest,
+  ) => Promise<string | undefined>;
   onWriteSettingsButtonPosition: (position: { x: number; y: number }) => Promise<boolean>;
+  onWriteSettingsButtonSize: (size: number) => Promise<boolean>;
+  onSetReturnButtonIcon: (
+    asset: PlayableAssetRequest,
+  ) => Promise<string | undefined>;
+  onWriteReturnButtonPosition: (position: { x: number; y: number }) => Promise<boolean>;
+  onWriteReturnButtonSize: (size: number) => Promise<boolean>;
+  onSetButtonSound: (asset: PlayableAssetRequest) => Promise<void>;
+  onRemoveButtonSound: () => Promise<void>;
+  onWriteGlobalFontFamily: (fontFamily: string) => Promise<void>;
   /**
    * Shows the asset as the Scene's background, as a step the editor's Undo
    * takes back; resolves false when the background cannot be set in place.
@@ -498,6 +532,31 @@ export function PlayableNodeWorkbench({
   >([]);
   const [tool, setTool] = useState<PreviewTool>("play");
   const [settingsButtonSelected, setSettingsButtonSelected] = useState(false);
+  const [returnButtonSelected, setReturnButtonSelected] = useState(false);
+  const [settingsButtonSizePreview, setSettingsButtonSizePreview] =
+    useState<number>();
+  const [pendingSettingsButtonIcon, setPendingSettingsButtonIcon] = useState<{
+    asset: PlayableAssetRequest;
+    blob: Blob;
+    committed: boolean;
+    synced?: boolean;
+    assetId?: string;
+  }>();
+  const [settingsButtonIconApplying, setSettingsButtonIconApplying] =
+    useState(false);
+  const settingsButtonIconRequest = useRef(0);
+  const [pendingReturnButtonIcon, setPendingReturnButtonIcon] = useState<{
+    asset: PlayableAssetRequest;
+    blob: Blob;
+    committed: boolean;
+    synced?: boolean;
+    assetId?: string;
+  }>();
+  const [returnButtonIconApplying, setReturnButtonIconApplying] =
+    useState(false);
+  const returnButtonIconRequest = useRef(0);
+  const [returnButtonSizePreview, setReturnButtonSizePreview] =
+    useState<number>();
   const [selectedGuideId, setSelectedGuideId] = useState<string>();
   const [referencePicks, setReferencePicks] = useState<PlayablePickResult[]>([]);
   const [referencePickKey, setReferencePickKey] = useState<string>();
@@ -556,7 +615,12 @@ export function PlayableNodeWorkbench({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRestoring, setHistoryRestoring] = useState(false);
   const [storage] = useState(createMemoryStorage);
-  const fonts = useSystemFonts();
+  const {
+    fonts,
+    fontDirectoryName,
+    addFontDirectory,
+    scanSystemFonts,
+  } = useSystemFonts();
   const { toasts, show: showToast, dismiss: dismissToast } = usePreviewToasts();
   const page = useRef<HTMLElement>(null);
   const seenReport = useRef("");
@@ -570,6 +634,15 @@ export function PlayableNodeWorkbench({
   useEffect(() => {
     setTool("play");
     setSettingsButtonSelected(false);
+    setReturnButtonSelected(false);
+    setSettingsButtonSizePreview(undefined);
+    settingsButtonIconRequest.current += 1;
+    setPendingSettingsButtonIcon(undefined);
+    setSettingsButtonIconApplying(false);
+    returnButtonIconRequest.current += 1;
+    setPendingReturnButtonIcon(undefined);
+    setReturnButtonIconApplying(false);
+    setReturnButtonSizePreview(undefined);
     setSelectedGuideId(undefined);
     setTextSelection(undefined);
     setInteractionSelections([]);
@@ -587,6 +660,59 @@ export function PlayableNodeWorkbench({
     setPendingButtonNormalAsset(undefined);
     setPendingButtonPressedAsset(undefined);
   }, [node.id]);
+
+  useEffect(() => {
+    if (
+      !pendingSettingsButtonIcon?.committed ||
+      !pendingSettingsButtonIcon.assetId
+    )
+      return;
+    if (!runtime.definition) return;
+    const currentAssetId =
+      runtime.definition?.graph.settingsButton?.iconAssetId;
+    if (currentAssetId === pendingSettingsButtonIcon.assetId) {
+      if (!pendingSettingsButtonIcon.synced)
+        setPendingSettingsButtonIcon((current) =>
+          current?.asset === pendingSettingsButtonIcon.asset
+            ? { ...current, synced: true }
+            : current,
+        );
+    } else if (pendingSettingsButtonIcon.synced) {
+      setPendingSettingsButtonIcon(undefined);
+    }
+  }, [
+    pendingSettingsButtonIcon?.assetId,
+    pendingSettingsButtonIcon?.asset,
+    pendingSettingsButtonIcon?.committed,
+    pendingSettingsButtonIcon?.synced,
+    runtime.definition?.graph.settingsButton?.iconAssetId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !pendingReturnButtonIcon?.committed ||
+      !pendingReturnButtonIcon.assetId
+    )
+      return;
+    if (!runtime.definition) return;
+    const currentAssetId = runtime.definition.graph.returnButton?.iconAssetId;
+    if (currentAssetId === pendingReturnButtonIcon.assetId) {
+      if (!pendingReturnButtonIcon.synced)
+        setPendingReturnButtonIcon((current) =>
+          current?.asset === pendingReturnButtonIcon.asset
+            ? { ...current, synced: true }
+            : current,
+        );
+    } else if (pendingReturnButtonIcon.synced) {
+      setPendingReturnButtonIcon(undefined);
+    }
+  }, [
+    pendingReturnButtonIcon?.assetId,
+    pendingReturnButtonIcon?.asset,
+    pendingReturnButtonIcon?.committed,
+    pendingReturnButtonIcon?.synced,
+    runtime.definition?.graph.returnButton?.iconAssetId,
+  ]);
 
   useEffect(() => {
     setMotionRingAsset(undefined);
@@ -607,6 +733,7 @@ export function PlayableNodeWorkbench({
     if (tool !== "select") setInteractionSelections([]);
     if (tool !== "select") setPicks([]);
     if (tool !== "select") setSettingsButtonSelected(false);
+    if (tool !== "select") setReturnButtonSelected(false);
   }, [tool]);
 
   // Esc puts the pointer back to playing. The preview frame reports its own Esc.
@@ -672,6 +799,7 @@ export function PlayableNodeWorkbench({
   }, []);
   const onPick = useCallback((pick: PlayablePickResult, additive: boolean) => {
     setSettingsButtonSelected(false);
+    setReturnButtonSelected(false);
     const key = playablePickKey(pick);
     if (!additive) setInteractionSelections([]);
     setPicks((current) => {
@@ -686,6 +814,15 @@ export function PlayableNodeWorkbench({
   }, []);
   const onSelectSettingsButton = useCallback(() => {
     setSettingsButtonSelected(true);
+    setReturnButtonSelected(false);
+    setSelectedGuideId(undefined);
+    setTextSelection(undefined);
+    setInteractionSelections([]);
+    setPicks([]);
+  }, []);
+  const onSelectReturnButton = useCallback(() => {
+    setReturnButtonSelected(true);
+    setSettingsButtonSelected(false);
     setSelectedGuideId(undefined);
     setTextSelection(undefined);
     setInteractionSelections([]);
@@ -931,42 +1068,6 @@ export function PlayableNodeWorkbench({
     [onWriteTextStyle, reserveRuntimeRefreshSkip, showToast, textSelection],
   );
 
-  const editButtonFont = useCallback(
-    async (pick: PlayablePickResult, value: string): Promise<boolean> => {
-      if (!value) return false;
-      const releaseRefreshSkip = reserveRuntimeRefreshSkip();
-      try {
-        if (
-          !(await onWriteTextStyle({
-            pick,
-            property: "fontFamily",
-            value,
-            inPlace: true,
-          }))
-        ) {
-          releaseRefreshSkip();
-          showToast({ tone: "error", text: t("playableWorkbench.errorSaveButtonFont") });
-          return false;
-        }
-        setTextStyleCommand({
-          sequence: ++textStyleSequence.current,
-          pick,
-          property: "fontFamily",
-          value,
-        });
-        return true;
-      } catch (cause) {
-        releaseRefreshSkip();
-        showToast({
-          tone: "error",
-          text: `${t("playableWorkbench.errorSaveButtonFont")}: ${errorMessage(cause)}`,
-        });
-        return false;
-      }
-    },
-    [onWriteTextStyle, reserveRuntimeRefreshSkip, showToast],
-  );
-
   const editButtonLabel = useCallback(
     async (pick: PlayablePickResult, after: string): Promise<boolean> => {
       const before = pick.text ?? "";
@@ -1161,8 +1262,6 @@ export function PlayableNodeWorkbench({
           appliedPick = {
             ...appliedPick,
             buttonAssetId: assetId,
-            buttonAssetScaleX: 100,
-            buttonAssetScaleY: 100,
           };
         }
         if (pick.tag === "button" && pendingButtonPressedAsset) {
@@ -1806,6 +1905,73 @@ export function PlayableNodeWorkbench({
     })();
   }, [onWriteDelete, picks, reserveRuntimeRefreshSkip, showToast]);
 
+  const confirmSettingsButtonIcon = async () => {
+    const pending = pendingSettingsButtonIcon;
+    if (!pending || pending.committed || settingsButtonIconApplying) return;
+    setSettingsButtonIconApplying(true);
+    try {
+      const assetId = await onSetSettingsButtonIcon(pending.asset);
+      if (!assetId) {
+        showToast({
+          tone: "error",
+          text: t("playableWorkbench.errorSettingsButtonIcon"),
+        });
+        return;
+      }
+      setPendingSettingsButtonIcon((current) =>
+        current?.asset === pending.asset
+          ? { ...current, committed: true, assetId }
+          : current,
+      );
+    } catch (cause) {
+      showToast({
+        tone: "error",
+        text: `${t("playableWorkbench.errorSettingsButtonIcon")}: ${errorMessage(cause)}`,
+      });
+    } finally {
+      setSettingsButtonIconApplying(false);
+    }
+  };
+
+  const confirmReturnButtonIcon = async () => {
+    const pending = pendingReturnButtonIcon;
+    if (!pending || pending.committed || returnButtonIconApplying) return;
+    setReturnButtonIconApplying(true);
+    try {
+      const assetId = await onSetReturnButtonIcon(pending.asset);
+      if (!assetId) {
+        showToast({
+          tone: "error",
+          text: t("playableWorkbench.errorReturnButtonIcon"),
+        });
+        return;
+      }
+      setPendingReturnButtonIcon((current) =>
+        current?.asset === pending.asset
+          ? { ...current, committed: true, assetId }
+          : current,
+      );
+    } catch (cause) {
+      showToast({
+        tone: "error",
+        text: `${t("playableWorkbench.errorReturnButtonIcon")}: ${errorMessage(cause)}`,
+      });
+    } finally {
+      setReturnButtonIconApplying(false);
+    }
+  };
+
+  const removeButtonSound = async () => {
+    try {
+      await onRemoveButtonSound();
+    } catch (cause) {
+      showToast({
+        tone: "error",
+        text: `${t("playableWorkbench.errorButtonSound")}: ${errorMessage(cause)}`,
+      });
+    }
+  };
+
   /**
    * As background, the editor sets the Scene's background. Otherwise the
    * media goes into the chat, declared on the Scene, for the message to say
@@ -1814,13 +1980,33 @@ export function PlayableNodeWorkbench({
   const addMedia = useCallback(
     async (asset: PlayableAssetRequest, target: MediaTarget) => {
       try {
+        if (target === "button-sound") {
+          if (asset.type !== "audio") return;
+          await onSetButtonSound(asset);
+          return;
+        }
         if (target === "settings-button") {
           if (asset.type !== "image") return;
-          if (!(await onSetSettingsButtonIcon(asset)))
-            showToast({
-              tone: "error",
-              text: t("playableWorkbench.errorSettingsButtonIcon"),
-            });
+          const requestId = ++settingsButtonIconRequest.current;
+          const blob = await getLibraryAsset(
+            asset.source.kind === "library"
+              ? asset.source.assetId
+              : asset.name,
+          );
+          if (requestId !== settingsButtonIconRequest.current) return;
+          setPendingSettingsButtonIcon({ asset, blob, committed: false });
+          return;
+        }
+        if (target === "return-button") {
+          if (asset.type !== "image") return;
+          const requestId = ++returnButtonIconRequest.current;
+          const blob = await getLibraryAsset(
+            asset.source.kind === "library"
+              ? asset.source.assetId
+              : asset.name,
+          );
+          if (requestId !== returnButtonIconRequest.current) return;
+          setPendingReturnButtonIcon({ asset, blob, committed: false });
           return;
         }
         if (target === "motion-ring") {
@@ -2026,7 +2212,7 @@ export function PlayableNodeWorkbench({
     [
       node.id,
       onAddAsset,
-      onSetSettingsButtonIcon,
+      onSetButtonSound,
       onInsertMediaAsset,
       backdropLoop,
       pictureInPictureVideoLoop,
@@ -2303,7 +2489,59 @@ export function PlayableNodeWorkbench({
             strokes={strokes.length}
             redoStrokes={redoStrokes.length}
             picks={picks.length}
-            settingsButtonSelected={settingsButtonSelected}
+            functionButtonScaleSelection={
+              tool === "select" && settingsButtonSelected
+                ? {
+                    kind: "settings",
+                    key: "settings-button",
+                    label: t("playableWorkbench.settingsButton"),
+                    size:
+                      runtime.definition?.graph.settingsButton?.size ??
+                      PLAYABLE_FUNCTION_BUTTON_SIZE,
+                  }
+                : tool === "select" && returnButtonSelected
+                  ? {
+                      kind: "return",
+                      key: "return-button",
+                      label: t("playableWorkbench.returnButton"),
+                      size:
+                        runtime.definition?.graph.returnButton?.size ??
+                        PLAYABLE_RETURN_BUTTON_SIZE,
+                    }
+                  : undefined
+            }
+            onPreviewFunctionButtonSize={(kind, size) => {
+              if (kind === "settings") setSettingsButtonSizePreview(size);
+              else setReturnButtonSizePreview(size);
+            }}
+            onCommitFunctionButtonSize={async (kind, size) => {
+              try {
+                const saved =
+                  kind === "settings"
+                    ? await onWriteSettingsButtonSize(size)
+                    : await onWriteReturnButtonSize(size);
+                if (!saved) {
+                  showToast({
+                    tone: "error",
+                    text: t("playableWorkbench.errorFunctionButtonSize"),
+                  });
+                } else if (kind === "settings") {
+                  setSettingsButtonSizePreview(undefined);
+                } else {
+                  setReturnButtonSizePreview(undefined);
+                }
+                return saved;
+              } catch (cause) {
+                if (kind === "settings")
+                  setSettingsButtonSizePreview(undefined);
+                else setReturnButtonSizePreview(undefined);
+                showToast({
+                  tone: "error",
+                  text: `${t("playableWorkbench.errorFunctionButtonSize")}: ${errorMessage(cause)}`,
+                });
+                return false;
+              }
+            }}
             guides={guides}
             selectedGuideId={selectedGuideId}
             onAddGuide={(axis) => {
@@ -2380,6 +2618,8 @@ export function PlayableNodeWorkbench({
             }
             motionSignals={motionSignals}
             fonts={fonts}
+            globalFontFamily={graph.globalFontFamily}
+            onAddFontDirectory={addFontDirectory}
             onTextStyle={onTextStyle}
             vrEyeReference={vrEyeReference}
             onVrEyeReference={(eye) => {
@@ -2387,7 +2627,6 @@ export function PlayableNodeWorkbench({
               setMediaCommand({ command: "vr-eye-preview", nodeId: node.id, eye });
             }}
             onEditButtonLabel={editButtonLabel}
-            onEditButtonFont={editButtonFont}
             onDeleteSelected={deleteSelected}
             onInteractionTiming={onInteractionTiming}
             onApplyMotion={onApplyMotion}
@@ -2406,8 +2645,44 @@ export function PlayableNodeWorkbench({
             mediaState={mediaState}
             onMediaCommand={setMediaCommand}
             onHistoryCommand={onPreviewHistoryCommand}
-            onChooseSettingsButtonIcon={() =>
-              chooser.choose("settings-button")
+            buttonSettings={
+              <GameFunctionSettings
+                disabled={!ready}
+                uploading={chooser.uploading}
+                globalFontFamily={graph.globalFontFamily ?? ""}
+                fonts={fonts}
+                fontDirectoryName={fontDirectoryName}
+                onChangeGlobalFontFamily={(family) =>
+                  void onWriteGlobalFontFamily(family)
+                }
+                onScanSystemFonts={scanSystemFonts}
+                onAddFontDirectory={addFontDirectory}
+                onChooseSettingsButtonIcon={() =>
+                  chooser.choose("settings-button")
+                }
+                settingsButtonIconPending={
+                  Boolean(pendingSettingsButtonIcon) &&
+                  !pendingSettingsButtonIcon?.committed
+                }
+                settingsButtonIconApplying={settingsButtonIconApplying}
+                onConfirmSettingsButtonIcon={() =>
+                  void confirmSettingsButtonIcon()
+                }
+                returnButtonIconPending={
+                  Boolean(pendingReturnButtonIcon) &&
+                  !pendingReturnButtonIcon?.committed
+                }
+                returnButtonIconApplying={returnButtonIconApplying}
+                onChooseReturnButtonIcon={() =>
+                  chooser.choose("return-button")
+                }
+                onConfirmReturnButtonIcon={() =>
+                  void confirmReturnButtonIcon()
+                }
+                buttonSoundSelected={Boolean(graph.buttonSoundAssetId)}
+                onChooseButtonSound={() => chooser.choose("button-sound")}
+                onRemoveButtonSound={() => void removeButtonSound()}
+              />
             }
             onPreviewShortcut={(shortcut) =>
               applyPreviewShortcut(shortcut, {
@@ -2444,9 +2719,6 @@ export function PlayableNodeWorkbench({
                 }
                 videoEndAutoAdvance={videoEndAutoAdvance}
                 onChoose={chooser.choose}
-                onChooseSettingsButtonIcon={() =>
-                  chooser.choose("settings-button")
-                }
                 onRemoveBackdrop={() => void removeBackdrop()}
                 onBackdropLoopChange={(loop) => void writeBackdropLoop(loop)}
                 onPictureInPictureVideoLoopChange={(loop) =>
@@ -2490,7 +2762,11 @@ export function PlayableNodeWorkbench({
           storage={storage}
           preview={preview}
           showGameSettings
+          showPauseMenu={tool === "play"}
+          showReturnButton={tool !== "play"}
           settingsButtonSelected={settingsButtonSelected}
+          settingsButtonSizePreview={settingsButtonSizePreview}
+          settingsButtonIconPreview={pendingSettingsButtonIcon?.blob}
           onSelectSettingsButton={onSelectSettingsButton}
           onSettingsButtonPositionChange={async (position) => {
             try {
@@ -2505,6 +2781,27 @@ export function PlayableNodeWorkbench({
               showToast({
                 tone: "error",
                 text: `${t("playableWorkbench.errorSettingsButtonPosition")}: ${errorMessage(cause)}`,
+              });
+              return false;
+            }
+          }}
+          returnButtonSelected={returnButtonSelected}
+          returnButtonIconPreview={pendingReturnButtonIcon?.blob}
+          returnButtonSizePreview={returnButtonSizePreview}
+          onSelectReturnButton={onSelectReturnButton}
+          onReturnButtonPositionChange={async (position) => {
+            try {
+              const saved = await onWriteReturnButtonPosition(position);
+              if (!saved)
+                showToast({
+                  tone: "error",
+                  text: t("playableWorkbench.errorReturnButtonPosition"),
+                });
+              return saved;
+            } catch (cause) {
+              showToast({
+                tone: "error",
+                text: `${t("playableWorkbench.errorReturnButtonPosition")}: ${errorMessage(cause)}`,
               });
               return false;
             }
@@ -2713,6 +3010,13 @@ function previewShortcutForKey(
   }
 }
 
+type FunctionButtonScaleSelection = {
+  kind: "settings" | "return";
+  key: string;
+  label: string;
+  size: number;
+};
+
 /** Floats over the bottom of the preview. */
 export function PreviewToolbar({
   tool,
@@ -2753,6 +3057,8 @@ export function PreviewToolbar({
   vrEyeReference = "full",
   onVrEyeReference,
   fonts,
+  globalFontFamily,
+  onAddFontDirectory,
   onTextStyle,
   onInteractionTiming,
   onApplyMotion,
@@ -2762,20 +3068,21 @@ export function PreviewToolbar({
   onWriteButtonSignal,
   onWriteButtonSignalLabel,
   onEditButtonLabel,
-  onEditButtonFont,
   buttonSignals = [],
   onPreviewElementScale,
   onCommitElementScale,
+  functionButtonScaleSelection,
+  onPreviewFunctionButtonSize,
+  onCommitFunctionButtonSize,
   onPreviewMotionBarScale,
   onCommitButtonAssetScale,
-  settingsButtonSelected = false,
-  onChooseSettingsButtonIcon,
   onTool,
   onUndoStroke,
   onRedoStroke = () => {},
   onClearStrokes,
   redoStrokes = 0,
   onHistoryCommand,
+  buttonSettings,
   media,
   picker,
   pickerOpen = false,
@@ -2825,6 +3132,8 @@ export function PreviewToolbar({
   onVrEyeReference?: (eye: "full" | "left" | "right") => void;
   onDeleteSelected?: () => void;
   fonts: readonly string[];
+  globalFontFamily?: string;
+  onAddFontDirectory?: () => Promise<void>;
   onTextStyle: (
     property: PlayableTextStyleEdit["property"],
     value: string,
@@ -2866,10 +3175,6 @@ export function PreviewToolbar({
     pick: PlayablePickResult,
     text: string,
   ) => Promise<boolean>;
-  onEditButtonFont?: (
-    pick: PlayablePickResult,
-    fontFamily: string,
-  ) => Promise<boolean>;
   buttonSignals?: readonly { id: string; label: string }[];
   onPreviewElementScale?: (
     pick: PlayablePickResult,
@@ -2879,8 +3184,15 @@ export function PreviewToolbar({
     pick: PlayablePickResult,
     scale: number,
   ) => Promise<boolean>;
-  settingsButtonSelected?: boolean;
-  onChooseSettingsButtonIcon?: () => void;
+  functionButtonScaleSelection?: FunctionButtonScaleSelection;
+  onPreviewFunctionButtonSize?: (
+    kind: FunctionButtonScaleSelection["kind"],
+    size: number | undefined,
+  ) => void;
+  onCommitFunctionButtonSize?: (
+    kind: FunctionButtonScaleSelection["kind"],
+    size: number,
+  ) => Promise<boolean>;
   redoStrokes?: number;
   onPreviewMotionBarScale?: (
     scale: number,
@@ -2897,6 +3209,7 @@ export function PreviewToolbar({
   onRedoStroke?: () => void;
   onClearStrokes: () => void;
   onHistoryCommand?: (command: PlayableHistoryCommand) => void;
+  buttonSettings?: ReactNode;
   /** An action after the tools, such as the Media menu. */
   media?: ReactNode;
   /** Inline media chooser placed beside the inspector instead of over the scene. */
@@ -2980,52 +3293,126 @@ export function PreviewToolbar({
     : "";
   const [assetScaleXDraft, setAssetScaleXDraft] = useState(savedAssetScaleX);
   const [assetScaleYDraft, setAssetScaleYDraft] = useState(savedAssetScaleY);
-  const [elementScaleDraft, setElementScaleDraft] = useState(
-    Math.round((motionSelection?.transformScale ?? 1) * 100),
+  const scaleSelection =
+    tool === "select" && functionButtonScaleSelection
+      ? {
+          ...functionButtonScaleSelection,
+          scale: functionButtonScaleSelection.size / PLAYABLE_FUNCTION_BUTTON_SIZE,
+          min: Math.round(
+            (MIN_PLAYABLE_FUNCTION_BUTTON_SIZE /
+              PLAYABLE_FUNCTION_BUTTON_SIZE) *
+              100,
+          ),
+          max: Math.round(
+            (MAX_PLAYABLE_FUNCTION_BUTTON_SIZE /
+              PLAYABLE_FUNCTION_BUTTON_SIZE) *
+              100,
+          ),
+        }
+      : tool === "select" && motionSelection?.source
+        ? {
+            kind: "element" as const,
+            key: playablePickKey(motionSelection),
+            label:
+              motionSelection.text?.trim() ||
+              (motionSelection.tag === "button"
+                ? t("playableWorkbench.defaultButtonText")
+                : motionSelection.tag),
+            scale: motionSelection.transformScale ?? 1,
+            min: 5,
+            max: 500,
+          }
+        : undefined;
+  const initialScale = Math.round((scaleSelection?.scale ?? 1) * 100);
+  const [scaleDraft, setScaleDraft] = useState(initialScale);
+  const [scaleInputDraft, setScaleInputDraft] = useState(
+    String(initialScale),
   );
-  const [elementScaleInputDraft, setElementScaleInputDraft] = useState(
-    String(elementScaleDraft),
-  );
-  const elementScaleCommitted = useRef(elementScaleDraft);
-  const elementSelectionKey = motionSelection
-    ? playablePickKey(motionSelection)
-    : "";
+  const scaleCommitted = useRef(initialScale);
+  const scaleCommitPending = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const scale = Math.round((motionSelection?.transformScale ?? 1) * 100);
-    setElementScaleDraft(scale);
-    setElementScaleInputDraft(String(scale));
-    elementScaleCommitted.current = scale;
-  }, [elementSelectionKey, motionSelection?.transformScale]);
-  const previewElementScaleDraft = (value: number) => {
-    if (!motionSelection) return;
-    setElementScaleDraft(value);
-    setElementScaleInputDraft(String(value));
-    onPreviewElementScale?.(motionSelection, value / 100);
+    const scale = Math.round((scaleSelection?.scale ?? 1) * 100);
+    setScaleDraft(scale);
+    setScaleInputDraft(String(scale));
+    scaleCommitted.current = scale;
+    scaleCommitPending.current = undefined;
+  }, [scaleSelection?.key, scaleSelection?.scale]);
+  const previewScaleDraft = (value: number) => {
+    if (!scaleSelection) return;
+    const scale = Math.max(scaleSelection.min, Math.min(scaleSelection.max, Math.round(value)));
+    setScaleDraft(scale);
+    setScaleInputDraft(String(scale));
+    if (scaleSelection.kind === "element" && motionSelection)
+      onPreviewElementScale?.(motionSelection, scale / 100);
+    else if (scaleSelection.kind !== "element")
+      onPreviewFunctionButtonSize?.(
+        scaleSelection.kind,
+        Math.min(
+          MAX_PLAYABLE_FUNCTION_BUTTON_SIZE,
+          Math.max(
+            MIN_PLAYABLE_FUNCTION_BUTTON_SIZE,
+            Math.round((PLAYABLE_FUNCTION_BUTTON_SIZE * scale) / 100),
+          ),
+        ),
+      );
   };
-  const commitElementScaleDraft = async (value = elementScaleDraft) => {
-    const scale = Math.max(5, Math.min(500, Math.round(value)));
-    if (scale !== elementScaleDraft) previewElementScaleDraft(scale);
+  const commitScaleDraft = async (value = scaleDraft) => {
+    if (!scaleSelection) return;
+    const scale = Math.max(
+      scaleSelection.min,
+      Math.min(scaleSelection.max, Math.round(value)),
+    );
+    if (scale !== scaleDraft) previewScaleDraft(scale);
+    const commitKey = `${scaleSelection.key}:${scale}`;
     if (
-      !motionSelection?.source ||
-      scale === elementScaleCommitted.current
+      scale === scaleCommitted.current ||
+      scaleCommitPending.current === commitKey
     )
       return;
-    if (
-      await onCommitElementScale?.(
-        motionSelection,
-        scale / 100,
-      )
-    )
-      elementScaleCommitted.current = scale;
+    scaleCommitPending.current = commitKey;
+    let saved = false;
+    if (scaleSelection.kind === "element" && motionSelection?.source)
+      saved =
+        (await onCommitElementScale?.(motionSelection, scale / 100)) ?? false;
+    else if (scaleSelection.kind !== "element")
+      saved =
+        (await onCommitFunctionButtonSize?.(
+          scaleSelection.kind,
+          Math.min(
+            MAX_PLAYABLE_FUNCTION_BUTTON_SIZE,
+            Math.max(
+              MIN_PLAYABLE_FUNCTION_BUTTON_SIZE,
+              Math.round((PLAYABLE_FUNCTION_BUTTON_SIZE * scale) / 100),
+            ),
+          ),
+        )) ?? false;
+    if (saved) scaleCommitted.current = scale;
+    else previewScaleDraft(scaleCommitted.current);
+    scaleCommitPending.current = undefined;
   };
-  const commitElementScaleInputDraft = () => {
-    const value = Number(elementScaleInputDraft);
+  const commitScaleInputDraft = () => {
+    const value = Number(scaleInputDraft);
     const scale =
-      elementScaleInputDraft.trim() && Number.isFinite(value)
-        ? Math.max(5, Math.min(500, Math.round(value)))
-        : elementScaleCommitted.current;
-    previewElementScaleDraft(scale);
-    void commitElementScaleDraft(scale);
+      scaleInputDraft.trim() && Number.isFinite(value)
+        ? Math.max(
+            scaleSelection?.min ?? 5,
+            Math.min(scaleSelection?.max ?? 500, Math.round(value)),
+          )
+        : scaleCommitted.current;
+    previewScaleDraft(scale);
+    void commitScaleDraft(scale);
+  };
+  const adjustScaleInput = (delta: number) => {
+    if (!scaleSelection) return;
+    const current = Number(scaleInputDraft);
+    const base = Number.isFinite(current) ? current : scaleDraft;
+    const next = Math.max(
+      scaleSelection.min,
+      Math.min(scaleSelection.max, Math.round(base + delta)),
+    );
+    setScaleInputDraft(String(next));
+    previewScaleDraft(next);
+    void commitScaleDraft(next);
   };
   useEffect(() => {
     setAssetScaleXDraft(savedAssetScaleX);
@@ -3188,6 +3575,90 @@ export function PreviewToolbar({
         {interactionSelection.endSeconds === undefined ? (
           <small>{t("playableWorkbench.leaveBlankToKeepVisible")}</small>
         ) : null}
+      </div>
+    ) : null;
+  const selectedElementScaleControl =
+    scaleSelection ? (
+      <div className="playable-preview-selected-element-scale">
+        <div
+          className="playable-preview-selected-element-name"
+          title={scaleSelection.label}
+        >
+          {scaleSelection.label}
+        </div>
+        <section
+          className="playable-preview-element-scale"
+          aria-label={t("playableWorkbench.elementScale")}
+        >
+          <div className="playable-preview-asset-scale-row">
+            <span>{t("playableWorkbench.elementScale")}</span>
+            <input
+              type="range"
+              min={scaleSelection.min}
+              max={scaleSelection.max}
+              step="1"
+              value={scaleDraft}
+              aria-label={t("playableWorkbench.elementScale")}
+              aria-valuetext={`${scaleDraft}%`}
+              onChange={(event) =>
+                previewScaleDraft(Number(event.target.value))
+              }
+              onPointerUp={() => void commitScaleDraft()}
+              onKeyUp={() => void commitScaleDraft()}
+              onBlur={() => void commitScaleDraft()}
+            />
+            <span className="playable-preview-element-scale-input">
+              <span className="playable-preview-element-scale-number">
+                <input
+                  type="number"
+                  min={scaleSelection.min}
+                  max={scaleSelection.max}
+                  step="1"
+                  value={scaleInputDraft}
+                  aria-label={t("playableWorkbench.elementScale")}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setScaleInputDraft(value);
+                    const scale = Number(value);
+                    if (
+                      value.trim() &&
+                      Number.isFinite(scale) &&
+                      scale >= scaleSelection.min &&
+                      scale <= scaleSelection.max
+                    ) {
+                      previewScaleDraft(scale);
+                    }
+                  }}
+                  onBlur={commitScaleInputDraft}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+                <span className="playable-preview-element-scale-stepper">
+                  <button
+                    type="button"
+                    aria-label={t("playableWorkbench.increaseScale")}
+                    title={t("playableWorkbench.increaseScale")}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => adjustScaleInput(1)}
+                  >
+                    <ArrowUp size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t("playableWorkbench.decreaseScale")}
+                    title={t("playableWorkbench.decreaseScale")}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => adjustScaleInput(-1)}
+                  >
+                    <ChevronDown size={11} />
+                  </button>
+                </span>
+              </span>
+              <span aria-hidden="true">%</span>
+            </span>
+          </div>
+        </section>
       </div>
     ) : null;
   const motionSelectionIsReference =
@@ -3376,25 +3847,6 @@ export function PreviewToolbar({
       <aside className="playable-preview-inspector">
         <div className="playable-preview-inspector-content">
           <div className="playable-preview-toolbar" role="toolbar" aria-label={translateText("Scene adjustments")}>
-        {tool === "select" &&
-        settingsButtonSelected &&
-        onChooseSettingsButtonIcon ? (
-          <section
-            className="playable-preview-text-settings playable-preview-settings-button"
-            aria-label={t("playableWorkbench.settingsButton")}
-          >
-            <strong>{t("playableWorkbench.settingsButton")}</strong>
-            <button
-              type="button"
-              aria-label={t("playableWorkbench.chooseSettingsButtonIcon")}
-              title={t("playableWorkbench.chooseSettingsButtonIcon")}
-              onClick={onChooseSettingsButtonIcon}
-            >
-              <Image size={14} />
-              <span>{t("playableWorkbench.chooseSettingsButtonIcon")}</span>
-            </button>
-          </section>
-        ) : null}
         {mediaState.backdropAssetId && onVrEyeReference ? (
           <>
             <span className="playable-preview-toolbar-divider" aria-hidden="true" />
@@ -3432,24 +3884,46 @@ export function PreviewToolbar({
             aria-label={t("playableWorkbench.textSettings")}
           >
             <strong>{t("playableWorkbench.textSettings")}</strong>
+            {globalFontFamily ? (
+              <small>{t("playableWorkbench.globalFontOverridesLocal")}</small>
+            ) : null}
             <label className="playable-preview-text-control">
               <span>{t("playableWorkbench.font")}</span>
-              <select
-                value={textSelection.fontFamily}
-                onChange={(event) =>
-                  onTextStyle("fontFamily", event.target.value)
-                }
-                aria-label={t("playableWorkbench.font")}
-              >
-                <option value="" disabled>
-                  {t("playableWorkbench.selectFont")}
-                </option>
-                {fontFamilies.map((font) => (
-                  <option key={font} value={font}>
-                    {font}
+              <span className="playable-font-select-row">
+                <select
+                  value={textSelection.fontFamily}
+                  disabled={Boolean(globalFontFamily)}
+                  title={
+                    globalFontFamily
+                      ? t("playableWorkbench.globalFontOverridesLocal")
+                      : undefined
+                  }
+                  onChange={(event) =>
+                    onTextStyle("fontFamily", event.target.value)
+                  }
+                  aria-label={t("playableWorkbench.font")}
+                >
+                  <option value="" disabled>
+                    {t("playableWorkbench.selectFont")}
                   </option>
-                ))}
-              </select>
+                  {fontFamilies.map((font) => (
+                    <option key={font} value={font}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+                {onAddFontDirectory ? (
+                  <button
+                    className="playable-font-folder-button"
+                    type="button"
+                    aria-label={t("playableWorkbench.addFontFolder")}
+                    title={t("playableWorkbench.addFontFolder")}
+                    onClick={() => void onAddFontDirectory()}
+                  >
+                    <FolderOpen size={13} />
+                  </button>
+                ) : null}
+              </span>
             </label>
             <label className="playable-preview-text-control">
               <span>{t("playableWorkbench.fontSize")}</span>
@@ -3512,64 +3986,10 @@ export function PreviewToolbar({
           </>
         ) : null}
           </div>
-          {tool === "select" && motionSelection?.source ? (
-            <section
-              className="playable-preview-element-scale"
-              aria-label={t("playableWorkbench.elementScale")}
-            >
-              <label className="playable-preview-asset-scale-row">
-                <span>{t("playableWorkbench.elementScale")}</span>
-                <input
-                  type="range"
-                  min="5"
-                  max="500"
-                  step="1"
-                  value={elementScaleDraft}
-                  aria-label={t("playableWorkbench.elementScale")}
-                  aria-valuetext={`${elementScaleDraft}%`}
-                  onChange={(event) =>
-                    previewElementScaleDraft(Number(event.target.value))
-                  }
-                  onPointerUp={() => void commitElementScaleDraft()}
-                  onKeyUp={() => void commitElementScaleDraft()}
-                  onBlur={() => void commitElementScaleDraft()}
-                />
-                <span className="playable-preview-element-scale-input">
-                  <input
-                    type="number"
-                    min="5"
-                    max="500"
-                    step="1"
-                    value={elementScaleInputDraft}
-                    aria-label={t("playableWorkbench.elementScale")}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setElementScaleInputDraft(value);
-                      const scale = Number(value);
-                      if (
-                        value.trim() &&
-                        Number.isFinite(scale) &&
-                        scale >= 5 &&
-                        scale <= 500
-                      ) {
-                        setElementScaleDraft(scale);
-                        onPreviewElementScale?.(motionSelection, scale / 100);
-                      }
-                    }}
-                    onBlur={commitElementScaleInputDraft}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter")
-                        event.currentTarget.blur();
-                    }}
-                  />
-                  <span aria-hidden="true">%</span>
-                </span>
-              </label>
-            </section>
-          ) : null}
         </div>
       <MotionLibraryPopover
         selection={motionSelection}
+        elementScaleControl={selectedElementScaleControl}
         ringAssetId={motionRingAssetId}
         barAssetId={motionBarAssetId}
         baseAssetId={motionBaseAssetId}
@@ -3641,11 +4061,10 @@ export function PreviewToolbar({
         onWriteButtonSignal={onWriteButtonSignal}
         onWriteButtonSignalLabel={onWriteButtonSignalLabel}
         onEditButtonLabel={onEditButtonLabel}
-        onEditButtonFont={onEditButtonFont}
-        fonts={fonts}
         onPreviewBarScale={onPreviewMotionBarScale}
         buttonSignals={buttonSignals}
         timingControls={timingControls}
+        buttonSettings={buttonSettings}
       />
       </aside>
     </div>
@@ -3723,6 +4142,21 @@ function builtInButtonPreset(
   };
 }
 
+function buttonShapeForMotion(
+  config: PlayableMotionConfig,
+  fallback: "rectangle" | "circle" = "rectangle",
+): "rectangle" | "circle" {
+  if (config.buttonShape) return config.buttonShape;
+  if (config.kind === "swipe-button" && config.swipeStyle)
+    return config.swipeStyle === "floating" ? "circle" : "rectangle";
+  return config.kind === "progress-ring" ||
+    config.kind === "swipe-button" ||
+    config.feedback === "bounce-hover-press" ||
+    config.feedback === "ripple-hint"
+    ? "circle"
+    : fallback;
+}
+
 function defaultButtonText(kind: PlayableMotionKind): string {
   switch (kind) {
     case "hold-charge":
@@ -3762,10 +4196,10 @@ function MotionLibraryPopover({
   onWriteButtonSignal,
   onWriteButtonSignalLabel,
   onEditButtonLabel,
-  onEditButtonFont,
-  fonts,
   onPreviewBarScale,
   timingControls,
+  buttonSettings,
+  elementScaleControl,
 }: {
   selection?: PlayablePickResult;
   ringAssetId?: string;
@@ -3819,11 +4253,6 @@ function MotionLibraryPopover({
     pick: PlayablePickResult,
     text: string,
   ) => Promise<boolean>;
-  onEditButtonFont?: (
-    pick: PlayablePickResult,
-    fontFamily: string,
-  ) => Promise<boolean>;
-  fonts: readonly string[];
   onPreviewBarScale?: (
     scale: number,
     offsetX: number,
@@ -3832,9 +4261,13 @@ function MotionLibraryPopover({
     barLayer: "bottom" | "top",
   ) => void;
   timingControls?: ReactNode;
+  buttonSettings?: ReactNode;
+  elementScaleControl?: ReactNode;
 }) {
   const [kind, setKind] = useState<PlayableMotionKind>("progress-bar");
   const [buttonShape, setButtonShape] = useState<"rectangle" | "circle">("rectangle");
+  const [swipeStyle, setSwipeStyle] =
+    useState<NonNullable<PlayableMotionConfig["swipeStyle"]>>("base");
   const [buttonLabel, setButtonLabel] = useState(selection?.text ?? "");
   const [buttonLabelEdited, setButtonLabelEdited] = useState(false);
   const [buttonAction, setButtonAction] = useState<PlayableButtonAction>();
@@ -3848,9 +4281,6 @@ function MotionLibraryPopover({
   const [effectAnchorY, setEffectAnchorY] = useState(50);
   const [effectOffsetX, setEffectOffsetX] = useState("0");
   const [effectOffsetY, setEffectOffsetY] = useState("0");
-  const [buttonFontFamily, setButtonFontFamily] = useState(
-    selection?.fontFamily ?? "inherit",
-  );
   const [selectedButtonSignal, setSelectedButtonSignal] = useState(
     selection?.signal ?? "",
   );
@@ -3902,10 +4332,6 @@ function MotionLibraryPopover({
     [selection?.cssPath, selection?.text],
   );
   useEffect(
-    () => setButtonFontFamily(selection?.fontFamily ?? "inherit"),
-    [selection?.cssPath, selection?.fontFamily],
-  );
-  useEffect(
     () => setSelectedButtonSignal(selection?.signal ?? ""),
     [selection?.cssPath, selection?.signal],
   );
@@ -3923,32 +4349,17 @@ function MotionLibraryPopover({
     const connected = (id: string | undefined) =>
       id && signals.some((item) => item.id === id) ? id : "";
     if (config) {
-      setButtonShape(
-        config.buttonShape ??
-          (config.kind === "progress-ring" ||
-          config.kind === "swipe-button" ||
-          config.feedback === "bounce-hover-press" ||
-          config.feedback === "ripple-hint"
-            ? "circle"
-            : "rectangle"),
+      const shape = buttonShapeForMotion(config);
+      setButtonShape(shape);
+      setSwipeStyle(
+        config.swipeStyle ?? (shape === "circle" ? "floating" : "base"),
       );
       setKind(config.kind);
       setEffectPreset(
-        config.kind === "swipe-button" && config.disappearAfterSwipe
-          ? "builtin:swipe-button:circle:disappear"
-          : config.kind === "button-feedback" &&
+        config.kind === "button-feedback" &&
           config.feedback === "ripple-hint"
           ? "builtin:button-feedback-ripple"
-          : config.kind === "button-feedback" &&
-          config.feedback === "bounce-hover-press"
-          ? `builtin:button-feedback-bounce:${config.buttonShape ?? "circle"}`
-          : `builtin:${config.kind}:${
-              config.buttonShape ??
-              (config.kind === "progress-ring" ||
-              config.kind === "swipe-button"
-                ? "circle"
-                : "rectangle")
-            }`,
+          : `builtin:${config.kind}`,
       );
       setMode(config.mode);
       setDuration(String(config.duration));
@@ -4008,6 +4419,7 @@ function MotionLibraryPopover({
       );
     } else if (selection) {
       setButtonShape("rectangle");
+      setSwipeStyle("base");
       const nextKind =
         selection.tag === "button" ? "button-feedback" : "progress-bar";
       setKind(nextKind);
@@ -4034,6 +4446,7 @@ function MotionLibraryPopover({
       );
     } else {
       setButtonShape("rectangle");
+      setSwipeStyle("base");
       setKind("progress-bar");
       setEffectPreset("");
       setRingAssetScale(100);
@@ -4069,7 +4482,7 @@ function MotionLibraryPopover({
   const effectOffsetYValue = offsetValue(effectOffsetY);
   const config: PlayableMotionConfig = {
     kind,
-    buttonShape,
+    ...(buttonAction === "back" ? {} : { buttonShape }),
     mode:
       kind === "button-feedback"
         ? isBounceClickPreset
@@ -4128,7 +4541,7 @@ function MotionLibraryPopover({
       : {}),
     ...(kind === "swipe-button"
       ? {
-          swipeStyle: buttonShape === "circle" ? "floating" : "base",
+          swipeStyle,
           swipeBehavior,
           ...(disappearAfterSwipe ? { disappearAfterSwipe: true } : {}),
           feedback: "none" as const,
@@ -4191,21 +4604,48 @@ function MotionLibraryPopover({
     }
     if (selection) void onApply(next, true);
   };
-  const valid =
+  const durationValid =
     Number.isFinite(config.duration) &&
     config.duration >= 0.1 &&
-    config.duration <= 3600 &&
-    (config.timeoutDuration === undefined ||
-      (Number.isFinite(config.timeoutDuration) &&
-        config.timeoutDuration >= config.duration &&
-        config.timeoutDuration <= 3600));
+    config.duration <= 3600;
+  const timeoutValid =
+    config.timeoutDuration === undefined ||
+    (Number.isFinite(config.timeoutDuration) &&
+      config.timeoutDuration >= config.duration &&
+      config.timeoutDuration <= 3600);
+  const valid = durationValid && timeoutValid;
   const interactionValid =
     config.requiredCount === undefined ||
     (Number.isInteger(config.requiredCount) &&
       config.requiredCount >= 2 &&
       config.requiredCount <= 20);
+  const addButtonDisabledReason = [
+    !durationValid
+      ? t("playableWorkbench.addButtonInvalidDuration")
+      : undefined,
+    !timeoutValid
+      ? t("playableWorkbench.addButtonInvalidTimeout")
+      : undefined,
+    !interactionValid
+      ? t("playableWorkbench.addButtonInvalidClickCount")
+      : undefined,
+    reuseExistingSignals && !buttonSignal
+      ? t("playableWorkbench.addButtonMissingSharedExit")
+      : undefined,
+  ]
+    .filter((reason): reason is string => Boolean(reason))
+    .join("\n");
   const selectedButton = selection?.tag === "button" ? selection : undefined;
   const isRippleHintPreset = effectPreset === "builtin:button-feedback-ripple";
+  const canChooseShape =
+    Boolean(effectPreset) &&
+    kind !== "swipe-button" &&
+    buttonAction !== "back" &&
+    effectPreset !== "builtin:button-feedback-ripple";
+  const canChooseClickFeedback =
+    kind === "button-feedback" &&
+    !buttonAction &&
+    effectPreset === "builtin:button-feedback";
   const buttonLabelValue = selection
     ? buttonLabel
     : buttonLabelEdited
@@ -4216,19 +4656,21 @@ function MotionLibraryPopover({
           ? t("playableWorkbench.continueButtonText")
           : buttonAction === "story-map"
             ? t("playableWorkbench.storyMapButtonText")
+            : buttonAction === "back"
+              ? t("playableWorkbench.backButtonText")
             : buttonAction === "new-game"
               ? t("playableWorkbench.newGameButtonText")
               : defaultButtonText(kind);
 
   const setConfigFields = (presetConfig: PlayableMotionConfig) => {
     setButtonShape(
-      presetConfig.buttonShape ??
-        (presetConfig.kind === "progress-ring" ||
-        presetConfig.kind === "swipe-button" ||
-        presetConfig.feedback === "bounce-hover-press" ||
-        presetConfig.feedback === "ripple-hint"
-          ? "circle"
-          : "rectangle"),
+      buttonShapeForMotion(presetConfig, buttonShape),
+    );
+    setSwipeStyle(
+      presetConfig.swipeStyle ??
+        (buttonShapeForMotion(presetConfig, buttonShape) === "circle"
+          ? "floating"
+          : "base"),
     );
     setKind(presetConfig.kind);
     setMode(
@@ -4287,14 +4729,8 @@ function MotionLibraryPopover({
     presetConfig: PlayableMotionConfig,
   ) => {
     setButtonAction(undefined);
-    const shape =
-      presetConfig.buttonShape ??
-      (presetConfig.kind === "progress-ring" ||
-      presetConfig.kind === "swipe-button" ||
-      presetConfig.feedback === "bounce-hover-press" ||
-      presetConfig.feedback === "ripple-hint"
-        ? "circle"
-        : buttonShape);
+    const imageAdaptedBackButton = value === "builtin:button-back";
+    const shape = buttonShapeForMotion(presetConfig, buttonShape);
     const selectedConfig =
       !selection && reuseExistingSignals && presetConfig.kind !== "button-feedback"
         ? {
@@ -4309,17 +4745,29 @@ function MotionLibraryPopover({
                 }
               : {}),
           }
-        : { ...presetConfig, buttonShape: shape };
-    setEffectPreset(value);
+        : {
+            ...presetConfig,
+            ...(!imageAdaptedBackButton ? { buttonShape: shape } : {}),
+          };
+    const normalizedPreset =
+      value.startsWith("builtin:button-feedback-prompt:") ||
+      value.startsWith("builtin:button-feedback-bounce")
+        ? "builtin:button-feedback"
+        : value.startsWith("builtin:swipe-button")
+          ? "builtin:swipe-button"
+          : value.replace(/:(?:circle|rectangle)(?::disappear)?$/, "");
+    setEffectPreset(normalizedPreset);
     setConfigFields(selectedConfig);
   };
   const loadPreset = (value: string) => {
     if (value.startsWith("builtin:")) {
       const actionPreset =
-        /^builtin:button-(new-game|continue|story-map):(rectangle|circle)$/.exec(value);
+        /^builtin:button-(new-game|continue|story-map)(?::(rectangle|circle))?$/.exec(value);
       if (actionPreset && !selection) {
         const action = actionPreset[1] as PlayableButtonAction;
-        const shape = actionPreset[2] as "rectangle" | "circle";
+        const shape =
+          (actionPreset[2] as "rectangle" | "circle" | undefined) ??
+          buttonShape;
         applyPreset(value, {
           kind: "button-feedback",
           mode: "visual",
@@ -4328,6 +4776,16 @@ function MotionLibraryPopover({
           feedback: "hover-press",
         });
         setButtonAction(action);
+        return;
+      }
+      if (value === "builtin:button-back" && !selection) {
+        applyPreset(value, {
+          kind: "button-feedback",
+          mode: "visual",
+          duration: 0.1,
+          feedback: "hover-press",
+        });
+        setButtonAction("back");
         return;
       }
       if (
@@ -4344,6 +4802,23 @@ function MotionLibraryPopover({
         });
         return;
       }
+      if (
+        value === "builtin:button-feedback" ||
+        value === "builtin:button-feedback:rectangle" ||
+        value === "builtin:button-feedback:circle"
+      ) {
+        const shape = value.endsWith(":circle")
+          ? "circle"
+          : value.endsWith(":rectangle")
+            ? "rectangle"
+            : buttonShape;
+        applyPreset(value, {
+          ...builtInButtonPreset("button-feedback", selection, signals),
+          buttonShape: shape,
+          feedback: "hover-press",
+        });
+        return;
+      }
       if (value === "builtin:button-feedback-ripple") {
         if (!selection) setButtonLabel("");
         applyPreset(value, {
@@ -4356,13 +4831,12 @@ function MotionLibraryPopover({
       const bounce = value.startsWith("builtin:button-feedback-bounce");
       const disappearingSwipe =
         value === "builtin:swipe-button:circle:disappear";
-      const shape = disappearingSwipe || value.endsWith(":circle")
+      const legacyShape = /:circle(?::disappear)?$/.test(value)
         ? "circle"
         : value.endsWith(":rectangle")
           ? "rectangle"
-          : bounce
-            ? "circle"
-            : "rectangle";
+          : undefined;
+      const shape = legacyShape ?? buttonShape;
       if (bounce || value === "builtin:button-feedback-bounce") {
         applyPreset(value, {
           ...builtInButtonPreset("button-feedback", selection, signals),
@@ -4407,7 +4881,13 @@ function MotionLibraryPopover({
             return preset;
           })(),
           buttonShape: shape,
-          ...(disappearingSwipe ? { disappearAfterSwipe: true } : {}),
+          ...(presetKind === "swipe-button"
+            ? {
+                swipeStyle:
+                  shape === "circle" ? ("floating" as const) : ("base" as const),
+                ...(disappearingSwipe ? { disappearAfterSwipe: true } : {}),
+              }
+            : {}),
         },
       );
       return;
@@ -4428,9 +4908,7 @@ function MotionLibraryPopover({
       selection
         ? undefined
         : buttonLabelValue.trim(),
-      selection || buttonFontFamily === "inherit"
-        ? undefined
-        : buttonFontFamily,
+      undefined,
       selection ? undefined : buttonAction,
     );
   };
@@ -4438,23 +4916,14 @@ function MotionLibraryPopover({
   return (
     <details
       className={`playable-preview-motion-library${selection ? " is-selected" : " is-creating"}`}
-      aria-label={translateText("Button settings")}
+      aria-label={t("playableWorkbench.gameFunctionSettings")}
       open
     >
       <summary>
-        <strong>{translateText("Button settings", readLanguage())}</strong>
-        {selection ? (
-          <span>
-            {selection.tag === "button"
-              ? translateText("Primary selection: Button", readLanguage())
-              : t("playableWorkbench.primarySelectionTag", {
-                  tag: selection.tag,
-                })}
-          </span>
-        ) : (
-          <span>{translateText("Add a complete button")}</span>
-        )}
+        <strong>{t("playableWorkbench.gameFunctionSettings")}</strong>
       </summary>
+      {elementScaleControl}
+      {buttonSettings}
       {onCreateSharedAnswerSignals ? (
         <div className="playable-preview-motion-shared-exits">
           <strong>
@@ -4533,29 +5002,6 @@ function MotionLibraryPopover({
                 setButtonLabelEdited(true);
               }}
             />
-          </label>
-          <label>
-            <span>{t("playableWorkbench.font")}</span>
-            <select
-              aria-label={t("playableWorkbench.buttonFont")}
-              value={buttonFontFamily}
-              onChange={(event) => {
-                const next = event.target.value;
-                setButtonFontFamily(next);
-              }}
-            >
-              <option value="inherit">{t("playableWorkbench.inheritDefaultFont")}</option>
-              {[
-                ...new Set([
-                  ...(selection?.fontFamily ? [selection.fontFamily] : []),
-                  ...fonts,
-                ]),
-              ].map((font) => (
-                <option key={font} value={font}>
-                  {font}
-                </option>
-              ))}
-            </select>
           </label>
         </>
       ) : null}
@@ -4656,54 +5102,129 @@ function MotionLibraryPopover({
           <option value="" disabled>
             {translateText("Choose a button preset")}
           </option>
-          <optgroup label={translateText("Built-in button presets", readLanguage())}>
-            <option value="builtin:countdown">{translateText("Countdown button (rectangle)", readLanguage())}</option>
-            <option value="builtin:countdown:circle">{translateText("Countdown button (circle)", readLanguage())}</option>
+          <optgroup label={t("playableWorkbench.progressAndHoldPresets")}>
+            <option value="builtin:countdown">{t("playableWorkbench.countdownPreset")}</option>
+            <option value="builtin:hold-charge">{t("playableWorkbench.holdChargePreset")}</option>
             {selection ? (
               <>
-                <option value="builtin:progress-ring">{t("playableWorkbench.progressRingRectangle")}</option>
-                <option value="builtin:progress-ring:circle">{t("playableWorkbench.progressRingCircle")}</option>
-                <option value="builtin:progress-bar">{t("playableWorkbench.progressBarRectangle")}</option>
-                <option value="builtin:progress-bar:circle">{t("playableWorkbench.progressBarCircle")}</option>
-              </>
-            ) : null}
-            <option value="builtin:hold-charge">{translateText("Hold-to-charge button (rectangle)", readLanguage())}</option>
-            <option value="builtin:hold-charge:circle">{translateText("Hold-to-charge button (circle)", readLanguage())}</option>
-            <option value="builtin:swipe-button">{translateText("Swipe button (rectangle)", readLanguage())}</option>
-            <option value="builtin:swipe-button:circle">{translateText("Swipe button (no background image)", readLanguage())}</option>
-            <option value="builtin:swipe-button:circle:disappear">{t("playableWorkbench.swipeDisappear")}</option>
-            <option value="builtin:button-feedback">{translateText("Click button (rectangle)", readLanguage())}</option>
-            <option value="builtin:button-feedback:circle">{translateText("Click button (circle)", readLanguage())}</option>
-            <option value="builtin:button-feedback-prompt:rectangle">{t("playableWorkbench.promptClickRectangle")}</option>
-            <option value="builtin:button-feedback-prompt:circle">{t("playableWorkbench.promptClickCircle")}</option>
-            <option value="builtin:button-feedback-ripple">{translateText("Expanding hint button", readLanguage())}</option>
-            <option value="builtin:button-feedback-bounce:rectangle">{translateText("Bouncing click button (rectangle)", readLanguage())}</option>
-            <option value="builtin:button-feedback-bounce">{translateText("Bouncing click button (circle)", readLanguage())}</option>
-            {!selection ? (
-              <>
-                <option value="builtin:button-new-game:rectangle">
-                  {t("playableWorkbench.newGameButtonRectangle")}
-                </option>
-                <option value="builtin:button-new-game:circle">
-                  {t("playableWorkbench.newGameButtonCircle")}
-                </option>
-                <option value="builtin:button-continue:rectangle">
-                  {t("playableWorkbench.continueButtonRectangle")}
-                </option>
-                <option value="builtin:button-continue:circle">
-                  {t("playableWorkbench.continueButtonCircle")}
-                </option>
-                <option value="builtin:button-story-map:rectangle">
-                  {t("playableWorkbench.storyMapButtonRectangle")}
-                </option>
-                <option value="builtin:button-story-map:circle">
-                  {t("playableWorkbench.storyMapButtonCircle")}
-                </option>
+                <option value="builtin:progress-ring">{t("playableWorkbench.progressRingPreset")}</option>
+                <option value="builtin:progress-bar">{t("playableWorkbench.progressBarPreset")}</option>
               </>
             ) : null}
           </optgroup>
+          <optgroup label={t("playableWorkbench.swipePresets")}>
+            <option value="builtin:swipe-button">{t("playableWorkbench.swipePreset")}</option>
+          </optgroup>
+          <optgroup label={t("playableWorkbench.clickPresets")}>
+            <option value="builtin:button-feedback">{t("playableWorkbench.clickPreset")}</option>
+            <option value="builtin:button-feedback-ripple">{translateText("Expanding hint button", readLanguage())}</option>
+          </optgroup>
+          {!selection ? (
+            <optgroup label={t("playableWorkbench.navigationPresets")}>
+              <option value="builtin:button-new-game">
+                {t("playableWorkbench.newGameButtonText")}
+              </option>
+              <option value="builtin:button-continue">
+                {t("playableWorkbench.continueButtonText")}
+              </option>
+              <option value="builtin:button-story-map">
+                {t("playableWorkbench.storyMapButtonText")}
+              </option>
+              <option value="builtin:button-back">
+                {t("playableWorkbench.backButtonPreset")}
+              </option>
+            </optgroup>
+          ) : null}
         </select>
       </label>
+      {(canChooseShape || canChooseClickFeedback || kind === "swipe-button") ? (
+        <div className="playable-preview-motion-preset-options">
+          {canChooseShape ? (
+            <label>
+              <span>{t("playableWorkbench.buttonShape")}</span>
+              <select
+                aria-label={t("playableWorkbench.buttonShape")}
+                value={buttonShape}
+                onChange={(event) =>
+                  setButtonShape(
+                    event.target.value as "rectangle" | "circle",
+                  )
+                }
+              >
+                <option value="rectangle">
+                  {t("playableWorkbench.rectangleShape")}
+                </option>
+                <option value="circle">
+                  {t("playableWorkbench.circleShape")}
+                </option>
+              </select>
+            </label>
+          ) : null}
+          {canChooseClickFeedback ? (
+            <label>
+              <span>{t("playableWorkbench.clickFeedback")}</span>
+              <select
+                aria-label={t("playableWorkbench.clickFeedback")}
+                value={feedback}
+                onChange={(event) =>
+                  setFeedback(
+                    event.target.value as NonNullable<
+                      PlayableMotionConfig["feedback"]
+                    >,
+                  )
+                }
+              >
+                <option value="none">
+                  {t("playableWorkbench.noClickFeedback")}
+                </option>
+                <option value="hover-press">
+                  {t("playableWorkbench.normalClickFeedback")}
+                </option>
+                <option value="idle-pulse-hover-press">
+                  {t("playableWorkbench.promptClickFeedback")}
+                </option>
+                <option value="bounce-hover-press">
+                  {t("playableWorkbench.bounceClickFeedback")}
+                </option>
+              </select>
+            </label>
+          ) : null}
+          {kind === "swipe-button" ? (
+            <>
+              <label>
+                <span>{t("playableWorkbench.swipeButtonAppearance")}</span>
+                <select
+                  aria-label={t("playableWorkbench.swipeButtonAppearance")}
+                  value={swipeStyle}
+                  onChange={(event) => {
+                    const next = event.target.value as "base" | "floating";
+                    setSwipeStyle(next);
+                    setButtonShape(next === "floating" ? "circle" : "rectangle");
+                  }}
+                >
+                  <option value="base">
+                    {t("playableWorkbench.swipeWithBase")}
+                  </option>
+                  <option value="floating">
+                    {t("playableWorkbench.swipeNoBase")}
+                  </option>
+                </select>
+              </label>
+              <label className="playable-preview-motion-preset-checkbox">
+                <input
+                  type="checkbox"
+                  aria-label={t("playableWorkbench.disappearAfterSwipe")}
+                  checked={disappearAfterSwipe}
+                  onChange={(event) =>
+                    setDisappearAfterSwipe(event.target.checked)
+                  }
+                />
+                <span>{t("playableWorkbench.disappearAfterSwipe")}</span>
+              </label>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {canAttachPressEffect ? (
         <div className="playable-preview-motion-effect-library">
           <label>
@@ -5033,6 +5554,52 @@ function MotionLibraryPopover({
             >
               {translateText(barAssetId ? "Replace" : "Choose")}
             </button>
+            {selection?.tag === "button" || !selection ? (
+              <div
+                className="playable-preview-motion-layer-actions"
+                role="group"
+                aria-label={translateText("Progress bar layer")}
+              >
+                <button
+                  type="button"
+                  title={translateText("Move progress bar to bottom")}
+                  aria-label={translateText("Move progress bar to bottom")}
+                  aria-pressed={barLayer === "bottom"}
+                  className={barLayer === "bottom" ? "is-active" : undefined}
+                  onClick={() => {
+                    setBarLayer("bottom");
+                    onPreviewBarScale?.(
+                      barAssetScale,
+                      barAssetOffsetX,
+                      barAssetOffsetY,
+                      buttonShape === "circle",
+                      "bottom",
+                    );
+                  }}
+                >
+                  <ArrowDownToLine size={14} />
+                </button>
+                <button
+                  type="button"
+                  title={translateText("Move progress bar to top")}
+                  aria-label={translateText("Move progress bar to top")}
+                  aria-pressed={barLayer === "top"}
+                  className={barLayer === "top" ? "is-active" : undefined}
+                  onClick={() => {
+                    setBarLayer("top");
+                    onPreviewBarScale?.(
+                      barAssetScale,
+                      barAssetOffsetX,
+                      barAssetOffsetY,
+                      buttonShape === "circle",
+                      "top",
+                    );
+                  }}
+                >
+                  <ArrowUp size={14} />
+                </button>
+              </div>
+            ) : null}
             {barAssetId ? (
               <button
                 type="button"
@@ -5044,53 +5611,6 @@ function MotionLibraryPopover({
               </button>
             ) : null}
           </div>
-          {selection?.tag === "button" || !selection ? (
-            <div
-              className="playable-preview-motion-layer-actions"
-              role="group"
-              aria-label={translateText("Progress bar layer")}
-            >
-              <span>{translateText("Progress bar layer")}</span>
-              <button
-                type="button"
-                title={translateText("Move progress bar to bottom")}
-                aria-label={translateText("Move progress bar to bottom")}
-                aria-pressed={barLayer === "bottom"}
-                className={barLayer === "bottom" ? "is-active" : undefined}
-                onClick={() => {
-                  setBarLayer("bottom");
-                  onPreviewBarScale?.(
-                    barAssetScale,
-                    barAssetOffsetX,
-                    barAssetOffsetY,
-                    buttonShape === "circle",
-                    "bottom",
-                  );
-                }}
-              >
-                <ArrowDownToLine size={14} />
-              </button>
-              <button
-                type="button"
-                title={translateText("Move progress bar to top")}
-                aria-label={translateText("Move progress bar to top")}
-                aria-pressed={barLayer === "top"}
-                className={barLayer === "top" ? "is-active" : undefined}
-                onClick={() => {
-                  setBarLayer("top");
-                  onPreviewBarScale?.(
-                    barAssetScale,
-                    barAssetOffsetX,
-                    barAssetOffsetY,
-                    buttonShape === "circle",
-                    "top",
-                  );
-                }}
-              >
-                <ArrowUp size={14} />
-              </button>
-            </div>
-          ) : null}
           {barAssetId ? (
             <label>
               <span>{translateText("Progress image size")}</span>
@@ -5172,7 +5692,7 @@ function MotionLibraryPopover({
         </>
       ) : null}
       {selectedButton ? (
-        <div className="playable-preview-motion-assets">
+        <div className="playable-preview-motion-assets playable-preview-motion-button-state-assets">
           <strong>{translateText("Button state images")}</strong>
           <button type="button" onClick={onChooseButtonNormal}>
             {selectedButton.buttonAssetId
@@ -5197,7 +5717,7 @@ function MotionLibraryPopover({
         </div>
       ) : null}
       {!selection && !isRippleHintPreset ? (
-        <div className="playable-preview-motion-assets">
+        <div className="playable-preview-motion-assets playable-preview-motion-button-state-assets">
           <strong>{translateText("Button images")}</strong>
           <button
             type="button"
@@ -5221,7 +5741,10 @@ function MotionLibraryPopover({
       ) : null}
       </div>
       {timingControls}
-      {kind !== "button-feedback" && !isBounceClickPreset ? (
+      {selection &&
+      selection.tag !== "button" &&
+      kind !== "button-feedback" &&
+      !isBounceClickPreset ? (
         <label className="playable-preview-motion-exit">
           <span>{translateText(mode === "visual" ? "After playback" : "After success")}</span>
           <select
@@ -5302,17 +5825,6 @@ function MotionLibraryPopover({
                   )
                     return;
                 if (
-                  buttonFontFamily &&
-                  buttonFontFamily !== (selectedButton.fontFamily ?? "inherit")
-                )
-                  if (
-                    !(await onEditButtonFont?.(
-                      selectedButton,
-                      buttonFontFamily,
-                    ))
-                  )
-                    return;
-                if (
                   selectedButtonSignal &&
                   selectedButtonSignal !== selectedButton.signal &&
                   onWriteButtonSignal
@@ -5349,13 +5861,21 @@ function MotionLibraryPopover({
           </button>
         ) : null}
         {!selection && onAddButtonPreset ? (
-          <button
-            type="button"
-            disabled={!valid || !interactionValid}
-            onClick={confirmAddButton}
+          <span
+            className="playable-preview-disabled-button-tooltip"
+            data-tooltip={addButtonDisabledReason || undefined}
+            role={addButtonDisabledReason ? "note" : undefined}
+            aria-label={addButtonDisabledReason || undefined}
+            tabIndex={addButtonDisabledReason ? 0 : undefined}
           >
-            {translateText("Confirm add", readLanguage())}
-          </button>
+            <button
+              type="button"
+              disabled={Boolean(addButtonDisabledReason)}
+              onClick={confirmAddButton}
+            >
+              {translateText("Confirm add", readLanguage())}
+            </button>
+          </span>
         ) : null}
       </div>
     </details>
@@ -5420,27 +5940,73 @@ function renderParenthetical(text: string) {
   );
 }
 
-function useSystemFonts(): readonly string[] {
+function useSystemFonts(): {
+  fonts: readonly string[];
+  fontDirectoryName?: string;
+  addFontDirectory: () => Promise<void>;
+  scanSystemFonts: () => Promise<void>;
+} {
   const [fonts, setFonts] = useState<readonly string[]>(FALLBACK_SYSTEM_FONTS);
+  const [fontDirectoryName, setFontDirectoryName] = useState<string>();
+  const bridge = window.putengGameDesktop?.fonts;
+  const mergeFonts = useCallback((next: readonly string[]) => {
+    if (!next.length) return;
+    setFonts((current) =>
+      [...new Set([...current, ...next])].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base" }),
+      ),
+    );
+  }, []);
   useEffect(() => {
-    const bridge = window.putengGameDesktop?.fonts;
-    if (!bridge) return;
     let active = true;
-    const load = () =>
-      void bridge
-        .list()
+    if (bridge) {
+      void bridge.list().then(
+        (next) => {
+          if (active) mergeFonts(next);
+        },
+        () => undefined,
+      );
+    } else {
+      void scanBrowserSystemFonts()
         .then((next) => {
-          if (active && next.length) setFonts(next);
+          if (active) mergeFonts(next);
         })
         .catch(() => undefined);
-    load();
-    const stop = bridge.onChanged(load);
+      void rememberedBrowserFontDirectory()
+        .then((directory) => {
+          if (!active || !directory) return;
+          setFontDirectoryName(directory.name);
+          mergeFonts(directory.families);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       active = false;
-      stop();
     };
-  }, []);
-  return fonts;
+  }, [bridge, mergeFonts]);
+  const addFontDirectory = useCallback(async () => {
+    if (bridge) {
+      const next = await bridge.addDirectory();
+      if (next) mergeFonts(next);
+      return;
+    }
+    const directory = await chooseBrowserFontDirectory();
+    if (!directory) return;
+    setFontDirectoryName(directory.name);
+    mergeFonts(directory.families);
+  }, [bridge, mergeFonts]);
+  const scanSystemFonts = useCallback(async () => {
+    const next = bridge
+      ? await bridge.list()
+      : await scanBrowserSystemFonts();
+    mergeFonts(next);
+  }, [bridge, mergeFonts]);
+  return {
+    fonts,
+    ...(fontDirectoryName ? { fontDirectoryName } : {}),
+    addFontDirectory,
+    scanSystemFonts,
+  };
 }
 
 /**
@@ -5696,7 +6262,9 @@ type MediaTarget =
   | "motion-swipe"
   | "motion-base"
   | "motion-pressed"
-  | "settings-button";
+  | "settings-button"
+  | "return-button"
+  | "button-sound";
 
 /**
  * Chooses an image or a video from the Library, or uploads a new one.
@@ -5717,9 +6285,14 @@ export function useMediaChooser(
   const fileInput = useRef<HTMLInputElement>(null);
   const target = useRef<MediaTarget>("chat");
   const imageOnlyTarget = isImageOnlyTarget(target.current);
-  const categories = imageOnlyTarget
-    ? PICKER_CATEGORIES.filter(({ id }) => id !== "video")
-    : PICKER_CATEGORIES;
+  const audioOnlyTarget = isAudioOnlyTarget(target.current);
+  const categories = audioOnlyTarget
+    ? PICKER_CATEGORIES.filter(({ id }) => id === "audio" || id === "custom")
+    : imageOnlyTarget
+      ? PICKER_CATEGORIES.filter(
+          ({ id }) => id !== "video" && id !== "audio",
+        )
+      : PICKER_CATEGORIES;
   const pickerOpen = library !== undefined;
 
   useEffect(() => {
@@ -5763,12 +6336,18 @@ export function useMediaChooser(
 
   const use = (asset: LibraryAsset) => {
     const type = playableAssetType(asset.mediaType);
-    if (type !== "image" && type !== "video")
+    if (
+      type !== "image" &&
+      type !== "video" &&
+      !(audioOnlyTarget && type === "audio")
+    )
       return onError(
         t("sceneWorkbench.notMedia", { name: asset.name }),
       );
     if (isImageOnlyTarget(target.current) && type !== "image")
       return onError(`${asset.name} is not an image`);
+    if (isAudioOnlyTarget(target.current) && type !== "audio")
+      return onError(`${asset.name} is not audio`);
     onAsset(
       {
         name: asset.name,
@@ -5835,7 +6414,9 @@ export function useMediaChooser(
           target.current === "button" ||
           isImageOnlyTarget(target.current)
             ? ".png,.jpg,.jpeg,.webp"
-            : ASSET_UPLOAD_ACCEPT
+            : isAudioOnlyTarget(target.current)
+              ? ".mp3,.wav"
+              : ASSET_UPLOAD_ACCEPT
         }
         hidden
         onChange={(event) => {
@@ -5915,6 +6496,8 @@ export function useMediaChooser(
                       ? translateText("Choose a pressed-state image", readLanguage())
                   : target.current === "canvas"
                     ? translateText("Picture-in-picture", readLanguage())
+                    : target.current === "button-sound"
+                      ? t("playableWorkbench.chooseButtonSound")
                     : translateText("Add reference video/image", readLanguage())
           }
           categoryFilter={category}
@@ -5929,7 +6512,7 @@ export function useMediaChooser(
           onRefreshSourceFolders={refreshSourceFolders}
           assets={library.filter((asset) => {
             const type = playableAssetType(asset.mediaType);
-            return type === "image" || type === "video";
+            return type === "image" || type === "video" || type === "audio";
           })}
           uploading={uploading}
           onUpload={
@@ -5999,7 +6582,10 @@ export function useMediaChooser(
   };
 }
 
-export function defaultPickerCategory(target: MediaTarget): "video" | "image" | "custom" {
+export function defaultPickerCategory(
+  target: MediaTarget,
+): "video" | "image" | "audio" | "custom" {
+  if (isAudioOnlyTarget(target)) return "audio";
   if (isImageOnlyTarget(target)) return "custom";
   return target === "backdrop" ? "video" : "image";
 }
@@ -6012,7 +6598,12 @@ function isImageOnlyTarget(target: MediaTarget): boolean {
     target === "motion-swipe" ||
     target === "motion-base" ||
     target === "motion-pressed" ||
-    target === "settings-button";
+    target === "settings-button" ||
+    target === "return-button";
+}
+
+function isAudioOnlyTarget(target: MediaTarget): boolean {
+  return target === "button-sound";
 }
 
 /** Scene media controls in the inspector. */
@@ -6028,7 +6619,6 @@ export function MediaMenu({
   canEnableVideoEndAutoAdvance,
   videoEndAutoAdvance,
   onChoose,
-  onChooseSettingsButtonIcon,
   onRemoveBackdrop,
   onBackdropLoopChange,
   onPictureInPictureVideoLoopChange,
@@ -6046,7 +6636,6 @@ export function MediaMenu({
   canEnableVideoEndAutoAdvance: boolean;
   videoEndAutoAdvance: boolean;
   onChoose: (to: MediaTarget) => void;
-  onChooseSettingsButtonIcon: () => void;
   onRemoveBackdrop: () => void;
   onBackdropLoopChange: (loop: boolean) => void;
   onPictureInPictureVideoLoopChange: (loop: boolean) => void;
@@ -6060,134 +6649,408 @@ export function MediaMenu({
   };
 
   return (
-    <section className="playable-preview-media" aria-label={translateText("Scene settings")}>
-      <strong>
+    <details
+      className="playable-preview-media"
+      aria-label={translateText("Scene settings")}
+      open
+    >
+      <summary>
         {uploading ? <LoaderCircle className="spin" size={13} /> : null}
         {translateText("Scene settings", language)}
-      </strong>
+      </summary>
       <div className="playable-preview-popover is-media" role="group">
-        <button
-          type="button"
-          disabled={unavailable || !canSetBackdrop}
-          title={
-            canSetBackdrop
-              ? translateText("Show it behind this Scene", language)
-              : translateText(
-                  "This Scene has no background to set; add it to the chat instead",
+        <div className="playable-preview-media-group">
+          <div className="playable-preview-media-group-title">
+            {t("playableWorkbench.backgroundVideoSettings")}
+          </div>
+          <button
+            type="button"
+            disabled={unavailable || !canSetBackdrop}
+            title={
+              canSetBackdrop
+                ? translateText("Show it behind this Scene", language)
+                : translateText(
+                    "This Scene has no background to set; add it to the chat instead",
+                    language,
+                  )
+            }
+            onClick={choose("backdrop")}
+          >
+            <Image size={13} />
+            <span>
+              {renderParenthetical(
+                translateText("Add video/image (background video)", language),
+              )}
+            </span>
+          </button>
+          {canSetBackdropLoop ? (
+            <PlaybackModeOptions
+              label={translateText("Background video playback", language)}
+              loop={backdropLoop}
+              disabled={unavailable}
+              onChange={onBackdropLoopChange}
+            />
+          ) : null}
+          <div className="playable-preview-media-heading">
+            {translateText("Interaction mode", language)}
+          </div>
+          {canSetBackdropLoop ? (
+            <label className="playable-video-end-auto-advance">
+              <input
+                type="checkbox"
+                checked={videoEndAutoAdvance}
+                disabled={unavailable || (backdropLoop && !videoEndAutoAdvance)}
+                title={
+                  !canEnableVideoEndAutoAdvance
+                    ? translateText(
+                        "Requires exactly one connected story Exit",
+                        language,
+                      )
+                    : backdropLoop
+                      ? translateText(
+                          "Turn off looping to use video-end navigation",
+                          language,
+                        )
+                      : undefined
+                }
+                onChange={(event) =>
+                  onVideoEndAutoAdvanceChange(event.target.checked)
+                }
+              />
+              <span>
+                {translateText(
+                  "Automatically continue when the video ends",
                   language,
-                )
-          }
-          onClick={choose("backdrop")}
-        >
-          <Image size={13} />
-          <span>
-            {renderParenthetical(
-              translateText("Add video/image (background video)", language),
-            )}
-          </span>
-        </button>
-        <button
-          type="button"
-          disabled={unavailable}
-          onClick={choose("canvas")}
-        >
-          <Image size={13} />
-          <span>
-            {renderParenthetical(
-              translateText("Add video/image (picture-in-picture)", language),
-            )}
-          </span>
-        </button>
-        <div className="playable-preview-media-heading">
-          {translateText("Game settings button", language)}
+                )}
+              </span>
+            </label>
+          ) : null}
+          <div
+            className="playable-no-input-options"
+            role="radiogroup"
+            aria-label={translateText("Interaction mode", language)}
+          >
+            {(
+              [
+                ["continue", "Play without input"],
+                ["wait", "Wait for input to play"],
+              ] as const
+            ).map(([mode, label]) => (
+              <label key={mode}>
+                <input
+                  type="radio"
+                  name="playable-no-input-mode"
+                  value={mode}
+                  checked={noInputMode === mode}
+                  disabled={unavailable}
+                  onChange={() => onNoInputModeChange(mode)}
+                />
+                <span>{translateText(label, language)}</span>
+              </label>
+            ))}
+          </div>
+          {noInputMode === undefined ? (
+            <small>
+              {translateText(
+                "Existing behavior is unchanged until you choose an option.",
+                language,
+              )}
+            </small>
+          ) : null}
+          {canRemoveBackdrop ? (
+            <button
+              type="button"
+              disabled={unavailable}
+              title={t("playableWorkbench.removeSceneBackground")}
+              onClick={onRemoveBackdrop}
+            >
+              <ImageOff size={13} />
+              <span>{translateText("Remove background", language)}</span>
+            </button>
+          ) : null}
         </div>
+        <div className="playable-preview-media-group">
+          <div className="playable-preview-media-group-title">
+            {t("playableWorkbench.pictureInPictureSettings")}
+          </div>
+          <button
+            type="button"
+            disabled={unavailable}
+            onClick={choose("canvas")}
+          >
+            <Image size={13} />
+            <span>
+              {renderParenthetical(
+                translateText("Add video/image (picture-in-picture)", language),
+              )}
+            </span>
+          </button>
+          <PlaybackModeOptions
+            label={translateText("Picture-in-picture video playback", language)}
+            loop={pictureInPictureVideoLoop}
+            disabled={unavailable}
+            onChange={onPictureInPictureVideoLoopChange}
+          />
+        </div>
+      </div>
+    </details>
+  );
+}
+
+export function GameFunctionSettings({
+  disabled,
+  uploading,
+  globalFontFamily,
+  fonts,
+  fontDirectoryName,
+  onChangeGlobalFontFamily,
+  onScanSystemFonts,
+  onAddFontDirectory,
+  onChooseSettingsButtonIcon,
+  settingsButtonIconPending,
+  settingsButtonIconApplying,
+  onConfirmSettingsButtonIcon,
+  returnButtonIconPending,
+  returnButtonIconApplying,
+  onChooseReturnButtonIcon,
+  onConfirmReturnButtonIcon,
+  buttonSoundSelected,
+  onChooseButtonSound,
+  onRemoveButtonSound,
+}: {
+  disabled: boolean;
+  uploading: boolean;
+  globalFontFamily: string;
+  fonts: readonly string[];
+  fontDirectoryName?: string;
+  onChangeGlobalFontFamily: (fontFamily: string) => void;
+  onScanSystemFonts: () => Promise<void>;
+  onAddFontDirectory: () => Promise<void>;
+  onChooseSettingsButtonIcon: () => void;
+  settingsButtonIconPending: boolean;
+  settingsButtonIconApplying: boolean;
+  onConfirmSettingsButtonIcon: () => void;
+  returnButtonIconPending: boolean;
+  returnButtonIconApplying: boolean;
+  onChooseReturnButtonIcon: () => void;
+  onConfirmReturnButtonIcon: () => void;
+  buttonSoundSelected: boolean;
+  onChooseButtonSound: () => void;
+  onRemoveButtonSound: () => void;
+}) {
+  const unavailable = disabled || uploading;
+  const language = readLanguage();
+  const [fontAction, setFontAction] = useState<"scan" | "folder">();
+  const [fontError, setFontError] = useState("");
+  const runFontAction = async (
+    action: "scan" | "folder",
+    run: () => Promise<void>,
+  ) => {
+    setFontAction(action);
+    setFontError("");
+    try {
+      await run();
+    } catch {
+      setFontError(t("playableWorkbench.fontAccessError"));
+    } finally {
+      setFontAction(undefined);
+    }
+  };
+  return (
+    <section
+      className="playable-preview-media-group playable-preview-game-function-settings"
+      aria-label={t("playableWorkbench.gameFunctionSettings")}
+    >
+      <div className="playable-preview-media-heading playable-global-font-heading">
+        <span>{t("playableWorkbench.globalFont")}</span>
+        <small className="playable-global-font-description">
+          {t("playableWorkbench.globalFontDescription")}
+        </small>
+      </div>
+      <div className="playable-global-font-row">
+        <label className="playable-global-font-control">
+          <select
+            aria-label={t("playableWorkbench.globalFont")}
+            value={globalFontFamily}
+            disabled={unavailable}
+            onChange={(event) => onChangeGlobalFontFamily(event.target.value)}
+          >
+            <option value="">
+              {t("playableWorkbench.useElementFonts")}
+            </option>
+            {[
+              ...new Set([
+                ...(globalFontFamily ? [globalFontFamily] : []),
+                ...fonts,
+              ]),
+            ].map((font) => (
+              <option key={font} value={font}>
+                {font}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="playable-global-font-actions">
+          <button
+            type="button"
+            disabled={unavailable || fontAction !== undefined}
+            aria-label={t("playableWorkbench.scanSystemFonts")}
+            title={t("playableWorkbench.scanSystemFonts")}
+            aria-busy={fontAction === "scan"}
+            onClick={() =>
+              void runFontAction("scan", onScanSystemFonts)
+            }
+          >
+            {fontAction === "scan" ? (
+              <LoaderCircle className="spin" size={14} />
+            ) : (
+              <Type size={14} />
+            )}
+          </button>
+          <button
+            type="button"
+            disabled={unavailable || fontAction !== undefined}
+            aria-label={t("playableWorkbench.addFontFolder")}
+            title={t("playableWorkbench.addFontFolder")}
+            aria-busy={fontAction === "folder"}
+            onClick={() =>
+              void runFontAction("folder", onAddFontDirectory)
+            }
+          >
+            {fontAction === "folder" ? (
+              <LoaderCircle className="spin" size={14} />
+            ) : (
+              <FolderOpen size={14} />
+            )}
+          </button>
+        </div>
+      </div>
+      {fontDirectoryName ? (
+        <small className="playable-global-font-folder">
+          {t("playableWorkbench.fontFolderSelected", {
+            name: fontDirectoryName,
+          })}
+        </small>
+      ) : null}
+      {fontError ? (
+        <small className="playable-global-font-error" role="alert">
+          {fontError}
+        </small>
+      ) : null}
+      <div className="playable-preview-media-heading">
+        {translateText("Game settings button", language)}
+      </div>
+      <div className="playable-preview-media-button-actions">
         <button
           type="button"
+          className="playable-preview-media-button-choice"
           disabled={unavailable}
           onClick={onChooseSettingsButtonIcon}
         >
           <Image size={13} />
           <span>
-            {translateText("Choose settings button icon from Library", language)}
+            {translateText(
+              "Choose settings button icon from Library",
+              language,
+            )}
           </span>
         </button>
-        {canSetBackdropLoop ? (
-          <PlaybackModeOptions
-            label={translateText("Background video playback", language)}
-            loop={backdropLoop}
-            disabled={unavailable}
-            onChange={onBackdropLoopChange}
-          />
-        ) : null}
-        <PlaybackModeOptions
-          label={translateText("Picture-in-picture video playback", language)}
-          loop={pictureInPictureVideoLoop}
-          disabled={unavailable}
-          onChange={onPictureInPictureVideoLoopChange}
-        />
-        <div className="playable-preview-media-heading">
-          {translateText("Interaction mode", language)}
-        </div>
-        {canSetBackdropLoop ? (
-          <label className="playable-video-end-auto-advance">
-            <input
-              type="checkbox"
-              checked={videoEndAutoAdvance}
-              disabled={unavailable || (backdropLoop && !videoEndAutoAdvance)}
-              title={
-                !canEnableVideoEndAutoAdvance
-                  ? translateText("Requires exactly one connected story Exit", language)
-                  : backdropLoop
-                    ? translateText("Turn off looping to use video-end navigation", language)
-                    : undefined
-              }
-              onChange={(event) =>
-                onVideoEndAutoAdvanceChange(event.target.checked)
-              }
-            />
-            <span>
-              {translateText(
-                "Automatically continue when the video ends",
-                language,
-              )}
-            </span>
-          </label>
-        ) : null}
-        <div className="playable-no-input-options" role="radiogroup" aria-label={translateText("Interaction mode", language)}>
-          {(
-            [
-              ["continue", "Play without input"],
-              ["wait", "Wait for input to play"],
-            ] as const
-          ).map(([mode, label]) => (
-            <label key={mode}>
-              <input
-                type="radio"
-                name="playable-no-input-mode"
-                value={mode}
-                checked={noInputMode === mode}
-                disabled={unavailable}
-                onChange={() => onNoInputModeChange(mode)}
-              />
-              <span>{translateText(label, language)}</span>
-            </label>
-          ))}
-        </div>
-        {noInputMode === undefined ? (
-          <small>{translateText("Existing behavior is unchanged until you choose an option.", language)}</small>
-        ) : null}
-        {canRemoveBackdrop ? (
+        {settingsButtonIconPending ? (
           <button
             type="button"
-            disabled={unavailable}
-            title={t("playableWorkbench.removeSceneBackground")}
-            onClick={onRemoveBackdrop}
+            className="playable-preview-media-button-confirm"
+            aria-label={t("playableWorkbench.confirmSettingsButtonIcon")}
+            title={t(
+              settingsButtonIconApplying
+                ? "playableWorkbench.applyingSettingsButtonIcon"
+                : "playableWorkbench.confirmSettingsButtonIcon",
+            )}
+            disabled={unavailable || settingsButtonIconApplying}
+            aria-busy={settingsButtonIconApplying}
+            onClick={onConfirmSettingsButtonIcon}
           >
-            <ImageOff size={13} />
-            <span>{translateText("Remove background", language)}</span>
+            {settingsButtonIconApplying ? (
+              <LoaderCircle className="spin" size={13} />
+            ) : null}
+            <span>
+              {t(
+                settingsButtonIconApplying
+                  ? "playableWorkbench.applyingSettingsButtonIcon"
+                  : "playableWorkbench.confirmSettingsButtonIcon",
+              )}
+            </span>
           </button>
         ) : null}
       </div>
+      <div className="playable-preview-media-heading">
+        {t("playableWorkbench.returnButton")}
+      </div>
+      <div className="playable-preview-media-button-actions">
+        <button
+          type="button"
+          className="playable-preview-media-button-choice"
+          disabled={unavailable}
+          onClick={onChooseReturnButtonIcon}
+        >
+          <Image size={13} />
+          <span>{t("playableWorkbench.chooseReturnButtonIcon")}</span>
+        </button>
+        {returnButtonIconPending ? (
+          <button
+            type="button"
+            className="playable-preview-media-button-confirm"
+            aria-label={t("playableWorkbench.confirmReturnButtonIcon")}
+            title={t(
+              returnButtonIconApplying
+                ? "playableWorkbench.applyingReturnButtonIcon"
+                : "playableWorkbench.confirmReturnButtonIcon",
+            )}
+            disabled={unavailable || returnButtonIconApplying}
+            aria-busy={returnButtonIconApplying}
+            onClick={onConfirmReturnButtonIcon}
+          >
+            {returnButtonIconApplying ? (
+              <LoaderCircle className="spin" size={13} />
+            ) : (
+              <Check size={13} />
+            )}
+            <span>
+              {t(
+                returnButtonIconApplying
+                  ? "playableWorkbench.applyingReturnButtonIcon"
+                  : "playableWorkbench.confirmReturnButtonIcon",
+              )}
+            </span>
+          </button>
+        ) : null}
+      </div>
+      <div className="playable-preview-media-heading">
+        {t("playableWorkbench.buttonSound")}
+      </div>
+      <button
+        type="button"
+        disabled={unavailable}
+        onClick={onChooseButtonSound}
+      >
+        <Music2 size={13} />
+        <span>
+          {t(
+            buttonSoundSelected
+              ? "playableWorkbench.replaceButtonSound"
+              : "playableWorkbench.chooseButtonSound",
+          )}
+        </span>
+      </button>
+      {buttonSoundSelected ? (
+        <button
+          type="button"
+          disabled={unavailable}
+          onClick={onRemoveButtonSound}
+        >
+          <X size={13} />
+          <span>{t("playableWorkbench.removeButtonSound")}</span>
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -6477,6 +7340,7 @@ export function usePlayablePreviewRuntime(
         if (key === runtimeKey.current) {
           setRuntime((current) => ({
             ...current,
+            definition: result.definition,
             assets: { ...current.assets, ...assets },
             loadAssets,
             error: undefined,

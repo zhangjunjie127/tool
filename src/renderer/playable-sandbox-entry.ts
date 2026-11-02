@@ -49,9 +49,47 @@ for (const type of ["pointermove", "pointerdown", "click", "keydown", "touchstar
   document.addEventListener(type, reportPlayerActivity, true);
 
 document.addEventListener(
+  "click",
+  (event) => {
+    const current = session;
+    if (!current || current.host.isPicking) return;
+    const interactive = event.composedPath().some((target) => {
+      if (!(target instanceof Element)) return false;
+      const control = target.closest(
+        'button, a[href], [role="button"], input[type="button"], input[type="submit"], [data-signal], [data-putenggame-button-preset], [data-putenggame-motion-mode="interactive"]',
+      );
+      return Boolean(
+        control && !control.matches(":disabled, [aria-disabled='true']"),
+      );
+    });
+    if (!interactive) return;
+    post({
+      kind: "putenggame:playable:button-activated",
+      instanceId: current.instanceId,
+    });
+  },
+  true,
+);
+
+document.addEventListener(
   "keydown",
   (event) => {
     const current = session;
+    if (
+      current?.pauseMenuEnabled &&
+      event.key === "Escape" &&
+      !event.repeat &&
+      !event.isComposing &&
+      !isTextEntry(event.target)
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      post({
+        kind: "putenggame:playable:pause-menu-toggle",
+        instanceId: current.instanceId,
+      });
+      return;
+    }
     if (
       !current?.preview ||
       event.defaultPrevented ||
@@ -110,6 +148,24 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
         current.host.setPlayerPaused(false);
         break;
     }
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:runtime-command") {
+    const current = session;
+    if (current?.instanceId !== event.data.instanceId) return;
+    const navigate =
+      event.data.command === "return-to-entry"
+        ? current.runtime.returnToEntry()
+        : current.runtime.openStoryMap();
+    void navigate
+      .then(() => current.host.setPlayerPaused(false))
+      .catch(() => {});
+    return;
+  }
+  if (event.data.kind === "putenggame:playable:global-font") {
+    const current = session;
+    if (current?.instanceId === event.data.instanceId)
+      current.host.setGlobalFontFamily(event.data.family);
     return;
   }
   if (event.data.kind === "putenggame:playable:assets-result") {
@@ -279,6 +335,7 @@ async function startSession(
       message.settings,
     );
     const host = new DocumentPlayableSurfaceHost(document);
+    host.setGlobalFontFamily(message.definition.graph.globalFontFamily);
     const ensureAssets = (assetIds: readonly string[]) => {
       const missing = [...new Set(assetIds)].filter((id) => !assetUrls[id]);
       if (!missing.length) return Promise.resolve();
@@ -324,6 +381,7 @@ async function startSession(
     session = {
       instanceId: message.instanceId,
       preview: message.preview !== undefined,
+      pauseMenuEnabled: message.pauseMenuEnabled === true,
       runtime,
       host,
       saveStore,
@@ -560,6 +618,7 @@ class ParentSettingsStore {
 interface SandboxSession {
   instanceId: string;
   preview: boolean;
+  pauseMenuEnabled: boolean;
   runtime: NodeRuntime;
   host: DocumentPlayableSurfaceHost;
   saveStore: ParentSaveStore;

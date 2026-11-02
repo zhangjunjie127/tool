@@ -1,10 +1,12 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
@@ -44,13 +46,29 @@ import {
 } from "../shared/playable-settings.js";
 import {
   normalizePlayableSettingsButtonPosition,
+  normalizePlayableSettingsButtonSize,
   PLAYABLE_SETTINGS_BUTTON_SIZE,
 } from "../shared/playable-settings-button.js";
-import { readLanguage, translateText } from "./i18n.js";
+import {
+  normalizePlayableReturnButton,
+  normalizePlayableReturnButtonPosition,
+  PLAYABLE_RETURN_BUTTON_SIZE,
+} from "../shared/playable-return-button.js";
+import { cssFontFamilyName } from "../shared/playable-fonts.js";
+import { readLanguage, t, translateText } from "./i18n.js";
 import "./playable-player.css";
 import { PlayableVrViewer } from "./playable-vr-viewer.js";
 import { PlayableGameSettingsOverlay } from "./playable-game-settings-overlay.js";
-import { Pause, Play, Settings as SettingsIcon } from "./icons.js";
+import { ArrowLeft, Pause, Play, Settings as SettingsIcon } from "./icons.js";
+
+const PAUSE_MENU_ITEMS = [
+  "continue",
+  "main-menu",
+  "story-map",
+  "settings",
+  "exit",
+] as const;
+type PauseMenuItem = (typeof PAUSE_MENU_ITEMS)[number];
 
 export interface NodePlayerProps {
   definition: NodePlayerDefinition;
@@ -76,11 +94,23 @@ export interface NodePlayerProps {
   showPlaybackControls?: boolean;
   /** Shows the player-owned settings menu; editor-only previews opt out. */
   showGameSettings?: boolean;
+  /** Shows the persistent return button and pause menu in a game player. */
+  showPauseMenu?: boolean;
+  /** Shows the return button in an editor preview without enabling the pause menu. */
+  showReturnButton?: boolean;
   /** Highlights the settings entry while it is selected in the editor. */
   settingsButtonSelected?: boolean;
+  settingsButtonSizePreview?: number;
+  /** Temporarily previews a replacement icon before the editor commits it. */
+  settingsButtonIconPreview?: Blob;
   /** Lets the editor drag the game-wide settings entry without restarting playback. */
   onSettingsButtonPositionChange?: (position: { x: number; y: number }) => Promise<boolean>;
   onSelectSettingsButton?: () => void;
+  returnButtonSelected?: boolean;
+  returnButtonIconPreview?: Blob;
+  returnButtonSizePreview?: number;
+  onSelectReturnButton?: () => void;
+  onReturnButtonPositionChange?: (position: { x: number; y: number }) => Promise<boolean>;
   /** Hands the preview's input to an authoring tool; requires `preview`. */
   tool?: PlayablePreviewTool;
   /** Forwards keyboard shortcuts pressed while the preview iframe has focus. */
@@ -146,9 +176,18 @@ export function NodePlayer({
   preview,
   showPlaybackControls = false,
   showGameSettings = true,
+  showPauseMenu = false,
+  showReturnButton = false,
   settingsButtonSelected = false,
+  settingsButtonSizePreview,
+  settingsButtonIconPreview,
   onSettingsButtonPositionChange,
   onSelectSettingsButton,
+  returnButtonSelected = false,
+  returnButtonIconPreview,
+  returnButtonSizePreview,
+  onSelectReturnButton,
+  onReturnButtonPositionChange,
   tool,
   onPreviewShortcut,
   onPick,
@@ -208,6 +247,13 @@ export function NodePlayer({
   const savedGameSettingsRef = useRef(gameSettings);
   const closeSettingsAfterSave = useRef(false);
   const [gameSettingsOpen, setGameSettingsOpen] = useState(false);
+  const [pauseMenuOpen, setPauseMenuOpen] = useState(false);
+  const [selectedPauseMenuItem, setSelectedPauseMenuItem] = useState(0);
+  const [gameExited, setGameExited] = useState(false);
+  const pauseMenuOpenRef = useRef(false);
+  const pauseMenuResumeAfterClose = useRef(true);
+  const pauseMenuButton = useRef<HTMLButtonElement>(null);
+  const pauseMenuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [gameSettingsSaveStatus, setGameSettingsSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -237,10 +283,30 @@ export function NodePlayer({
   const [playbackControlsVisible, setPlaybackControlsVisible] = useState(true);
   const playbackControlsTimer = useRef<number | undefined>(undefined);
   const [vrButtons, setVrButtons] = useState<PlayableVrButton[]>([]);
+  const buttonSoundAudio = useRef<HTMLAudioElement | undefined>(undefined);
+  const buttonSoundAssetId = definition.graph.buttonSoundAssetId;
+  const providedButtonSound = buttonSoundAssetId
+    ? assets[buttonSoundAssetId]
+    : undefined;
+  const [loadedButtonSound, setLoadedButtonSound] = useState<{
+    assetId: string;
+    blob: Blob;
+  }>();
+  const buttonSoundBlob =
+    providedButtonSound ??
+    (buttonSoundAssetId !== undefined &&
+    loadedButtonSound?.assetId === buttonSoundAssetId
+      ? loadedButtonSound.blob
+      : undefined);
   const vrRequestId = useRef("");
   const clipboardSequence = useRef(0);
   const previousDisplayMode = useRef<PlayableGameSettings["displayMode"]>("fullscreen");
   const settingsButtonConfig = definition.graph.settingsButton;
+  const displayedSettingsButtonSize = normalizePlayableSettingsButtonSize(
+    settingsButtonSizePreview ??
+      settingsButtonConfig?.size ??
+      PLAYABLE_SETTINGS_BUTTON_SIZE,
+  );
   const settingsButtonPositionFromGraph = normalizePlayableSettingsButtonPosition(
     settingsButtonConfig,
     definition.graph.viewport,
@@ -266,8 +332,104 @@ export function NodePlayer({
     : undefined;
   const [settingsButtonIcon, setSettingsButtonIcon] = useState<Blob>();
   const [settingsButtonIconUrl, setSettingsButtonIconUrl] = useState<string>();
+  const displayedSettingsButtonIcon =
+    settingsButtonIconPreview ?? settingsButtonIcon;
+  const returnButtonConfig = definition.graph.returnButton;
+  const returnButtonFromGraph = normalizePlayableReturnButton(
+    returnButtonConfig,
+    definition.graph.viewport,
+  );
+  const returnButtonPositionFromGraph = normalizePlayableReturnButtonPosition(
+    returnButtonConfig,
+    definition.graph.viewport,
+  );
+  const [returnButtonPosition, setReturnButtonPosition] = useState({
+    x: returnButtonPositionFromGraph.x,
+    y: returnButtonPositionFromGraph.y,
+  });
+  const returnButtonPositionRef = useRef(returnButtonPosition);
+  const returnButtonDrag = useRef<
+    | {
+        pointerId: number;
+        startX: number;
+        startY: number;
+        offsetX: number;
+        offsetY: number;
+        moved: boolean;
+      }
+    | undefined
+  >(undefined);
+  const displayedReturnButtonSize = normalizePlayableReturnButton(
+    {
+      ...returnButtonConfig,
+      size: returnButtonSizePreview ?? returnButtonFromGraph.size,
+    },
+    definition.graph.viewport,
+  ).size;
+  const displayedReturnButtonPosition = normalizePlayableReturnButtonPosition(
+    returnButtonPosition,
+    definition.graph.viewport,
+  );
+  const returnButtonAssetId = returnButtonConfig?.iconAssetId;
+  const providedReturnButtonIcon = returnButtonAssetId
+    ? assets[returnButtonAssetId]
+    : undefined;
+  const [returnButtonIcon, setReturnButtonIcon] = useState<Blob>();
+  const [returnButtonIconUrl, setReturnButtonIconUrl] = useState<string>();
+  const displayedReturnButtonIcon = returnButtonIconPreview ?? returnButtonIcon;
 
+  pauseMenuOpenRef.current = pauseMenuOpen;
   settingsButtonPositionRef.current = settingsButtonPosition;
+  returnButtonPositionRef.current = returnButtonPosition;
+
+  useEffect(() => {
+    let active = true;
+    setLoadedButtonSound(undefined);
+    if (!buttonSoundAssetId || providedButtonSound || !onLoadAssets)
+      return () => {
+        active = false;
+      };
+    void onLoadAssets([buttonSoundAssetId]).then(
+      (loaded) => {
+        const blob = loaded[buttonSoundAssetId];
+        if (active && blob)
+          setLoadedButtonSound({ assetId: buttonSoundAssetId, blob });
+      },
+      (cause) => {
+        if (active)
+          onDiagnostic(
+            `Could not load the game-wide button sound: ${errorMessage(cause)}`,
+          );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [
+    buttonSoundAssetId,
+    providedButtonSound,
+    onLoadAssets,
+    onDiagnostic,
+  ]);
+
+  useEffect(() => {
+    if (!buttonSoundBlob) {
+      buttonSoundAudio.current = undefined;
+      return;
+    }
+    const url = URL.createObjectURL(buttonSoundBlob);
+    const audio = document.createElement("audio");
+    audio.preload = "auto";
+    audio.src = url;
+    buttonSoundAudio.current = audio;
+    return () => {
+      if (buttonSoundAudio.current === audio)
+        buttonSoundAudio.current = undefined;
+      audio.pause();
+      audio.removeAttribute("src");
+      URL.revokeObjectURL(url);
+    };
+  }, [buttonSoundBlob]);
 
   useEffect(() => {
     setSettingsButtonPosition(settingsButtonPositionFromGraph);
@@ -275,6 +437,22 @@ export function NodePlayer({
   }, [
     settingsButtonConfig?.x,
     settingsButtonConfig?.y,
+    definition.graph.viewport.width,
+    definition.graph.viewport.height,
+  ]);
+
+  useEffect(() => {
+    setReturnButtonPosition({
+      x: returnButtonPositionFromGraph.x,
+      y: returnButtonPositionFromGraph.y,
+    });
+    returnButtonPositionRef.current = {
+      x: returnButtonPositionFromGraph.x,
+      y: returnButtonPositionFromGraph.y,
+    };
+  }, [
+    returnButtonConfig?.x,
+    returnButtonConfig?.y,
     definition.graph.viewport.width,
     definition.graph.viewport.height,
   ]);
@@ -317,14 +495,63 @@ export function NodePlayer({
   ]);
 
   useEffect(() => {
-    if (!settingsButtonIcon) {
+    if (!displayedSettingsButtonIcon) {
       setSettingsButtonIconUrl(undefined);
       return;
     }
-    const url = URL.createObjectURL(settingsButtonIcon);
+    const url = URL.createObjectURL(displayedSettingsButtonIcon);
     setSettingsButtonIconUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [settingsButtonIcon]);
+  }, [displayedSettingsButtonIcon]);
+
+  useEffect(() => {
+    let active = true;
+    if (!returnButtonAssetId) {
+      setReturnButtonIcon(undefined);
+      return () => {
+        active = false;
+      };
+    }
+    if (providedReturnButtonIcon) {
+      setReturnButtonIcon(providedReturnButtonIcon);
+      return () => {
+        active = false;
+      };
+    }
+    setReturnButtonIcon(undefined);
+    if (!onLoadAssets) return () => {
+      active = false;
+    };
+    void onLoadAssets([returnButtonAssetId]).then(
+      (loaded) => {
+        if (active) setReturnButtonIcon(loaded[returnButtonAssetId]);
+      },
+      (cause) => {
+        if (active)
+          onDiagnostic(
+            `Could not load the return button image: ${errorMessage(cause)}`,
+          );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [
+    returnButtonAssetId,
+    providedReturnButtonIcon,
+    onLoadAssets,
+    onDiagnostic,
+  ]);
+
+  useEffect(() => {
+    if (!displayedReturnButtonIcon) {
+      setReturnButtonIconUrl(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(displayedReturnButtonIcon);
+    setReturnButtonIconUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [displayedReturnButtonIcon]);
 
   const startSettingsButtonDrag = (
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -416,6 +643,92 @@ export function NodePlayer({
     });
   };
 
+  const startReturnButtonDrag = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (
+      tool !== "select" ||
+      !onSelectReturnButton ||
+      !onReturnButtonPositionChange
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectReturnButton();
+    const stage = playerStage.current;
+    const stageBounds = stage?.getBoundingClientRect();
+    const buttonBounds = event.currentTarget.getBoundingClientRect();
+    if (!stage || !stageBounds || !stageBounds.width || !stageBounds.height)
+      return;
+    returnButtonDrag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX:
+        (event.clientX - buttonBounds.left - buttonBounds.width / 2) /
+        stageBounds.width,
+      offsetY:
+        (event.clientY - buttonBounds.top - buttonBounds.height / 2) /
+        stageBounds.height,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveReturnButton = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = returnButtonDrag.current;
+    const stageBounds = playerStage.current?.getBoundingClientRect();
+    if (
+      !drag ||
+      drag.pointerId !== event.pointerId ||
+      !stageBounds ||
+      !stageBounds.width ||
+      !stageBounds.height
+    )
+      return;
+    if (
+      !drag.moved &&
+      Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= 3
+    )
+      drag.moved = true;
+    if (!drag.moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = normalizePlayableReturnButton(
+      {
+        x:
+          (event.clientX - stageBounds.left) / stageBounds.width -
+          drag.offsetX,
+        y:
+          (event.clientY - stageBounds.top) / stageBounds.height -
+          drag.offsetY,
+        size: displayedReturnButtonSize,
+      },
+      definition.graph.viewport,
+    );
+    const position = { x: next.x, y: next.y };
+    returnButtonPositionRef.current = position;
+    setReturnButtonPosition(position);
+  };
+
+  const finishReturnButtonDrag = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const drag = returnButtonDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    returnButtonDrag.current = undefined;
+    if (!drag.moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void onReturnButtonPositionChange?.(returnButtonPositionRef.current).catch(
+      (cause) => {
+        onDiagnostic(
+          `Could not save the return button position: ${errorMessage(cause)}`,
+        );
+      },
+    );
+  };
+
   const revealPlaybackControls = () => {
     if (!showPlaybackControls) return;
     setPlaybackControlsVisible(true);
@@ -434,6 +747,33 @@ export function NodePlayer({
         kind: "putenggame:playable:settings-command",
         instanceId,
         action,
+      },
+      "*",
+    );
+  };
+
+  const playButtonSound = useCallback(() => {
+    const settings = gameSettingsRef.current;
+    const audio = buttonSoundAudio.current;
+    if (
+      !audio ||
+      !settings.uiSoundEnabled ||
+      settings.uiSoundVolume <= 0
+    )
+      return;
+    audio.volume = settings.uiSoundVolume;
+    audio.currentTime = 0;
+    void audio.play().catch(() => {});
+  }, []);
+
+  const sendRuntimeCommand = (
+    command: "return-to-entry" | "open-story-map",
+  ) => {
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:runtime-command",
+        instanceId,
+        command,
       },
       "*",
     );
@@ -461,7 +801,7 @@ export function NodePlayer({
   const closeGameSettings = () => {
     closeSettingsAfterSave.current = false;
     setGameSettingsOpen(false);
-    sendSettingsAction("resume");
+    if (!pauseMenuOpenRef.current) sendSettingsAction("resume");
   };
 
   const openGameSettings = () => {
@@ -477,6 +817,97 @@ export function NodePlayer({
     }
     openGameSettings();
   }
+
+  const openPauseMenu = () => {
+    if (!showPauseMenu || gameExited || gameSettingsOpen) return;
+    setSelectedPauseMenuItem(0);
+    pauseMenuResumeAfterClose.current =
+      mediaState.duration === 0 || !mediaState.paused;
+    setPauseMenuOpen(true);
+    sendSettingsAction("pause");
+  };
+
+  const closePauseMenu = () => {
+    setPauseMenuOpen(false);
+    if (pauseMenuResumeAfterClose.current) sendSettingsAction("resume");
+  };
+
+  const exitGame = () => {
+    setPauseMenuOpen(false);
+    try {
+      window.close();
+    } finally {
+      window.setTimeout(() => setGameExited(true), 150);
+    }
+  };
+
+  const activatePauseMenuItem = (item: PauseMenuItem) => {
+    switch (item) {
+      case "continue":
+        closePauseMenu();
+        break;
+      case "main-menu":
+        setPauseMenuOpen(false);
+        sendRuntimeCommand("return-to-entry");
+        break;
+      case "story-map":
+        setPauseMenuOpen(false);
+        sendRuntimeCommand("open-story-map");
+        break;
+      case "settings":
+        openGameSettings();
+        break;
+      case "exit":
+        exitGame();
+        break;
+    }
+  };
+
+  useEffect(() => {
+    if (pauseMenuOpen && !gameSettingsOpen)
+      pauseMenuItemRefs.current[selectedPauseMenuItem]?.focus();
+  }, [gameSettingsOpen, pauseMenuOpen, selectedPauseMenuItem]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!showPauseMenu || gameSettingsOpen || gameExited) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (pauseMenuOpen) closePauseMenu();
+        else openPauseMenu();
+        return;
+      }
+      if (!pauseMenuOpen) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setSelectedPauseMenuItem(
+          (current) =>
+            (current + direction + PAUSE_MENU_ITEMS.length) %
+            PAUSE_MENU_ITEMS.length,
+        );
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        const direction = event.shiftKey ? -1 : 1;
+        setSelectedPauseMenuItem(
+          (current) =>
+            (current + direction + PAUSE_MENU_ITEMS.length) %
+            PAUSE_MENU_ITEMS.length,
+        );
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        activatePauseMenuItem(PAUSE_MENU_ITEMS[selectedPauseMenuItem]!);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    gameExited,
+    gameSettingsOpen,
+    pauseMenuOpen,
+    selectedPauseMenuItem,
+    showPauseMenu,
+  ]);
 
   useEffect(
     () => () => {
@@ -526,14 +957,7 @@ export function NodePlayer({
           if (closeSettingsAfterSave.current) {
             closeSettingsAfterSave.current = false;
             setGameSettingsOpen(false);
-            iframe.current?.contentWindow?.postMessage(
-              {
-                kind: "putenggame:playable:settings-command",
-                instanceId,
-                action: "resume",
-              },
-              "*",
-            );
+            if (!pauseMenuOpenRef.current) sendSettingsAction("resume");
           }
         }
       } else if (message.kind === "putenggame:playable:settings-change") {
@@ -686,6 +1110,10 @@ export function NodePlayer({
       } else if (message.kind === "putenggame:playable:media-state") {
         setMediaState(message.state);
         onMediaState?.(message.state);
+      } else if (message.kind === "putenggame:playable:pause-menu-toggle") {
+        openPauseMenu();
+      } else if (message.kind === "putenggame:playable:button-activated") {
+        playButtonSound();
       } else if (message.kind === "putenggame:playable:keyboard-shortcut") {
         if (preview !== undefined) onPreviewShortcut?.(message.shortcut);
       } else if (message.kind === "putenggame:playable:vr-scene") {
@@ -722,6 +1150,8 @@ export function NodePlayer({
     onPickCancel,
     onPreviewShortcut,
     onSnapshot,
+    openPauseMenu,
+    playButtonSound,
     preview,
     saveKey,
     settingsKey,
@@ -1034,6 +1464,20 @@ export function NodePlayer({
     );
   }, [backdropEffectsKey, instanceId, ready]);
 
+  useEffect(() => {
+    if (!ready) return;
+    iframe.current?.contentWindow?.postMessage(
+      {
+        kind: "putenggame:playable:global-font",
+        instanceId,
+        ...(definition.graph.globalFontFamily
+          ? { family: definition.graph.globalFontFamily }
+          : {}),
+      },
+      "*",
+    );
+  }, [definition.graph.globalFontFamily, instanceId, ready]);
+
   const initialize = async () => {
     const target = iframe.current?.contentWindow;
     if (!target) return;
@@ -1086,6 +1530,7 @@ export function NodePlayer({
           save,
           settings,
           seen: readSeen(seenStorage, seenKey),
+          pauseMenuEnabled: showPauseMenu,
           ...(preview ? { preview } : {}),
         },
         "*",
@@ -1137,14 +1582,32 @@ export function NodePlayer({
     height,
     transform: `scale(${scale ?? 1})`,
   };
+  const globalFontFamily = definition.graph.globalFontFamily;
+  const globalFontStyle: CSSProperties | undefined = globalFontFamily
+    ? {
+        "--playable-global-font-family":
+          cssFontFamilyName(globalFontFamily),
+      } as CSSProperties
+    : undefined;
   return (
     <main
       ref={player}
       className="playable-player"
+      data-global-font={globalFontFamily ? "" : undefined}
+      style={globalFontStyle}
       data-display-mode={displayModeValue}
       data-resolution={resolution}
       tabIndex={-1}
       onClick={() => setContextMenu(undefined)}
+      onClickCapture={(event: ReactMouseEvent<HTMLElement>) => {
+        if (tool !== undefined || !(event.target instanceof Element)) return;
+        const control = event.target.closest(
+          'button, a[href], [role="button"], input[type="button"], input[type="submit"]',
+        );
+        if (!control || control.matches(":disabled, [aria-disabled='true']"))
+          return;
+        playButtonSound();
+      }}
       onPointerMove={revealPlaybackControls}
       onPointerDown={revealPlaybackControls}
     >
@@ -1238,15 +1701,99 @@ export function NodePlayer({
             style={{
               left: `${settingsButtonPosition.x * 100}%`,
               top: `${settingsButtonPosition.y * 100}%`,
-              width: PLAYABLE_SETTINGS_BUTTON_SIZE * (scale ?? 1),
-              height: PLAYABLE_SETTINGS_BUTTON_SIZE * (scale ?? 1),
+              width: displayedSettingsButtonSize * (scale ?? 1),
+              height: displayedSettingsButtonSize * (scale ?? 1),
             }}
           >
             {settingsButtonIconUrl ? (
-              <img src={settingsButtonIconUrl} alt="" draggable={false} />
+              <img
+                className="playable-player-button-icon"
+                src={settingsButtonIconUrl}
+                alt=""
+                draggable={false}
+                style={{ objectFit: "contain" }}
+              />
             ) : (
-              <SettingsIcon size={19 * (scale ?? 1)} />
+              <SettingsIcon
+                size={
+                  (19 * displayedSettingsButtonSize) /
+                  PLAYABLE_SETTINGS_BUTTON_SIZE *
+                  (scale ?? 1)
+                }
+              />
             )}
+            {settingsButtonSelected && tool === "select" ? (
+              <span
+                className="playable-player-settings-selection-box"
+                aria-hidden="true"
+              />
+            ) : null}
+          </button>
+        ) : null}
+        {(
+          showReturnButton ||
+          (showPauseMenu &&
+            currentNodeId !== definition.graph.entryNodeId)
+        ) &&
+        ready ? (
+          <button
+            ref={pauseMenuButton}
+            className={`playable-player-return-trigger${showReturnButton && onReturnButtonPositionChange ? " is-editable" : ""}${returnButtonSelected && tool === "select" ? " is-selected" : ""}`}
+            type="button"
+            aria-label={
+              tool === "select" && onSelectReturnButton
+                ? t("playableWorkbench.selectReturnButton")
+                : t("pauseMenu.open")
+            }
+            aria-pressed={returnButtonSelected && tool === "select"}
+            title={
+              tool === "select" && onSelectReturnButton
+                ? t("playableWorkbench.selectReturnButtonHint")
+                : showPauseMenu
+                  ? t("pauseMenu.open")
+                  : onReturnButtonPositionChange
+                    ? t("playableWorkbench.dragReturnButton")
+                    : t("pauseMenu.open")
+            }
+            onPointerDown={startReturnButtonDrag}
+            onPointerMove={moveReturnButton}
+            onPointerUp={finishReturnButtonDrag}
+            onPointerCancel={finishReturnButtonDrag}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (tool === "select" && onSelectReturnButton) return;
+              if (!returnButtonDrag.current && showPauseMenu) openPauseMenu();
+            }}
+            style={{
+              left: `${displayedReturnButtonPosition.x * 100}%`,
+              top: `${displayedReturnButtonPosition.y * 100}%`,
+              width: displayedReturnButtonSize * (scale ?? 1),
+              height: displayedReturnButtonSize * (scale ?? 1),
+            }}
+          >
+            {returnButtonIconUrl ? (
+              <img
+                className="playable-player-button-icon"
+                src={returnButtonIconUrl}
+                alt=""
+                draggable={false}
+                style={{ objectFit: "contain" }}
+              />
+            ) : (
+              <ArrowLeft
+                size={
+                  (20 * displayedReturnButtonSize) /
+                  PLAYABLE_RETURN_BUTTON_SIZE *
+                  (scale ?? 1)
+                }
+              />
+            )}
+            {returnButtonSelected && tool === "select" ? (
+              <span
+                className="playable-player-settings-selection-box"
+                aria-hidden="true"
+              />
+            ) : null}
           </button>
         ) : null}
         <div className="playable-player-canvas" style={canvasStyle}>
@@ -1313,6 +1860,74 @@ export function NodePlayer({
           </div>
         ) : null}
       </div>
+      {gameExited ? (
+        <div className="playable-player-exited" role="status">
+          <section>
+            <h2>{t("pauseMenu.exited")}</h2>
+            <p>{t("pauseMenu.closeWindowHint")}</p>
+            <button type="button" onClick={() => window.close()}>
+              {t("pauseMenu.closeWindow")}
+            </button>
+          </section>
+        </div>
+      ) : null}
+      {pauseMenuOpen && !gameSettingsOpen ? (
+        <div
+          className="playable-pause-menu"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("pauseMenu.title")}
+        >
+          <div className="playable-pause-menu-content">
+            <div className="playable-pause-menu-items" role="listbox">
+              {PAUSE_MENU_ITEMS.map((item, index) => {
+                const labels: Record<PauseMenuItem, string> = {
+                  continue: t("pauseMenu.continueGame"),
+                  "main-menu": t("pauseMenu.mainMenu"),
+                  "story-map": t("pauseMenu.storyMap"),
+                  settings: t("pauseMenu.settings"),
+                  exit: t("pauseMenu.exit"),
+                };
+                const selected = selectedPauseMenuItem === index;
+                return (
+                  <button
+                    key={item}
+                    ref={(element) => {
+                      pauseMenuItemRefs.current[index] = element;
+                    }}
+                    className={`playable-pause-menu-item${selected ? " is-selected" : ""}`}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onFocus={() => setSelectedPauseMenuItem(index)}
+                    onPointerEnter={() => setSelectedPauseMenuItem(index)}
+                    onClick={() => {
+                      setSelectedPauseMenuItem(index);
+                      activatePauseMenuItem(item);
+                    }}
+                  >
+                    <span
+                      className="playable-pause-menu-indicator"
+                      aria-hidden="true"
+                    />
+                    <span>{labels[item]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <footer className="playable-pause-menu-hints">
+              <span>
+                <kbd>Esc</kbd>
+                {t("pauseMenu.continueHint")}
+              </span>
+              <span>
+                <kbd>Enter</kbd>
+                {t("pauseMenu.selectHint")}
+              </span>
+            </footer>
+          </div>
+        </div>
+      ) : null}
       {showPlaybackControls && mediaState.duration > 0 ? (
         <div
           className={`published-player-controls${playbackControlsVisible ? " is-visible" : ""}`}
