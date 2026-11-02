@@ -11,6 +11,130 @@ import {
 } from "../src/shared/playable-story-tree.js";
 
 describe("playable story tree", () => {
+  it("preserves scene identity, edits, beats, and routes when an insertion renumbers scenes", () => {
+    const previous = parseScreenplayText([
+      "第1集", "1-1 仓库", "原剧情", "1-2 出口", "离开",
+    ], "old.txt").tree;
+    const [warehouse, exit] = playableStoryTreeSections(previous);
+    warehouse!.canvasNodeId = "warehouse-node";
+    warehouse!.objective = "人工目标";
+    warehouse!.beats[0]!.text = "人工编辑剧情";
+    previous.links[0]!.label = "人工连线";
+    const original = structuredClone(previous);
+    const incoming = parseScreenplayText([
+      "第1集", "1-1 序幕", "新增剧情", "1-2 仓库", "原剧情", "1-3 出口", "离开",
+    ], "new.txt").tree;
+    const incomingCopy = structuredClone(incoming);
+
+    const { tree, diff } = reconcilePlayableStoryTree(previous, incoming);
+    const [intro, moved, end] = playableStoryTreeSections(tree);
+    expect(intro!.canvasNodeId).toBeUndefined();
+    expect(intro!.id).not.toBe(warehouse!.id);
+    expect(moved).toMatchObject({
+      id: warehouse!.id,
+      sceneNumber: 2,
+      canvasNodeId: "warehouse-node",
+      objective: "人工目标",
+      beats: warehouse!.beats,
+    });
+    expect(moved!.sourcePending).toBeUndefined();
+    expect(end!.id).toBe(exit!.id);
+    expect(tree.links).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromSectionId: intro!.id, toSectionId: warehouse!.id }),
+      expect.objectContaining({ id: previous.links[0]!.id, label: "人工连线" }),
+    ]));
+    expect(diff.added).toEqual([intro!.id]);
+    expect(isPlayableStoryTree(tree)).toBe(true);
+    expect(previous).toEqual(original);
+    expect(incoming).toEqual(incomingCopy);
+    expect(reconcilePlayableStoryTree(tree, incoming).tree).toEqual(tree);
+  });
+
+  it("does not transfer a canvas node to unrelated replacement content at the same number", () => {
+    const previous = parseScreenplayText(["第1集", "1-1 仓库", "原剧情"], "old.txt").tree;
+    const old = playableStoryTreeSections(previous)[0]!;
+    old.canvasNodeId = "warehouse-node";
+    const incoming = parseScreenplayText(["第1集", "1-1 医院", "全新剧情"], "new.txt").tree;
+
+    const { tree } = reconcilePlayableStoryTree(previous, incoming);
+    const sections = playableStoryTreeSections(tree);
+    expect(sections.find((section) => section.title === "医院")?.canvasNodeId).toBeUndefined();
+    expect(sections.find((section) => section.id === old.id)).toMatchObject({
+      canvasNodeId: "warehouse-node", sourceRemoved: true,
+    });
+    expect(isPlayableStoryTree(tree)).toBe(true);
+  });
+
+  it("keeps reordered source scenes attached to their own canvas nodes", () => {
+    const previous = parseScreenplayText([
+      "第1集", "1-1 仓库", "原剧情", "1-2 医院", "医院剧情",
+    ], "old.txt").tree;
+    const [warehouse, hospital] = playableStoryTreeSections(previous);
+    warehouse!.canvasNodeId = "warehouse-node";
+    hospital!.canvasNodeId = "hospital-node";
+    const incoming = parseScreenplayText([
+      "第1集", "1-1 医院", "医院剧情", "1-2 仓库", "原剧情",
+    ], "new.txt").tree;
+
+    const { tree } = reconcilePlayableStoryTree(previous, incoming);
+    expect(playableStoryTreeSections(tree).map((section) => section.canvasNodeId))
+      .toEqual(["hospital-node", "warehouse-node"]);
+    expect(tree.links).toHaveLength(1);
+    expect(tree.links[0]).toMatchObject({
+      fromSectionId: hospital!.id, toSectionId: warehouse!.id,
+    });
+  });
+
+  it("moves a matched scene between renumbered episodes without retaining a duplicate", () => {
+    const previous = parseScreenplayText(["第1集", "1-1 仓库", "原剧情"], "old.txt").tree;
+    const old = playableStoryTreeSections(previous)[0]!;
+    old.canvasNodeId = "warehouse-node";
+    const incoming = parseScreenplayText(["第2集", "2-1 仓库", "原剧情"], "new.txt").tree;
+
+    const { tree } = reconcilePlayableStoryTree(previous, incoming);
+    expect(playableStoryTreeSections(tree)).toHaveLength(1);
+    expect(playableStoryTreeSections(tree)[0]).toMatchObject({
+      id: old.id, episodeNumber: 2, canvasNodeId: "warehouse-node",
+    });
+    expect(isPlayableStoryTree(tree)).toBe(true);
+  });
+
+  it("does not guess between duplicate source scenes after numbering changes", () => {
+    const previous = parseScreenplayText([
+      "第1集", "1-1 开场", "开始", "1-2 仓库", "重复剧情", "1-3 仓库", "重复剧情",
+    ], "old.txt").tree;
+    playableStoryTreeSections(previous).forEach((section, index) => {
+      section.canvasNodeId = `old-${index}`;
+    });
+    const incoming = parseScreenplayText([
+      "第1集", "1-1 序幕", "新增", "1-2 开场", "开始",
+      "1-3 仓库", "重复剧情", "1-4 仓库", "重复剧情",
+    ], "new.txt").tree;
+
+    const { tree } = reconcilePlayableStoryTree(previous, incoming);
+    const active = playableStoryTreeSections(tree).filter((section) => !section.sourceRemoved);
+    expect(active.map((section) => section.canvasNodeId)).toEqual([
+      undefined, "old-0", undefined, undefined,
+    ]);
+    expect(playableStoryTreeSections(tree).filter((section) => section.sourceRemoved))
+      .toHaveLength(2);
+    expect(isPlayableStoryTree(tree)).toBe(true);
+  });
+
+  it("leaves a repeated but unchanged import attached to the same scenes", () => {
+    const incoming = parseScreenplayText([
+      "第1集", "1-1 仓库", "重复剧情", "1-2 仓库", "重复剧情",
+    ], "screenplay.txt").tree;
+    const previous = structuredClone(incoming);
+    playableStoryTreeSections(previous).forEach((section, index) => {
+      section.canvasNodeId = `old-${index}`;
+    });
+    const { tree, diff } = reconcilePlayableStoryTree(previous, incoming);
+    expect(tree).toEqual(previous);
+    expect(diff.added).toEqual([]);
+    expect(diff.changed).toEqual([]);
+  });
+
   it("marks episodes that contain player operations, choices, or branching exits", () => {
     const parsedActions = parseScreenplayText([
       "第1集",

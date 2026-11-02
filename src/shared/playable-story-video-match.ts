@@ -31,9 +31,12 @@ export function rankPlayableStoryVideos(
       const sceneMatch =
         sceneTitle.length > 1 &&
         (name === sceneTitle || name.includes(sceneTitle));
+      const episodes = namedEpisodes(asset.name);
+      const episodeConflict = episodes.some((number) => number !== context.episodeNumber);
       const episodeMatch =
-        (episodeTitle.length > 1 && name.includes(episodeTitle)) ||
-        namesEpisode(asset.name, context.episodeNumber);
+        !episodeConflict &&
+        (episodes.includes(context.episodeNumber) ||
+          (episodes.length === 0 && episodeTitle.length > 1 && name.includes(episodeTitle)));
       const chapterMatch =
         chapterTitle.length > 1 && name.includes(chapterTitle);
       return {
@@ -43,6 +46,7 @@ export function rankPlayableStoryVideos(
           (episodeMatch ? 15 : 0) +
           (chapterMatch ? 5 : 0),
         sceneMatch,
+        episodeConflict,
       };
     })
     .sort(
@@ -54,6 +58,7 @@ export function rankPlayableStoryVideos(
   const second = candidates[1];
   const recommendedAssetId =
     first?.sceneMatch &&
+    !first.episodeConflict &&
     (!second || first.score > second.score)
       ? first.asset.id
       : undefined;
@@ -64,13 +69,35 @@ export function rankPlayableStoryVideos(
   };
 }
 
-function namesEpisode(name: string, episodeNumber: number): boolean {
-  if (!Number.isInteger(episodeNumber) || episodeNumber < 1) return false;
-  const number = String(episodeNumber).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  return new RegExp(
-    `(?:第)?0*${number}(?:集|话|回|期|episode|ep)(?!\\d)`,
-    "iu",
-  ).test(name);
+function namedEpisodes(name: string): number[] {
+  const normalized = name.normalize("NFKC");
+  const numbers: number[] = [];
+  for (const match of normalized.matchAll(
+    /(?<![0-9零〇一二两三四五六七八九十百千])(?:第\s*)?([0-9零〇一二两三四五六七八九十百千]+)\s*(?:集|话|回|期)|(?<![a-z0-9])(?:episode|ep)[\s_-]*(\d+)(?!\d)/giu,
+  )) {
+    const value = match[1] ?? match[2]!;
+    if (/^\d+$/u.test(value)) {
+      numbers.push(Number(value));
+      continue;
+    }
+    const digits: Record<string, number> = {
+      零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+      五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+    };
+    const units: Record<string, number> = { 十: 10, 百: 100, 千: 1000 };
+    let total = 0;
+    let digit = 0;
+    for (const character of value) {
+      if (units[character]) {
+        total += (digit || 1) * units[character]!;
+        digit = 0;
+      } else {
+        digit = digit * 10 + (digits[character] ?? 0);
+      }
+    }
+    numbers.push(total + digit);
+  }
+  return numbers;
 }
 
 function normalize(value: string): string {

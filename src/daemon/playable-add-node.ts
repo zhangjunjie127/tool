@@ -320,6 +320,7 @@ export async function syncPlayableStoryTree(
   nodeVideoAssignments: Readonly<
     Record<string, { assetId: string; name: string }>
   > = {},
+  persistTree?: (tree: PlayableStoryTree) => Promise<void>,
 ): Promise<SyncPlayableStoryTreeResult> {
   if (!isPlayableStoryTree(incomingTree)) {
     throw new NodeCodebaseError("The story tree does not match its schema.");
@@ -1030,6 +1031,8 @@ export async function syncPlayableStoryTree(
       editorLayout: layout,
       sources: createdSources,
     };
+  }, async () => {
+    if (result.applied && result.tree) await persistTree?.(result.tree);
   });
   return result;
 }

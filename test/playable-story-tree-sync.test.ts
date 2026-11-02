@@ -20,6 +20,7 @@ import {
   removePlayableStoryTreeChapter,
   parseScreenplayText,
   playableStoryTreeSections,
+  reconcilePlayableStoryTree,
 } from "../src/shared/playable-story-tree.js";
 import { addPlayableNodeAsset } from "../src/shared/playable-editor.js";
 import { setPlayableBackdrop } from "../src/shared/playable-backdrop.js";
@@ -53,6 +54,60 @@ function simpleTree() {
 }
 
 describe("playable story tree canvas sync", () => {
+  it("imports renumbered scenes without rewriting existing buttons, assets, or canvas positions", async () => {
+    const workspace = await createWorkspace();
+    const first = await syncPlayableStoryTree(workspace, undefined, simpleTree());
+    const originalTree = first.tree!;
+    const oldSection = playableStoryTreeSections(originalTree)[0]!;
+    const before = await readNodeCodebase(workspace);
+    const oldNode = before.graph.nodes.find((node) => node.id === oldSection.canvasNodeId)!;
+    const withAsset = addPlayableNodeAsset(before.graph, oldNode.id, {
+      name: "custom-background.png",
+      type: "image",
+      source: { kind: "library", assetId: "user-background" },
+    });
+    const originalHtml = await readFile(path.join(workspace, oldNode.source.html), "utf8");
+    const customHtml = `${setPlayableBackdrop(originalHtml, withAsset.assetId, "image")!}
+<button data-user-button="kept" style="left:123px;top:234px;width:87px;height:43px;transform:scale(1.25)">Custom</button>`;
+    const customCss = `${await readFile(path.join(workspace, oldNode.source.css), "utf8")}
+[data-user-button] { transform-origin: center; }`;
+    before.editorLayout.nodes[oldNode.id] = { x: 321, y: 654 };
+    await writeNodeCodebase(workspace, {
+      graph: withAsset.graph,
+      editorLayout: before.editorLayout,
+      sources: { [oldNode.source.html]: customHtml, [oldNode.source.css]: customCss },
+    });
+    const oldFiles = new Map<string, string>();
+    for (const node of before.graph.nodes) {
+      for (const file of Object.values(node.source)) {
+        oldFiles.set(file, await readFile(path.join(workspace, file), "utf8"));
+      }
+    }
+    const imported = parseScreenplayText([
+      "第1集", "1-1 序幕", "新增剧情", "1-2 开场", "固定剧情", "1-3 选择", "结束剧情",
+    ], "new.txt").tree;
+    const reconciled = reconcilePlayableStoryTree(originalTree, imported).tree;
+    const synced = await syncPlayableStoryTree(workspace, originalTree, reconciled, true);
+    const after = await readNodeCodebase(workspace);
+
+    expect(synced.addedNodes).toBe(1);
+    expect(after.graph.nodes).toHaveLength(3);
+    expect(after.graph.edges).toHaveLength(2);
+    expect(after.graph.assets).toEqual(withAsset.graph.assets);
+    expect(after.graph.nodes.find((node) => node.id === oldNode.id)?.assets)
+      .toEqual(withAsset.graph.nodes.find((node) => node.id === oldNode.id)!.assets);
+    expect(after.editorLayout.nodes).toMatchObject(before.editorLayout.nodes);
+    for (const [file, content] of oldFiles) {
+      expect(await readFile(path.join(workspace, file), "utf8")).toBe(content);
+    }
+    const importedAgain = reconcilePlayableStoryTree(synced.tree!, imported).tree;
+    const repeated = await syncPlayableStoryTree(workspace, synced.tree, importedAgain);
+    expect(repeated).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
+    for (const [file, content] of oldFiles) {
+      expect(await readFile(path.join(workspace, file), "utf8")).toBe(content);
+    }
+  });
+
   it("creates missing scenes and only overwrites changed titles after confirmation", async () => {
     const workspace = await createWorkspace();
     const first = await syncPlayableStoryTree(workspace, undefined, simpleTree());

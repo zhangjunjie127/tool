@@ -137,6 +137,7 @@ import {
 } from "./playable-add-node.js";
 import {
   PlayableStoryTreeConflictError,
+  changePlayableStoryTree,
   readPlayableStoryTree,
   writePlayableStoryTree,
 } from "./playable-story-tree-store.js";
@@ -1559,31 +1560,31 @@ export function createApp(options: AppOptions = {}) {
       nodeVideoAssignments[sectionId] = { assetId, name: asset.name };
     }
     try {
-      const current = await readPlayableStoryTree(project.workspacePath);
-      if (request.body.revision !== current.revision) {
-        return reply.code(409).send({ error: "The story tree changed. Reload it before syncing." });
-      }
-      const sync = await syncPlayableStoryTree(
+      const sync = await changePlayableStoryTree(
         project.workspacePath,
-        current.tree,
-        request.body.tree,
-        request.body.confirmOverwrite === true,
-        mode,
-        nodePresetOverrides,
-        nodeVideoAssignments,
+        request.body.revision,
+        async (current, save) => {
+          let revision = current.revision;
+          const result = await syncPlayableStoryTree(
+            project.workspacePath,
+            current.tree,
+            request.body.tree,
+            request.body.confirmOverwrite === true,
+            mode,
+            nodePresetOverrides,
+            nodeVideoAssignments,
+            async (tree) => {
+              revision = (await save(tree)).revision;
+            },
+          );
+          return { ...result, revision };
+        },
       );
-      if (!sync.applied || !sync.tree) {
-        return { ...sync, revision: current.revision };
-      }
-      const saved = await writePlayableStoryTree(
-        project.workspacePath,
-        sync.tree,
-        current.revision,
-      );
+      if (!sync.applied) return sync;
       await projects.touch(project.id).catch((cause) =>
         request.log.warn({ projectId: project.id, err: cause }, "Story tree was synced, but project metadata could not be updated"),
       );
-      return { ...sync, tree: saved.tree, revision: saved.revision };
+      return sync;
     } catch (cause) {
       return reply.code(cause instanceof PlayableStoryTreeConflictError ? 409 : 400)
         .send({ error: cause instanceof Error ? cause.message : String(cause) });

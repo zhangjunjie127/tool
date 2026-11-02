@@ -200,18 +200,23 @@ export async function writeNodeCodebase(
  * Reads the codebase, lets `change` make an update from it, and writes that
  * update, all in one step that no other read or write through the daemon can
  * land inside. `change` returns undefined to write nothing.
+ * An optional companion commit runs last, inside the rollback boundary. It must
+ * either atomically commit its own file or throw without changing it.
  */
 export async function changeNodeCodebase(
   workspacePath: string,
   change: (
     codebase: NodeCodebaseDetail,
   ) => NodeCodebaseUpdate | undefined | Promise<NodeCodebaseUpdate | undefined>,
+  commitCompanion?: () => Promise<void>,
 ): Promise<void> {
   await withCodebaseLock(workspacePath, async () => {
     const current = await readCodebase(workspacePath);
     const update = await change(current);
     // The revision still refuses to write over a file the Agent edited in the meantime.
-    if (update) await writeCodebase(workspacePath, { ...update, revision: current.revision });
+    if (update) await writeCodebase(
+      workspacePath, { ...update, revision: current.revision }, commitCompanion,
+    );
   });
 }
 
@@ -228,6 +233,7 @@ async function readCodebase(workspacePath: string): Promise<NodeCodebaseDetail> 
 async function writeCodebase(
   workspacePath: string,
   update: NodeCodebaseUpdate,
+  commitCompanion?: () => Promise<void>,
 ): Promise<string> {
   if (update.revision !== undefined) {
     const [graphText, layoutText] = await readCodebaseTexts(workspacePath);
@@ -275,6 +281,7 @@ async function writeCodebase(
     await writeTextAtomic(workspacePath, LAYOUT_FILE, layoutText);
     await ensureNodeCodebaseContract(workspacePath);
     await removeEmptySourceDirectories(workspacePath, sourceDeletions);
+    await commitCompanion?.();
     return codebaseRevision(graphText, layoutText);
   } catch (cause) {
     await restoreFiles(workspacePath, snapshot);

@@ -161,6 +161,13 @@ automatically. Fixed-plot lines are grouped in the outline and can be expanded
 for the full source detail; AI analysis never rewrites or condenses the source
 beats.
 
+Re-import matches unique source content before scene numbers, so inserting or
+renumbering a scene keeps identifiable existing scenes attached to their canvas
+nodes. Unchanged source retains manual edits and beat identities. Unrelated or
+ambiguous replacements do not inherit another scene's canvas edits: unmatched
+old scenes stay marked for removal review. Source-derived routes follow the
+new order; manually edited routes remain available for review.
+
 Choose **Generate nodes** to review the recommended Scene preset for each
 missing Scene, adjust any recommendation, and add the missing nodes without
 replacing existing canvas Scenes. Confirmed routes are added as Exits on their
@@ -209,6 +216,17 @@ and clear fixed gaps; existing Nodes are not moved.
 Nodes with no incoming or outgoing canvas connection receive a warning outline.
 PDF, Word, and Markdown exports use a connected text-tree layout with visible
 vertical and branch lines.
+
+Background video candidates are ranked by scene, episode, and chapter names.
+An explicit conflicting episode marker (including `EP02`, Arabic numerals, and
+Chinese numerals) prevents automatic selection even when the scene name matches.
+Ambiguous candidates remain available for manual selection.
+
+Canvas synchronization holds the story-tree revision until the canvas and tree
+are saved. Concurrent saves using an older revision are rejected. If the final
+tree save fails, the daemon restores this operation's graph, layout, and source
+files so it can be retried without leaving partially generated nodes. This
+rollback covers handled write errors, not a process crash or power loss.
 
 ## Creating a Scene
 

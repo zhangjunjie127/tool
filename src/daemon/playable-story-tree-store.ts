@@ -6,7 +6,6 @@ import {
   type PlayableStoryTree,
 } from "../shared/playable-story-tree.js";
 
-const STORY_TREE_FILE = "editor/story-tree.json";
 const MAX_STORY_TREE_BYTES = 25 * 1024 * 1024;
 const storeOperations = new Map<string, Promise<void>>();
 
@@ -26,6 +25,10 @@ export class PlayableStoryTreeConflictError extends PlayableStoryTreeError {
 export async function readPlayableStoryTree(
   workspacePath: string,
 ): Promise<PlayableStoryTreeDetail> {
+  return withStoreLock(workspacePath, () => readStoryTree(workspacePath));
+}
+
+async function readStoryTree(workspacePath: string): Promise<PlayableStoryTreeDetail> {
   const file = await resolveStoryTreeFile(workspacePath);
   let content: string;
   try {
@@ -53,31 +56,59 @@ export async function writePlayableStoryTree(
   tree: PlayableStoryTree,
   expectedRevision: string,
 ): Promise<PlayableStoryTreeDetail> {
-  if (!isPlayableStoryTree(tree)) {
-    throw new PlayableStoryTreeError("The story tree does not match its schema.");
-  }
+  return changePlayableStoryTree(workspacePath, expectedRevision, (_current, save) => save(tree));
+}
+
+/** Holds the tree revision stable while a canvas sync commits its companion tree. */
+export async function changePlayableStoryTree<T>(
+  workspacePath: string,
+  expectedRevision: string,
+  change: (
+    current: PlayableStoryTreeDetail,
+    save: (tree: PlayableStoryTree) => Promise<PlayableStoryTreeDetail>,
+  ) => Promise<T>,
+): Promise<T> {
   return withStoreLock(workspacePath, async () => {
-    const file = await resolveStoryTreeFile(workspacePath);
-    const current = await readPlayableStoryTree(workspacePath);
+    const current = await readStoryTree(workspacePath);
     if (current.revision !== expectedRevision) {
       throw new PlayableStoryTreeConflictError(
         "The story tree changed. Reload it before saving.",
       );
     }
-    const content = `${JSON.stringify(tree, null, 2)}\n`;
-    if (Buffer.byteLength(content, "utf8") > MAX_STORY_TREE_BYTES) {
-      throw new PlayableStoryTreeError("The story tree exceeds the 25 MB limit.");
-    }
-    await mkdir(path.dirname(file), { recursive: true });
-    const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
-    try {
-      await writeFile(temporary, content, "utf8");
-      await rename(temporary, file);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-    return { tree, revision: revisionOf(content) };
+    return change(current, (tree) => writeStoryTree(workspacePath, tree, expectedRevision));
   });
+}
+
+async function writeStoryTree(
+  workspacePath: string,
+  tree: PlayableStoryTree,
+  expectedRevision: string,
+): Promise<PlayableStoryTreeDetail> {
+  if (!isPlayableStoryTree(tree)) {
+    throw new PlayableStoryTreeError("The story tree does not match its schema.");
+  }
+  const file = await resolveStoryTreeFile(workspacePath);
+  const current = await readStoryTree(workspacePath);
+  if (current.revision !== expectedRevision) {
+    throw new PlayableStoryTreeConflictError(
+      "The story tree changed. Reload it before saving.",
+    );
+  }
+  const content = `${JSON.stringify(tree, null, 2)}\n`;
+  if (Buffer.byteLength(content, "utf8") > MAX_STORY_TREE_BYTES) {
+    throw new PlayableStoryTreeError("The story tree exceeds the 25 MB limit.");
+  }
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  const saved = { tree, revision: revisionOf(content) };
+  try {
+    await writeFile(temporary, content, "utf8");
+    await rename(temporary, file);
+  } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw cause;
+  }
+  return saved;
 }
 
 async function resolveStoryTreeFile(workspacePath: string): Promise<string> {

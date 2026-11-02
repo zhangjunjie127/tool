@@ -51,4 +51,26 @@ describe("playable story video matching", () => {
 
     expect(result.candidates[0]?.score).toBe(15);
   });
+
+  it.each(["第11集", "第2集", "第二集", "EP02", "episode 02", "02集"])(
+    "never automatically selects a same-scene video explicitly marked %s for episode 1",
+    (episode) => {
+      const result = rankPlayableStoryVideos(context, [
+        { id: "other-episode", name: `${episode}_初遇.mp4` },
+      ]);
+      expect(result.candidates[0]?.score).toBe(90);
+      expect(result.recommendedAssetId).toBeUndefined();
+    },
+  );
+
+  it.each(["EP01", "episode 01", "第01集", "１集"])(
+    "recognizes the complete episode marker %s",
+    (episode) => {
+      const result = rankPlayableStoryVideos(context, [
+        { id: "matching", name: `${episode}_初遇.mp4` },
+      ]);
+      expect(result.candidates[0]?.score).toBe(105);
+      expect(result.recommendedAssetId).toBe("matching");
+    },
+  );
 });

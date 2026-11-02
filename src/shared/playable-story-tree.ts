@@ -631,6 +631,7 @@ export function reconcilePlayableStoryTree(
   previous: PlayableStoryTree,
   incoming: PlayableStoryTree,
 ): { tree: PlayableStoryTree; diff: PlayableStoryTreeDiff } {
+  incoming = matchImportedStoryTreeIdentities(previous, incoming);
   const previousSections = new Map(playableStoryTreeSections(previous).map((section) => [section.id, section]));
   const incomingSections = playableStoryTreeSections(incoming);
   const incomingIds = new Set(incomingSections.map((section) => section.id));
@@ -642,10 +643,18 @@ export function reconcilePlayableStoryTree(
       continue;
     }
     const sourceUnchanged =
-      old.sourceSnapshot.heading === section.sourceSnapshot.heading &&
+      old.sourceSnapshot.title === section.sourceSnapshot.title &&
       old.sourceSnapshot.body === section.sourceSnapshot.body;
     if (sourceUnchanged) {
-      mergedById.set(section.id, old);
+      mergedById.set(section.id, {
+        ...old,
+        episodeNumber: section.episodeNumber,
+        sceneNumber: section.sceneNumber,
+        sceneSuffix: section.sceneSuffix,
+        sourceSnapshot: { ...old.sourceSnapshot, heading: section.sourceSnapshot.heading },
+        sourceRemoved: undefined,
+        sourcePending: undefined,
+      });
       continue;
     }
     const hasManualSourceEdits =
@@ -655,6 +664,10 @@ export function reconcilePlayableStoryTree(
     if (hasManualSourceEdits) {
       mergedById.set(section.id, {
         ...old,
+        episodeNumber: section.episodeNumber,
+        sceneNumber: section.sceneNumber,
+        sceneSuffix: section.sceneSuffix,
+        sourceRemoved: undefined,
         sourcePending: {
           heading: section.sourceSnapshot.heading,
           body: section.sourceSnapshot.body,
@@ -737,6 +750,7 @@ export function reconcilePlayableStoryTree(
   for (const { chapter: oldChapter, episode } of previousEpisodes.values()) {
     if (episodeIds.has(episode.id)) continue;
     const retainedSections = episode.sections
+      .filter((section) => !incomingIds.has(section.id))
       .map((section) => mergedById.get(section.id))
       .filter((section): section is PlayableStoryTreeSection => Boolean(section));
     if (!retainedSections.length) continue;
@@ -753,17 +767,12 @@ export function reconcilePlayableStoryTree(
   const links = incoming.links.map((link) => {
     const old = previousLinks.get(link.id);
     if (!old) return link;
-    const untouched =
-      old.sourceSnapshot?.status !== undefined &&
-      old.fromSectionId === old.sourceSnapshot?.fromSectionId &&
-      old.toSectionId === old.sourceSnapshot?.toSectionId &&
-      old.label === old.sourceSnapshot?.label &&
-      old.status === old.sourceSnapshot?.status;
-    return untouched ? link : old;
+    return storyTreeLinkMatchesSource(old) ? link : old;
   });
   for (const old of previous.links) {
     if (incomingLinks.has(old.id) || !mergedById.has(old.fromSectionId) || !mergedById.has(old.toSectionId)) continue;
     if (old.sourceSnapshot && !incomingIds.has(old.fromSectionId)) continue;
+    if (storyTreeLinkMatchesSource(old)) continue;
     links.push(old);
   }
 
@@ -774,6 +783,124 @@ export function reconcilePlayableStoryTree(
     links,
   };
   return { tree, diff: diffPlayableStoryTrees(previous, tree) };
+}
+
+function storyTreeLinkMatchesSource(link: PlayableStoryTreeLink): boolean {
+  return link.sourceSnapshot?.status !== undefined &&
+    link.fromSectionId === link.sourceSnapshot.fromSectionId &&
+    link.toSectionId === link.sourceSnapshot.toSectionId &&
+    link.label === link.sourceSnapshot.label &&
+    link.status === link.sourceSnapshot.status;
+}
+
+/** Numbered headings locate source text; they are not stable scene identities. */
+function matchImportedStoryTreeIdentities(
+  previous: PlayableStoryTree,
+  incoming: PlayableStoryTree,
+): PlayableStoryTree {
+  const oldSections = playableStoryTreeSections(previous);
+  const sourceSections = oldSections.filter((section) => section.sourceManaged !== false);
+  const newSections = playableStoryTreeSections(incoming);
+  const matches = new Map<string, PlayableStoryTreeSection>();
+  const matchedIds = new Set<string>();
+  const matchUnique = (key: (section: PlayableStoryTreeSection) => string) => {
+    const group = (sections: PlayableStoryTreeSection[]) => {
+      const result = new Map<string, PlayableStoryTreeSection[]>();
+      for (const section of sections) {
+        const value = key(section);
+        const entries = result.get(value) ?? [];
+        entries.push(section);
+        result.set(value, entries);
+      }
+      return result;
+    };
+    const oldGroups = group(sourceSections);
+    for (const [value, sections] of group(newSections)) {
+      const olds = oldGroups.get(value);
+      if (sections.length !== 1 || olds?.length !== 1) continue;
+      const section = sections[0]!;
+      const old = olds[0]!;
+      if (matches.has(section.id) || matchedIds.has(old.id)) continue;
+      matches.set(section.id, old);
+      matchedIds.add(old.id);
+    }
+  };
+  matchUnique((section) => JSON.stringify([
+    section.sourceSnapshot.title, section.sourceSnapshot.body,
+  ]));
+  matchUnique((section) => JSON.stringify([
+    section.episodeNumber, section.sourceSnapshot.title,
+  ]));
+
+  // Identical repeated scenes can retain their positions on an unchanged import,
+  // but positional guesses must not override evidence of renumbering.
+  const renumbered = newSections.some((section) => {
+    const old = matches.get(section.id);
+    return old && (old.episodeNumber !== section.episodeNumber ||
+      old.sceneNumber !== section.sceneNumber || old.sceneSuffix !== section.sceneSuffix);
+  });
+  for (const section of newSections) {
+    if (matches.has(section.id)) continue;
+    const old = sourceSections.find((candidate) => candidate.id === section.id);
+    if (!old || matchedIds.has(old.id) || renumbered) continue;
+    if (old.sourceSnapshot.body !== section.sourceSnapshot.body) continue;
+    if (!old.sourceSnapshot.body && old.sourceSnapshot.heading !== section.sourceSnapshot.heading) continue;
+    matches.set(section.id, old);
+    matchedIds.add(old.id);
+  }
+
+  const reservedIds = new Set([...oldSections, ...newSections].map((section) => section.id));
+  const oldIds = new Set(oldSections.map((section) => section.id));
+  const ids = new Map<string, string>();
+  for (const section of newSections) {
+    let id = matches.get(section.id)?.id ?? section.id;
+    if (!matches.has(section.id) && oldIds.has(id)) {
+      let suffix = 1;
+      while (reservedIds.has(`${section.id.slice(0, 100)}-import-${suffix}`)) suffix += 1;
+      id = `${section.id.slice(0, 100)}-import-${suffix}`;
+      reservedIds.add(id);
+    }
+    ids.set(section.id, id);
+  }
+  const remapSection = (section: PlayableStoryTreeSection): PlayableStoryTreeSection => {
+    const id = ids.get(section.id)!;
+    const remapBeats = (beats: PlayableStoryTreeBeat[]) => beats.map((beat) => ({
+      ...beat,
+      id: beat.id.startsWith(`${section.id}-beat-`)
+        ? `${id}${beat.id.slice(section.id.length)}`
+        : beat.id,
+    }));
+    return {
+      ...section, id,
+      beats: remapBeats(section.beats),
+      sourceSnapshot: { ...section.sourceSnapshot, beats: remapBeats(section.sourceSnapshot.beats) },
+    };
+  };
+  return {
+    ...incoming,
+    chapters: incoming.chapters.map((chapter) => ({
+      ...chapter,
+      episodes: chapter.episodes.map((episode) => ({
+        ...episode, sections: episode.sections.map(remapSection),
+      })),
+    })),
+    links: incoming.links.map((link) => {
+      const fromSectionId = ids.get(link.fromSectionId)!;
+      const toSectionId = ids.get(link.toSectionId)!;
+      return {
+        ...link,
+        id: link.id === `link-${link.fromSectionId}-to-${link.toSectionId}`
+          ? `link-${fromSectionId}-to-${toSectionId}`
+          : link.id,
+        fromSectionId, toSectionId,
+        ...(link.sourceSnapshot ? { sourceSnapshot: {
+          ...link.sourceSnapshot,
+          fromSectionId: ids.get(link.sourceSnapshot.fromSectionId) ?? link.sourceSnapshot.fromSectionId,
+          toSectionId: ids.get(link.sourceSnapshot.toSectionId) ?? link.sourceSnapshot.toSectionId,
+        } } : {}),
+      };
+    }),
+  };
 }
 
 export function acceptPlayableStoryTreeSource(
