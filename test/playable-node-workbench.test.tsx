@@ -1581,10 +1581,10 @@ it("offers motion presets and applies the chosen interaction mode", async () => 
   ).toBe("点击按键");
   expect(
     container.querySelector(
-      'select[aria-label="点击反馈"] option[value="idle-pulse-hover-press"]',
+      'select[aria-label="按钮动效库"] option[value="idle-pulse-hover-press"]',
     ),
   ).toBeNull();
-  expect(container.querySelector('[aria-label="点击反馈"]')).toBeNull();
+  expect(container.querySelector('[aria-label="按钮动效库"]')).toBeNull();
   expect(container.querySelector('[aria-label="Animation type"]')).toBeNull();
   expect(container.querySelector('[aria-label="Button feedback"]')).toBeNull();
   expect(
@@ -2098,7 +2098,7 @@ it("configures consecutive clicks and an exit for the bouncing click preset", as
     });
   };
   await choose('select[aria-label="按键预设"]', "builtin:button-feedback");
-  await choose('[aria-label="点击反馈"]', "bounce-hover-press");
+  await choose('[aria-label="按钮动效库"]', "bounce-hover-press");
   const count = container.querySelector<HTMLInputElement>(
     '[aria-label="所需点击次数"]',
   )!;
@@ -2176,6 +2176,16 @@ it("stages a button feedback preset until it is applied to the selection", async
   expect(preset.value).toBe("");
   await choose('select[aria-label="按键预设"]', "builtin:button-feedback");
   expect(onApplyMotion).not.toHaveBeenCalled();
+  expect(
+    container.querySelectorAll(
+      'select[aria-label="按钮动效库"] option[value^="idle-"], select[aria-label="按钮动效库"] option[value="hover-lift"], select[aria-label="按钮动效库"] option[value="success-check"], select[aria-label="按钮动效库"] option[value="error-shake"], select[aria-label="按钮动效库"] option[value="selected-toggle"]',
+    ),
+  ).toHaveLength(7);
+  expect(
+    container.querySelectorAll(
+      'select[aria-label="点击特效库"] option[value]',
+    ),
+  ).toHaveLength(10);
   const apply = container.querySelector<HTMLButtonElement>(
     ".playable-preview-motion-apply-button",
   )!;
@@ -2197,7 +2207,7 @@ it("stages a button feedback preset until it is applied to the selection", async
   ).toBeNull();
   await choose('[aria-label="按键形状"]', "circle");
   await choose(
-    '[aria-label="点击反馈"]',
+    '[aria-label="按钮动效库"]',
     "idle-pulse-hover-press",
   );
   await act(async () =>
@@ -2216,7 +2226,7 @@ it("stages a button feedback preset until it is applied to the selection", async
     }),
     true,
   );
-  await choose('[aria-label="点击反馈"]', "bounce-hover-press");
+  await choose('[aria-label="按钮动效库"]', "bounce-hover-press");
   expect(onApplyMotion).toHaveBeenCalledTimes(2);
   await act(async () =>
     container
@@ -2476,7 +2486,7 @@ it("edits a selected button's label without overriding its preset shape", async 
   });
   expect(onWriteButtonSignal).not.toHaveBeenCalled();
   const pressEffect = container.querySelector<HTMLSelectElement>(
-    'select[aria-label="按下特效"]',
+    'select[aria-label="点击特效库"]',
   )!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
@@ -3230,7 +3240,7 @@ it("keeps button presets available with no selection and creates a full button",
     undefined,
   );
   await choose('select[aria-label="按键预设"]', "builtin:button-feedback");
-  await choose('[aria-label="点击反馈"]', "idle-pulse-hover-press");
+  await choose('[aria-label="按钮动效库"]', "idle-pulse-hover-press");
   await act(async () =>
     [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("确定添加"))
@@ -3251,7 +3261,7 @@ it("keeps button presets available with no selection and creates a full button",
     undefined,
     undefined,
   );
-  await choose('[aria-label="点击反馈"]', "bounce-hover-press");
+  await choose('[aria-label="按钮动效库"]', "bounce-hover-press");
   expect(onAddButtonPreset).toHaveBeenCalledTimes(2);
   await act(async () =>
     [...container.querySelectorAll<HTMLButtonElement>("button")]
@@ -3769,8 +3779,23 @@ it("adds a button with a library press effect at the configured attachment point
     shapeControl.dispatchEvent(new Event("change", { bubbles: true }));
   });
   const effect = container.querySelector<HTMLSelectElement>(
-    'select[aria-label="按下特效"]',
+    'select[aria-label="点击特效库"]',
   )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(effect, "green-particle-burst");
+    effect.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const color = container.querySelector<HTMLInputElement>(
+    'input[type="color"][aria-label="特效颜色"]',
+  )!;
+  expect(color.value).toBe("#a2ff32");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
+      .set!.call(effect, "electric-spark");
+    effect.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(color.value).toBe("#53b8ff");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!
       .set!.call(effect, "green-particle-burst");
@@ -3789,9 +3814,6 @@ it("adds a button with a library press effect at the configured attachment point
   };
   await setAnchor("挂点 X (%)", "24");
   await setAnchor("挂点 Y (%)", "73");
-  const color = container.querySelector<HTMLInputElement>(
-    'input[type="color"][aria-label="特效颜色"]',
-  )!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!
       .set!.call(color, "#3478f6");

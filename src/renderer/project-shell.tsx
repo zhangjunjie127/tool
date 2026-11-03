@@ -161,7 +161,13 @@ export function ProjectShell({
     sequence: number;
     nodeId: string;
   }>();
+  const [canvasStoryTreeSelection, setCanvasStoryTreeSelection] = useState<{
+    projectId: string;
+    sequence: number;
+    nodeId: string;
+  }>();
   const storyTreeCanvasFocusSequence = useRef(0);
+  const canvasStoryTreeSelectionSequence = useRef(0);
   const canvasSave = useRef<(() => Promise<void>) | undefined>(undefined);
   const registerCanvasSave = useCallback(
     (save: (() => Promise<void>) | undefined) => {
@@ -215,6 +221,15 @@ export function ProjectShell({
     setStoryTreeCanvasFocusRequest({
       projectId,
       sequence: ++storyTreeCanvasFocusSequence.current,
+      nodeId,
+    });
+  }, [state.project?.id]);
+  const handleCanvasNodeSelectionChange = useCallback((nodeId: string) => {
+    const projectId = state.project?.id;
+    if (!projectId) return;
+    setCanvasStoryTreeSelection({
+      projectId,
+      sequence: ++canvasStoryTreeSelectionSequence.current,
       nodeId,
     });
   }, [state.project?.id]);
@@ -874,6 +889,11 @@ export function ProjectShell({
               )
             }
             onCanvasNodeSelect={handleStoryTreeCanvasNodeSelect}
+            canvasNodeSelection={
+              canvasStoryTreeSelection?.projectId === project.id
+                ? canvasStoryTreeSelection
+                : undefined
+            }
             onCanvasStatusChange={handleStoryTreeCanvasStatusChange}
           />
         : undefined}
@@ -1090,6 +1110,7 @@ export function ProjectShell({
             ? storyTreeCanvasFocusRequest
             : undefined
         }
+        onCanvasNodeSelectionChange={handleCanvasNodeSelectionChange}
         storyTreeCanvasStatus={storyTreeCanvasStatus?.projectId === project.id ? storyTreeCanvasStatus.status : undefined}
         storyTreeCanvasSyncProgress={
           storyTreeCanvasSyncProgress?.projectId === project.id

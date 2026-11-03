@@ -1,7 +1,45 @@
 import {
   type PlayableStoryTree,
+  type PlayableStoryTreeBeat,
   type PlayableStoryTreeSection,
 } from "./playable-story-tree.js";
+
+export function normalizePlayableStoryTreeActionText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(
+      /^(?:选项|选择|操作)\s*(?:[a-z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/iu,
+      "",
+    )
+    .replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+export function uniquePlayableStoryTreeActions(
+  beats: readonly PlayableStoryTreeBeat[],
+): PlayableStoryTreeBeat[] {
+  const seen = new Set<string>();
+  return beats.filter((beat) => {
+    if (beat.kind !== "choice" && beat.kind !== "operation") return false;
+    const text = normalizePlayableStoryTreeActionText(beat.text);
+    const key = `${beat.kind}\0${text || beat.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function playableStoryTreeChoiceLabel(text: string): string {
+  const bracketed = text.match(/[【\[]([^】\]]+)[】\]]/u)?.[1];
+  if (bracketed?.trim()) return bracketed.trim().slice(0, 240);
+  return text
+    .replace(
+      /^(?:选项|选择|操作)\s*(?:[a-z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/iu,
+      "",
+    )
+    .trim()
+    .slice(0, 240);
+}
 
 /** Fill structural gaps without replacing authored routes or chaining alternatives. */
 export function completePlayableStoryTreeRoutes(
@@ -10,7 +48,7 @@ export function completePlayableStoryTreeRoutes(
   const episodes = tree.chapters.flatMap((chapter) => chapter.episodes);
   const sections = episodes.flatMap((episode) => episode.sections);
   const active = sections.filter((section) => !section.sourceRemoved);
-  const links = [...tree.links];
+  const links = deduplicateStoryTreeLinks(tree.links);
   const alternativeIds = new Set<string>();
   for (const section of active) {
     const targets = new Set(
@@ -60,7 +98,8 @@ export function completePlayableStoryTreeRoutes(
   for (const [episodeIndex, episode] of episodes.entries()) {
     for (const [index, section] of episode.sections.entries()) {
       if (section.sourceRemoved || terminal(section)) continue;
-      const choices = section.beats.filter((beat) => beat.kind === "choice");
+      const choices = uniquePlayableStoryTreeActions(section.beats)
+        .filter((beat) => beat.kind === "choice");
       const following = episode.sections[index + 1];
       const nextEpisode = episodes[episodeIndex + 1];
       const next = following ?? nextEpisode?.sections[0];
@@ -78,6 +117,7 @@ export function completePlayableStoryTreeRoutes(
           branchEnd < 0 ? candidates.length : branchEnd,
         );
         const existing = outgoing(section);
+        relabelGenericChoiceRoutes(choices, existing, active);
         const remaining = Math.max(0, choices.length - existing.length);
         if (!remaining) continue;
         const unlinked = branches.filter(
@@ -154,7 +194,42 @@ export function completePlayableStoryTreeRoutes(
       }
     }
   }
-  return links.length === tree.links.length ? tree : { ...tree, links };
+  const expanded = expandSingleGenericChoiceRoutes(active, links);
+  return sameStoryTreeLinks(tree.links, expanded)
+    ? tree
+    : { ...tree, links: expanded };
+}
+
+function relabelGenericChoiceRoutes(
+  choices: readonly PlayableStoryTreeBeat[],
+  outgoing: readonly PlayableStoryTree["links"][number][],
+  active: readonly PlayableStoryTreeSection[],
+): void {
+  if (choices.length < 2 || outgoing.length !== choices.length) return;
+
+  const assigned = new Set<string>();
+  const generic = outgoing.filter((link) => isGenericStoryRoute(link.label));
+  for (const link of generic) {
+    const targetTitle = active.find((item) => item.id === link.toSectionId)?.title;
+    const matches = choices.filter(
+      (choice) =>
+        !assigned.has(choice.id) &&
+        targetTitle &&
+        matchesChoice(choice.text, targetTitle),
+    );
+    if (matches.length === 1) {
+      link.label = playableStoryTreeChoiceLabel(matches[0]!.text);
+      assigned.add(matches[0]!.id);
+    }
+  }
+
+  for (const link of generic) {
+    if (!isGenericStoryRoute(link.label)) continue;
+    const choice = choices.find((item) => !assigned.has(item.id));
+    if (!choice) break;
+    link.label = playableStoryTreeChoiceLabel(choice.text);
+    assigned.add(choice.id);
+  }
 }
 
 export function playableStoryTreeExitLabel(
@@ -171,17 +246,72 @@ export function playableStoryTreeExitLabel(
 }
 
 function matchesChoice(text: string, title: string): boolean {
-  const normalize = (value: string) =>
-    value
-      .replace(
-        /^(?:选项|选择)\s*[一二三四五六七八九十\dA-Za-z]*\s*[:：、._-]?\s*/u,
-        "",
-      )
-      .replace(/[\s【】[\]，。:：、]/gu, "")
-      .toLocaleLowerCase();
-  const action = normalize(text);
-  const target = normalize(title);
+  const action = normalizePlayableStoryTreeActionText(text);
+  const target = normalizePlayableStoryTreeActionText(title);
   return Boolean(
     action && target && (action === target || action.endsWith(target)),
   );
+}
+
+function deduplicateStoryTreeLinks(
+  links: readonly PlayableStoryTree["links"][number][],
+): PlayableStoryTree["links"] {
+  const seen = new Set<string>();
+  return links
+    .filter((link) => {
+      const key = `${link.fromSectionId}\0${link.toSectionId}\0${normalizePlayableStoryTreeActionText(link.label)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((link) => ({ ...link }));
+}
+
+function expandSingleGenericChoiceRoutes(
+  sections: readonly PlayableStoryTreeSection[],
+  links: PlayableStoryTree["links"],
+): PlayableStoryTree["links"] {
+  const result = [...links];
+  for (const section of sections) {
+    const choices = uniquePlayableStoryTreeActions(section.beats)
+      .filter((beat) => beat.kind === "choice");
+    if (choices.length < 2) continue;
+    const outgoing = result.filter((link) => link.fromSectionId === section.id);
+    if (outgoing.length !== 1 || !isGenericStoryRoute(outgoing[0]!.label)) continue;
+    const original = outgoing[0]!;
+    const index = result.indexOf(original);
+    const ids = new Set(result.map((link) => link.id));
+    const expanded = choices.map((choice, choiceIndex) => {
+      const label = choice.text.trim().slice(0, 240);
+      if (choiceIndex === 0) {
+        return { ...original, label, status: "suggested" as const };
+      }
+      const baseId = `${original.id}-choice-${choiceIndex + 1}`.slice(0, 120);
+      let id = baseId;
+      for (let suffix = 2; ids.has(id); suffix += 1) {
+        id = `${baseId.slice(0, 120 - String(suffix).length - 1)}-${suffix}`;
+      }
+      ids.add(id);
+      const { sourceSnapshot: _sourceSnapshot, ...link } = original;
+      return {
+        ...link,
+        id,
+        label,
+        status: "suggested" as const,
+      };
+    });
+    result.splice(index, 1, ...expanded);
+  }
+  return result;
+}
+
+function isGenericStoryRoute(label: string): boolean {
+  return !label.trim() || ["继续", "下一集", "主线汇合"].includes(label.trim());
+}
+
+function sameStoryTreeLinks(
+  left: readonly PlayableStoryTree["links"][number][],
+  right: readonly PlayableStoryTree["links"][number][],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

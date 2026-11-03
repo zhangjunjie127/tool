@@ -43,11 +43,75 @@ export const PLAYABLE_BUTTON_PRESS_EFFECTS = [
   {
     id: "green-particle-burst",
     labelKey: "playableWorkbench.greenParticleBurst",
+    defaultColor: "#a2ff32",
+  },
+  {
+    id: "click-ripple",
+    labelKey: "playableWorkbench.clickRipple",
+    defaultColor: "#ffffff",
+  },
+  {
+    id: "star-twinkle",
+    labelKey: "playableWorkbench.starTwinkle",
+    defaultColor: "#fff2a6",
+  },
+  {
+    id: "gold-star-burst",
+    labelKey: "playableWorkbench.goldStarBurst",
+    defaultColor: "#ffd166",
+  },
+  {
+    id: "electric-spark",
+    labelKey: "playableWorkbench.electricSpark",
+    defaultColor: "#53b8ff",
+  },
+  {
+    id: "soft-glow-ring",
+    labelKey: "playableWorkbench.softGlowRing",
+    defaultColor: "#a9dcff",
+  },
+  {
+    id: "confetti-burst",
+    labelKey: "playableWorkbench.confettiBurst",
+    defaultColor: "#ff6f91",
+  },
+  {
+    id: "heart-burst",
+    labelKey: "playableWorkbench.heartBurst",
+    defaultColor: "#ff6b9a",
+  },
+  {
+    id: "magic-rune",
+    labelKey: "playableWorkbench.magicRune",
+    defaultColor: "#b99aff",
   },
 ] as const;
 export type PlayableButtonPressEffect =
   (typeof PLAYABLE_BUTTON_PRESS_EFFECTS)[number]["id"];
 export const PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR = "#a2ff32";
+export const PLAYABLE_BUTTON_FEEDBACKS = [
+  "hover-press",
+  "idle-pulse-hover-press",
+  "bounce-hover-press",
+  "ripple-hint",
+  "idle-float",
+  "idle-glow",
+  "hover-lift",
+  "success-check",
+  "error-shake",
+  "selected-toggle",
+  "none",
+] as const;
+export type PlayableButtonFeedback =
+  (typeof PLAYABLE_BUTTON_FEEDBACKS)[number];
+const PLAYABLE_EXTENDED_BUTTON_FEEDBACKS = new Set<PlayableButtonFeedback>([
+  "idle-float",
+  "idle-glow",
+  "hover-lift",
+  "success-check",
+  "error-shake",
+  "selected-toggle",
+]);
 
 export interface PlayableMotionConfig {
   kind: PlayableMotionKind;
@@ -78,12 +142,7 @@ export interface PlayableMotionConfig {
   effectAnchorY?: number;
   effectOffsetX?: number;
   effectOffsetY?: number;
-  feedback?:
-    | "hover-press"
-    | "idle-pulse-hover-press"
-    | "bounce-hover-press"
-    | "ripple-hint"
-    | "none";
+  feedback?: PlayableButtonFeedback;
 }
 
 export const PLAYABLE_MOTION_ATTRIBUTES = {
@@ -387,19 +446,16 @@ export function parsePlayableMotionConfig(
         effectOffsetY! < -500 ||
         effectOffsetY! > 500)) ||
     (feedback !== null &&
-      feedback !== "hover-press" &&
-      feedback !== "idle-pulse-hover-press" &&
-      feedback !== "bounce-hover-press" &&
-      feedback !== "ripple-hint" &&
-      feedback !== "none") ||
+      !PLAYABLE_BUTTON_FEEDBACKS.includes(
+        feedback as PlayableButtonFeedback,
+      )) ||
     (buttonShape !== null &&
       buttonShape !== "rectangle" &&
       buttonShape !== "circle") ||
     (kind === "button-feedback" &&
-      feedback !== "hover-press" &&
-      feedback !== "idle-pulse-hover-press" &&
-      feedback !== "bounce-hover-press" &&
-      feedback !== "ripple-hint") ||
+      !PLAYABLE_BUTTON_FEEDBACKS.includes(
+        feedback as PlayableButtonFeedback,
+      )) ||
     (ringAssetId !== null && !/^[a-z0-9._-]{1,120}$/i.test(ringAssetId)) ||
     (ringAssetScaleValue !== null &&
       (!Number.isInteger(ringAssetScale) ||
@@ -475,12 +531,7 @@ export function parsePlayableMotionConfig(
     ...(effectOffsetY === undefined ? {} : { effectOffsetY }),
     ...(feedback
       ? {
-          feedback: feedback as
-            | "hover-press"
-            | "idle-pulse-hover-press"
-            | "bounce-hover-press"
-            | "ripple-hint"
-            | "none",
+          feedback: feedback as PlayableButtonFeedback,
         }
       : {}),
     ...(buttonShape
@@ -880,7 +931,26 @@ export function mountPlayableMotionElement(
   if (config) {
     if (config.pressEffect && element.tagName.toLowerCase() === "button")
       cleanups.push(mountPlayableButtonPressEffect(element, config));
-    if (floatingSwipePrompt || holdChargePrompt || idleClickPrompt) {
+    if (
+      config.kind === "button-feedback" &&
+      PLAYABLE_EXTENDED_BUTTON_FEEDBACKS.has(
+        config.feedback as PlayableButtonFeedback,
+      )
+    ) {
+      cleanups.push(
+        mountPlayableExtendedFeedback(
+          element,
+          config.feedback as Exclude<
+            PlayableButtonFeedback,
+            | "hover-press"
+            | "idle-pulse-hover-press"
+            | "bounce-hover-press"
+            | "ripple-hint"
+            | "none"
+          >,
+        ),
+      );
+    } else if (floatingSwipePrompt || holdChargePrompt || idleClickPrompt) {
       cleanups.push(
         mountPlayableFeedback(
           element,
@@ -1001,7 +1071,11 @@ function mountPlayableButtonPressEffect(
     const anchorX = config.effectAnchorX ?? 50;
     const anchorY = config.effectAnchorY ?? 50;
     const effectColor =
-      config.effectColor ?? PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR;
+      config.effectColor ??
+      PLAYABLE_BUTTON_PRESS_EFFECTS.find(
+        (effect) => effect.id === config.pressEffect,
+      )?.defaultColor ??
+      PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR;
     const colorWithAlpha = (alpha: number) => {
       const red = Number.parseInt(effectColor.slice(1, 3), 16);
       const green = Number.parseInt(effectColor.slice(3, 5), 16);
@@ -1077,6 +1151,276 @@ function mountPlayableButtonPressEffect(
         },
       );
     };
+
+    const scheduleCleanup = (duration: number) => {
+      currentBurstAnimations = undefined;
+      const timer = view.setTimeout(() => {
+        burst.remove();
+        bursts.delete(burst);
+        timers.delete(timer);
+        for (const animation of burstAnimations) animations.delete(animation);
+      }, duration);
+      timers.add(timer);
+    };
+    const starClip =
+      "polygon(50% 0,61% 36%,100% 50%,61% 64%,50% 100%,39% 64%,0 50%,39% 36%)";
+
+    if (config.pressEffect !== "green-particle-burst") {
+      if (config.pressEffect === "click-ripple") {
+        makeRing(0, effectColor, 2);
+        makeRing(90, colorWithAlpha(0.55), 1);
+      } else if (
+        config.pressEffect === "star-twinkle" ||
+        config.pressEffect === "gold-star-burst"
+      ) {
+        const count = config.pressEffect === "star-twinkle" ? 8 : 12;
+        for (let index = 0; index < count; index += 1) {
+          const angle = (Math.PI * 2 * index) / count;
+          const distance =
+            config.pressEffect === "star-twinkle"
+              ? radius * 0.58
+              : radius * (0.68 + (index % 3) * 0.12);
+          const star = addPart({
+            width: `${config.pressEffect === "star-twinkle" ? 8 : 11}px`,
+            height: `${config.pressEffect === "star-twinkle" ? 8 : 11}px`,
+            marginLeft: "-5px",
+            marginTop: "-5px",
+            background: effectColor,
+            clipPath: starClip,
+            filter: `drop-shadow(0 0 5px ${colorWithAlpha(0.9)})`,
+            opacity: "0",
+          });
+          animate(
+            star,
+            config.pressEffect === "star-twinkle"
+              ? [
+                  {
+                    opacity: 0,
+                    transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance}px) scale(.2) rotate(-25deg)`,
+                  },
+                  {
+                    opacity: 1,
+                    offset: 0.38,
+                    transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance}px) scale(1) rotate(0deg)`,
+                  },
+                  {
+                    opacity: 0,
+                    transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance}px) scale(.2) rotate(25deg)`,
+                  },
+                ]
+              : [
+                  { opacity: 0, transform: "translate(0,0) scale(.2)" },
+                  {
+                    opacity: 1,
+                    offset: 0.18,
+                    transform: `translate(${Math.cos(angle) * distance * 0.24}px,${Math.sin(angle) * distance * 0.24}px) scale(1.25)`,
+                  },
+                  {
+                    opacity: 0,
+                    transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance}px) scale(.15) rotate(45deg)`,
+                  },
+                ],
+            {
+              duration: config.pressEffect === "star-twinkle" ? 620 : 690,
+              delay: (index % 4) * 35,
+              easing: "cubic-bezier(.16,.78,.24,1)",
+              fill: "both",
+            },
+          );
+        }
+      } else if (config.pressEffect === "electric-spark") {
+        for (let index = 0; index < 12; index += 1) {
+          const angle = (Math.PI * 2 * index) / 12;
+          const length = 14 + (index % 3) * 5;
+          const spark = addPart({
+            width: `${length}px`,
+            height: "2px",
+            marginTop: "-1px",
+            borderRadius: "2px",
+            background: effectColor,
+            boxShadow: `0 0 7px 2px ${colorWithAlpha(0.85)}`,
+            transformOrigin: "left center",
+            opacity: "0",
+          });
+          animate(
+            spark,
+            [
+              { opacity: 0, transform: `rotate(${angle}rad) scaleX(.1)` },
+              {
+                opacity: 1,
+                offset: 0.2,
+                transform: `rotate(${angle}rad) translateX(5px) scaleX(1)`,
+              },
+              {
+                opacity: 0,
+                transform: `rotate(${angle}rad) translateX(${radius * 0.62}px) scaleX(.35)`,
+              },
+            ],
+            {
+              duration: 450 + (index % 4) * 40,
+              delay: (index % 5) * 12,
+              easing: "cubic-bezier(.15,.72,.22,1)",
+              fill: "both",
+            },
+          );
+        }
+      } else if (config.pressEffect === "soft-glow-ring") {
+        makeRing(0, colorWithAlpha(0.8), 3);
+        const glow = addPart({
+          width: "64px",
+          height: "64px",
+          marginLeft: "-32px",
+          marginTop: "-32px",
+          borderRadius: "50%",
+          background: `radial-gradient(circle, ${colorWithAlpha(0.32)} 0%, ${colorWithAlpha(0.13)} 42%, transparent 72%)`,
+          filter: "blur(3px)",
+          opacity: "0",
+        });
+        animate(
+          glow,
+          [
+            { opacity: 0, transform: "scale(.3)" },
+            { opacity: 0.9, offset: 0.25, transform: "scale(1)" },
+            { opacity: 0, transform: "scale(2.3)" },
+          ],
+          { duration: 760, easing: "ease-out", fill: "both" },
+        );
+      } else if (config.pressEffect === "confetti-burst") {
+        for (let index = 0; index < 18; index += 1) {
+          const angle = (Math.PI * 2 * index) / 18;
+          const distance = radius * (0.55 + (index % 4) * 0.12);
+          const size = 4 + (index % 3) * 2;
+          const confetti = addPart({
+            width: `${size}px`,
+            height: `${size * 1.55}px`,
+            marginLeft: `${-size / 2}px`,
+            marginTop: `${-size / 2}px`,
+            borderRadius: "1px",
+            background: index % 4 === 0 ? "#fff" : effectColor,
+            boxShadow: `0 0 4px ${colorWithAlpha(0.65)}`,
+            opacity: "0",
+          });
+          animate(
+            confetti,
+            [
+              {
+                opacity: 0,
+                transform: "translate(0,0) rotate(0deg) scale(.3)",
+              },
+              {
+                opacity: 1,
+                offset: 0.18,
+                transform: `translate(${Math.cos(angle) * distance * 0.3}px,${Math.sin(angle) * distance * 0.25}px) rotate(100deg) scale(1)`,
+              },
+              {
+                opacity: 0,
+                transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance + 28}px) rotate(${250 + index * 17}deg) scale(.6)`,
+              },
+            ],
+            {
+              duration: 760 + (index % 4) * 35,
+              delay: (index % 6) * 15,
+              easing: "cubic-bezier(.15,.72,.22,1)",
+              fill: "both",
+            },
+          );
+        }
+      } else if (config.pressEffect === "heart-burst") {
+        const heartClip =
+          "polygon(50% 92%,43% 86%,15% 61%,5% 48%,3% 35%,8% 22%,19% 15%,31% 16%,40% 24%,50% 35%,60% 24%,69% 16%,81% 15%,92% 22%,97% 35%,95% 48%,85% 61%,57% 86%)";
+        for (let index = 0; index < 9; index += 1) {
+          const angle = (Math.PI * 2 * index) / 9 - Math.PI / 2;
+          const distance = radius * (0.62 + (index % 3) * 0.1);
+          const heart = addPart({
+            width: `${9 + (index % 3) * 2}px`,
+            height: `${10 + (index % 3) * 2}px`,
+            marginLeft: "-5px",
+            marginTop: "-5px",
+            background: effectColor,
+            clipPath: heartClip,
+            filter: `drop-shadow(0 0 4px ${colorWithAlpha(0.8)})`,
+            opacity: "0",
+          });
+          animate(
+            heart,
+            [
+              { opacity: 0, transform: "translate(0,0) scale(.3)" },
+              {
+                opacity: 1,
+                offset: 0.2,
+                transform: `translate(${Math.cos(angle) * 8}px,${Math.sin(angle) * 8}px) scale(1)`,
+              },
+              {
+                opacity: 0,
+                transform: `translate(${Math.cos(angle) * distance}px,${Math.sin(angle) * distance}px) scale(.35) rotate(${(index % 2 ? 1 : -1) * 35}deg)`,
+              },
+            ],
+            {
+              duration: 680 + (index % 3) * 40,
+              delay: (index % 3) * 22,
+              easing: "cubic-bezier(.14,.76,.22,1)",
+              fill: "both",
+            },
+          );
+        }
+      } else if (config.pressEffect === "magic-rune") {
+        const rune = addPart({
+          width: "48px",
+          height: "48px",
+          marginLeft: "-24px",
+          marginTop: "-24px",
+          border: `1px solid ${effectColor}`,
+          borderRadius: "50%",
+          boxShadow: `0 0 9px ${colorWithAlpha(0.7)}, inset 0 0 8px ${colorWithAlpha(0.45)}`,
+          opacity: "0",
+        });
+        animate(
+          rune,
+          [
+            { opacity: 0, transform: "scale(.4) rotate(-30deg)" },
+            { opacity: 0.95, offset: 0.2, transform: "scale(1) rotate(0deg)" },
+            { opacity: 0, transform: "scale(1.8) rotate(80deg)" },
+          ],
+          { duration: 760, easing: "ease-out", fill: "both" },
+        );
+        for (let index = 0; index < 8; index += 1) {
+          const tick = addPart({
+            width: "2px",
+            height: `${8 + (index % 2) * 3}px`,
+            marginLeft: "-1px",
+            marginTop: "-23px",
+            background: effectColor,
+            boxShadow: `0 0 5px ${colorWithAlpha(0.8)}`,
+            transformOrigin: "center 23px",
+            opacity: "0",
+          });
+          const angle = (360 / 8) * index;
+          animate(
+            tick,
+            [
+              { opacity: 0, transform: `rotate(${angle}deg) scale(.3)` },
+              {
+                opacity: 1,
+                offset: 0.22,
+                transform: `rotate(${angle}deg) scale(1)`,
+              },
+              {
+                opacity: 0,
+                transform: `rotate(${angle + 25}deg) scale(.4)`,
+              },
+            ],
+            {
+              duration: 690,
+              delay: index * 12,
+              easing: "ease-out",
+              fill: "both",
+            },
+          );
+        }
+      }
+      scheduleCleanup(1100);
+      return;
+    }
 
     makeRing(0, effectColor, 2);
     makeRing(75, colorWithAlpha(0.92), 1.5);
@@ -1165,14 +1509,7 @@ function mountPlayableButtonPressEffect(
       { duration: 390, easing: "cubic-bezier(.16,.8,.24,1)", fill: "both" },
     );
 
-    currentBurstAnimations = undefined;
-    const timer = view.setTimeout(() => {
-      burst.remove();
-      bursts.delete(burst);
-      timers.delete(timer);
-      for (const animation of burstAnimations) animations.delete(animation);
-    }, 900);
-    timers.add(timer);
+    scheduleCleanup(900);
   };
 
   const onPointerDown = (event: PointerEvent) => {
@@ -1701,6 +2038,353 @@ function mountPlayableFeedback(
     element.style.transition = previousTransition;
     animation?.cancel();
     if (previousShape) Object.assign(element.style, previousShape);
+  };
+}
+
+function mountPlayableExtendedFeedback(
+  element: HTMLElement,
+  feedback: Exclude<
+    PlayableButtonFeedback,
+    | "hover-press"
+    | "idle-pulse-hover-press"
+    | "bounce-hover-press"
+    | "ripple-hint"
+    | "none"
+  >,
+): () => void {
+  const view = element.ownerDocument.defaultView;
+  const host = element.ownerDocument.body;
+  if (!view || !host) return () => {};
+
+  const previous = {
+    translate: element.style.getPropertyValue("translate"),
+    scale: element.style.getPropertyValue("scale"),
+    filter: element.style.filter,
+    outline: element.style.outline,
+    outlineOffset: element.style.outlineOffset,
+    ariaPressed: element.getAttribute("aria-pressed"),
+    selected: element.getAttribute("data-putenggame-motion-selected"),
+  };
+  const animations = new Set<Animation>();
+  const overlays = new Set<HTMLElement>();
+  const timers = new Set<number>();
+  let animation: Animation | undefined;
+
+  const prefersReducedMotion = view.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  const playAnimation = (
+    target: HTMLElement,
+    frames: Keyframe[],
+    options: KeyframeAnimationOptions,
+  ) => {
+    if (prefersReducedMotion) return undefined;
+    const next = target.animate(frames, options);
+    animations.add(next);
+    return next;
+  };
+  const removeAfter = (target: HTMLElement, duration: number) => {
+    overlays.add(target);
+    const timer = view.setTimeout(() => {
+      target.remove();
+      overlays.delete(target);
+      timers.delete(timer);
+    }, duration);
+    timers.add(timer);
+  };
+  const addOverlay = (
+    rect: DOMRect,
+    styles: Partial<CSSStyleDeclaration>,
+  ) => {
+    const overlay = element.ownerDocument.createElement("span");
+    overlay.setAttribute("aria-hidden", "true");
+    Object.assign(overlay.style, {
+      position: "fixed",
+      left: `${rect.left + rect.width / 2}px`,
+      top: `${rect.top + rect.height / 2}px`,
+      pointerEvents: "none",
+      zIndex: "2147483647",
+      ...styles,
+    });
+    host.append(overlay);
+    return overlay;
+  };
+
+  if (feedback === "idle-float" || feedback === "idle-glow") {
+    const property = feedback === "idle-float" ? "translate" : "filter";
+    const from =
+      feedback === "idle-float"
+        ? "0 0"
+        : "drop-shadow(0 0 0 transparent)";
+    const peak =
+      feedback === "idle-float"
+        ? "0 -5px"
+        : "drop-shadow(0 0 7px currentColor)";
+    animation = playAnimation(
+      element,
+      [{ [property]: from }, { [property]: peak }, { [property]: from }],
+      {
+        duration: feedback === "idle-float" ? 1700 : 1450,
+        iterations: Infinity,
+        easing: "ease-in-out",
+      },
+    );
+    if (animation) animation.id = PLAYABLE_EDITOR_FEEDBACK_ANIMATION_ID;
+  }
+
+  if (feedback === "hover-lift") {
+    let hovered = false;
+    let focused = false;
+    let pressed = false;
+    const transition = element.style.transition;
+    const hasTransition = (property: string) =>
+      transition
+        .split(",")
+        .some((item) => item.trim().startsWith(property));
+    element.style.transition = [
+      transition,
+      ...["translate", "scale", "filter"]
+        .filter((property) => !hasTransition(property))
+        .map((property) => `${property} 140ms ease-out`),
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const updateLift = () => {
+      const elevated = hovered || focused;
+      element.style.setProperty(
+        "translate",
+        !pressed && elevated ? "0 -4px" : previous.translate,
+      );
+      element.style.setProperty(
+        "scale",
+        pressed ? "0.96" : previous.scale,
+      );
+      element.style.filter = elevated
+        ? "drop-shadow(0 5px 4px rgba(0, 0, 0, .28))"
+        : previous.filter;
+    };
+    const onPointerEnter = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      hovered = true;
+      updateLift();
+    };
+    const onPointerLeave = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      hovered = false;
+      updateLift();
+    };
+    const onFocus = () => {
+      focused = true;
+      updateLift();
+    };
+    const onBlur = () => {
+      focused = false;
+      updateLift();
+    };
+    const onDown = () => {
+      pressed = true;
+      updateLift();
+    };
+    const onUp = () => {
+      pressed = false;
+      updateLift();
+    };
+    element.addEventListener("pointerenter", onPointerEnter);
+    element.addEventListener("pointerleave", onPointerLeave);
+    element.addEventListener("focus", onFocus);
+    element.addEventListener("blur", onBlur);
+    element.addEventListener("pointerdown", onDown);
+    element.addEventListener("keydown", onDown);
+    view.addEventListener("pointerup", onUp);
+    view.addEventListener("pointercancel", onUp);
+    element.addEventListener("keyup", onUp);
+    return () => {
+      element.removeEventListener("pointerenter", onPointerEnter);
+      element.removeEventListener("pointerleave", onPointerLeave);
+      element.removeEventListener("focus", onFocus);
+      element.removeEventListener("blur", onBlur);
+      element.removeEventListener("pointerdown", onDown);
+      element.removeEventListener("keydown", onDown);
+      view.removeEventListener("pointerup", onUp);
+      view.removeEventListener("pointercancel", onUp);
+      element.removeEventListener("keyup", onUp);
+      element.style.setProperty("translate", previous.translate);
+      element.style.setProperty("scale", previous.scale);
+      element.style.filter = previous.filter;
+      element.style.transition = transition;
+    };
+  }
+
+  if (feedback === "success-check" || feedback === "error-shake") {
+    const onClick = () => {
+      const rect = element.getBoundingClientRect();
+      const radius = view.getComputedStyle(element).borderRadius || "6px";
+      if (feedback === "success-check") {
+        const badge = addOverlay(rect, {
+          width: "30px",
+          height: "30px",
+          marginLeft: "-15px",
+          marginTop: "-15px",
+          borderRadius: "50%",
+          background: "#20a96b",
+          boxShadow: "0 2px 10px rgba(0, 0, 0, .28)",
+          opacity: "0",
+          transform: "scale(.3)",
+        });
+        badge.dataset.putenggameButtonFeedback = feedback;
+        const check = element.ownerDocument.createElement("span");
+        Object.assign(check.style, {
+          position: "absolute",
+          left: "9px",
+          top: "7px",
+          width: "7px",
+          height: "12px",
+          borderRight: "3px solid #fff",
+          borderBottom: "3px solid #fff",
+          transform: "rotate(42deg)",
+        });
+        badge.append(check);
+        playAnimation(
+          badge,
+          [
+            { opacity: 0, transform: "scale(.3) translateY(6px)" },
+            { opacity: 1, offset: 0.28, transform: "scale(1.18)" },
+            { opacity: 0, transform: "scale(.85) translateY(-8px)" },
+          ],
+          { duration: 620, easing: "cubic-bezier(.16,.8,.24,1)" },
+        );
+        removeAfter(badge, 700);
+      } else {
+        const outline = addOverlay(rect, {
+          width: `${Math.max(rect.width, 24)}px`,
+          height: `${Math.max(rect.height, 24)}px`,
+          marginLeft: `${-Math.max(rect.width, 24) / 2}px`,
+          marginTop: `${-Math.max(rect.height, 24) / 2}px`,
+          boxSizing: "border-box",
+          border: "2px solid #ff5364",
+          borderRadius: radius,
+          boxShadow: "0 0 12px rgba(255, 83, 100, .72)",
+          opacity: "0",
+        });
+        outline.dataset.putenggameButtonFeedback = feedback;
+        playAnimation(
+          outline,
+          [
+            { opacity: 0, translate: "0 0" },
+            { opacity: 1, offset: 0.15, translate: "-5px 0" },
+            { opacity: 1, offset: 0.3, translate: "5px 0" },
+            { opacity: 1, offset: 0.45, translate: "-4px 0" },
+            { opacity: 0, translate: "0 0" },
+          ],
+          { duration: 440, easing: "ease-out" },
+        );
+        removeAfter(outline, 500);
+      }
+    };
+    element.addEventListener("click", onClick, true);
+    return () => {
+      element.removeEventListener("click", onClick, true);
+      for (const timer of timers) view.clearTimeout(timer);
+      for (const overlay of overlays) overlay.remove();
+      for (const current of animations) current.cancel();
+    };
+  }
+
+  if (feedback === "selected-toggle") {
+    let selected =
+      element.getAttribute("aria-pressed") === "true" ||
+      element.getAttribute("data-putenggame-motion-selected") === "true";
+    const applySelected = () => {
+      element.setAttribute("aria-pressed", String(selected));
+      element.setAttribute(
+        "data-putenggame-motion-selected",
+        String(selected),
+      );
+      element.style.outline = selected ? "2px solid #fff" : previous.outline;
+      element.style.outlineOffset = selected ? "3px" : previous.outlineOffset;
+      element.style.filter = selected
+        ? "drop-shadow(0 0 8px rgba(105, 196, 255, .9))"
+        : previous.filter;
+    };
+    const onClick = () => {
+      selected = !selected;
+      applySelected();
+    };
+    applySelected();
+    element.addEventListener("click", onClick);
+    return () => {
+      element.removeEventListener("click", onClick);
+      element.style.outline = previous.outline;
+      element.style.outlineOffset = previous.outlineOffset;
+      element.style.filter = previous.filter;
+      if (previous.ariaPressed === null)
+        element.removeAttribute("aria-pressed");
+      else element.setAttribute("aria-pressed", previous.ariaPressed);
+      if (previous.selected === null)
+        element.removeAttribute("data-putenggame-motion-selected");
+      else
+        element.setAttribute(
+          "data-putenggame-motion-selected",
+          previous.selected,
+        );
+    };
+  }
+
+  const engaged = { hovered: false, focused: false, pressed: false };
+  const updateIdleAnimation = () => {
+    if (!animation) return;
+    if (engaged.hovered || engaged.focused || engaged.pressed)
+      animation.pause();
+    else animation.play();
+  };
+  const onPointerEnter = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
+    engaged.hovered = true;
+    updateIdleAnimation();
+  };
+  const onPointerLeave = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
+    engaged.hovered = false;
+    updateIdleAnimation();
+  };
+  const onFocus = () => {
+    engaged.focused = true;
+    updateIdleAnimation();
+  };
+  const onBlur = () => {
+    engaged.focused = false;
+    updateIdleAnimation();
+  };
+  const onDown = () => {
+    engaged.pressed = true;
+    updateIdleAnimation();
+  };
+  const onUp = () => {
+    engaged.pressed = false;
+    updateIdleAnimation();
+  };
+  element.addEventListener("pointerenter", onPointerEnter);
+  element.addEventListener("pointerleave", onPointerLeave);
+  element.addEventListener("focus", onFocus);
+  element.addEventListener("blur", onBlur);
+  element.addEventListener("pointerdown", onDown);
+  element.addEventListener("keydown", onDown);
+  view.addEventListener("pointerup", onUp);
+  view.addEventListener("pointercancel", onUp);
+  element.addEventListener("keyup", onUp);
+
+  return () => {
+    element.removeEventListener("pointerenter", onPointerEnter);
+    element.removeEventListener("pointerleave", onPointerLeave);
+    element.removeEventListener("focus", onFocus);
+    element.removeEventListener("blur", onBlur);
+    element.removeEventListener("pointerdown", onDown);
+    element.removeEventListener("keydown", onDown);
+    view.removeEventListener("pointerup", onUp);
+    view.removeEventListener("pointercancel", onUp);
+    element.removeEventListener("keyup", onUp);
+    animation?.cancel();
+    for (const current of animations) current.cancel();
   };
 }
 

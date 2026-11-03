@@ -10,6 +10,7 @@ export function StoryTreeInlineNameEditor({
   displaySelected,
   onDisplayClick,
   afterDisplay,
+  editRequest,
   label,
   disabled,
   onSave,
@@ -22,6 +23,7 @@ export function StoryTreeInlineNameEditor({
   displaySelected?: boolean;
   onDisplayClick?: () => void;
   afterDisplay?: ReactNode;
+  editRequest?: number;
   label: string;
   disabled: boolean;
   onSave: (value: string) => void;
@@ -29,6 +31,7 @@ export function StoryTreeInlineNameEditor({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayValue);
   const input = useRef<HTMLInputElement>(null);
+  const handledEditRequest = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (editing) {
@@ -38,6 +41,17 @@ export function StoryTreeInlineNameEditor({
     }
     setDraft(displayValue);
   }, [displayValue, editing]);
+
+  useEffect(() => {
+    if (
+      editRequest === undefined ||
+      editRequest === handledEditRequest.current
+    )
+      return;
+    handledEditRequest.current = editRequest;
+    setDraft(displayValue);
+    setEditing(true);
+  }, [displayValue, editRequest]);
 
   function finish(commit: boolean): void {
     if (commit) {

@@ -365,8 +365,18 @@ describe("Affection Template", () => {
         mount: (context: never) => () => void;
       };
       const configText = source.html.match(/data-affection-config>(.*?)<\/script>/)?.[1]!;
+      const configValue = JSON.parse(configText) as {
+        effects?: Array<{ id: string; characterId: string; delta: number; trigger: string; onceKey?: string }>;
+      };
+      configValue.effects = [{
+        id: "scene-end-trust",
+        characterId: "affection_lan",
+        delta: 1,
+        trigger: "scene-end",
+        onceKey: "scene_end_trust_applied",
+      }];
       const config = new FakeElement("script");
-      config.textContent = configText;
+      config.textContent = JSON.stringify(configValue);
       const roster = new FakeElement("div");
       const choices = new FakeElement("div");
       const root = {
@@ -379,9 +389,10 @@ describe("Affection Template", () => {
       globalThis.document = {
         createElement: (tag: string) => new FakeElement(tag),
       } as unknown as Document;
-      const state: Record<string, number> = { affection_lan: 0 };
+      const state: Record<string, number | boolean> = { affection_lan: 0 };
       const listeners = new Set<() => void>();
       const emitted: string[] = [];
+      let exitHandler: (() => void | Promise<void>) | undefined;
       const cleanup = mount({
         root,
         state: {
@@ -390,17 +401,41 @@ describe("Affection Template", () => {
             state[key] = value;
             listeners.forEach((listener) => listener());
           },
+          patch: async (values: Record<string, number | boolean>) => {
+            Object.assign(state, values);
+            listeners.forEach((listener) => listener());
+          },
           subscribe: (listener: () => void) => {
             listeners.add(listener);
             return () => listeners.delete(listener);
           },
         },
-        navigation: { emit: async (signal: string) => { emitted.push(signal); } },
+        navigation: {
+          emit: async (signal: string) => {
+            await exitHandler?.();
+            emitted.push(signal);
+          },
+        },
+        lifecycle: {
+          signal: new AbortController().signal,
+          onExit: (listener: () => void | Promise<void>) => {
+            exitHandler = listener;
+            return () => {
+              if (exitHandler === listener) exitHandler = undefined;
+            };
+          },
+        },
       } as never);
 
-      await choices.children[0]!.click();
+      await choices.children[1]!.click();
       expect(state.affection_lan).toBe(2);
-      expect(emitted).toEqual(["closer"]);
+      expect(state.scene_end_trust_applied).toBe(true);
+      expect(emitted).toEqual(["guarded"]);
+      await choices.children[0]!.click();
+      expect(state.affection_lan).toBe(4);
+      expect(emitted).toEqual(["guarded", "closer"]);
+      await exitHandler?.();
+      expect(state.affection_lan).toBe(4);
       cleanup();
     } finally {
       globalThis.document = previousDocument;

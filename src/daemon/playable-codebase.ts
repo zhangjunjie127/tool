@@ -108,6 +108,7 @@ Each Node module exports \`mount(context)\`. The Runtime supplies:
 - \`context.session.hasSave()\`, \`save()\`, \`continue()\`, \`restart()\`, and \`reset()\`.
 - \`context.story.map()\`: the story laid out from the graph in rows from the Start, with what the player has seen across every game. Nodes have \`id\`, \`label\`, \`row\`, \`column\` (from the left of its row of \`rowSize\`), \`ending\`, and \`seen\`; edges have \`from\`, \`to\`, and \`seen\`. It leaves out \`push\` side screens, navigation Signals, steps back up the story, and Nodes with \`story.hidden\`.
 - \`context.lifecycle.signal\`: aborted before cleanup when the Node exits.
+- \`context.lifecycle.onExit(listener)\`: optionally registers async work that must finish before the Node exits.
 
 A shared component receives the Node's context from the Node that mounts it, so it emits that Node's Signals: every Node that shows it declares them in \`graph.json\`.
 

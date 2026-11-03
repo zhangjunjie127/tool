@@ -534,6 +534,24 @@ describe("Playable sandbox", () => {
       },
     };
     expect(isPlayableHostMessage(message)).toBe(true);
+    for (const feedback of [
+      "idle-float",
+      "idle-glow",
+      "hover-lift",
+      "success-check",
+      "error-shake",
+      "selected-toggle",
+    ] as const) {
+      expect(
+        isPlayableHostMessage({
+          ...message,
+          command: {
+            ...message.command,
+            config: { ...message.command.config, feedback },
+          },
+        }),
+      ).toBe(true);
+    }
     expect(
       isPlayableHostMessage({
         ...message,

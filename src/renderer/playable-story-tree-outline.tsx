@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -17,12 +17,18 @@ import {
   type PlayableStoryTreeCanvasEdge,
   type PlayableStoryTreeSection,
 } from "../shared/playable-story-tree.js";
+import { storyTreeActionBeat } from "../shared/playable-story-tree-actions.js";
+import {
+  playableStoryTreeChoiceLabel,
+  uniquePlayableStoryTreeActions,
+} from "../shared/playable-story-tree-routes.js";
 
 export function PlayableStoryTreeOutline({
   tree,
   selectedSectionId,
   canvasNodeIds,
   canvasEdges,
+  focusRequest,
   onSelectSection,
   onConfirmRoute,
   disabled = false,
@@ -31,6 +37,7 @@ export function PlayableStoryTreeOutline({
   selectedSectionId?: string;
   canvasNodeIds?: readonly string[];
   canvasEdges?: readonly PlayableStoryTreeCanvasEdge[];
+  focusRequest?: { sequence: number; sectionId: string };
   onSelectSection: (sectionId: string) => void;
   onConfirmRoute?: (routeId: string) => void;
   disabled?: boolean;
@@ -57,6 +64,62 @@ export function PlayableStoryTreeOutline({
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(
     () => new Set(),
   );
+  const handledFocusSequence = useRef(0);
+  const sectionButtons = useRef(new Map<string, HTMLButtonElement>());
+
+  useEffect(() => {
+    if (
+      !focusRequest ||
+      focusRequest.sequence <= handledFocusSequence.current
+    )
+      return;
+    handledFocusSequence.current = focusRequest.sequence;
+    for (const chapter of tree.chapters) {
+      const episode = chapter.episodes.find((item) =>
+        item.sections.some(
+          (section) =>
+            section.id === focusRequest.sectionId && !section.sourceRemoved,
+        ),
+      );
+      if (!episode) continue;
+      setCollapsedEpisodes((current) => {
+        if (!current.has(episode.id)) return current;
+        const next = new Set(current);
+        next.delete(episode.id);
+        return next;
+      });
+      const activeSections = episode.sections.filter(
+        (section) => !section.sourceRemoved,
+      );
+      const branchGroup = groupEpisodeSections(
+        episode.id,
+        activeSections,
+      ).find(
+        (group) =>
+          group.kind === "branches" &&
+          group.sections.some(
+            (section) => section.id === focusRequest.sectionId,
+          ),
+      );
+      if (branchGroup?.kind === "branches") {
+        const branchGroupId = branchGroup.id;
+        setCollapsedBranches((current) => {
+          if (!current.has(branchGroupId)) return current;
+          const next = new Set(current);
+          next.delete(branchGroupId);
+          return next;
+        });
+      }
+      break;
+    }
+  }, [focusRequest, tree]);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    sectionButtons.current
+      .get(focusRequest.sectionId)
+      ?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [collapsedBranches, collapsedEpisodes, focusRequest]);
 
   function toggleEpisode(episodeId: string): void {
     setCollapsedEpisodes((current) => {
@@ -214,6 +277,11 @@ export function PlayableStoryTreeOutline({
                                           section.id,
                                         )
                                       }
+                                      onButtonRef={(id, element) => {
+                                        if (element)
+                                          sectionButtons.current.set(id, element);
+                                        else sectionButtons.current.delete(id);
+                                      }}
                                     />
                                   ))}
                                 </div>
@@ -246,6 +314,11 @@ export function PlayableStoryTreeOutline({
                                   group.section.id,
                                 )
                               }
+                              onButtonRef={(id, element) => {
+                                if (element)
+                                  sectionButtons.current.set(id, element);
+                                else sectionButtons.current.delete(id);
+                              }}
                             />
                           ),
                         )}
@@ -260,6 +333,47 @@ export function PlayableStoryTreeOutline({
       })}
     </div>
   );
+}
+
+function storyTreeDisplayRouteLabels(
+  section: PlayableStoryTreeSection,
+  links: readonly PlayableStoryTree["links"][number][],
+  sectionsById: ReadonlyMap<string, PlayableStoryTreeSection>,
+): ReadonlyMap<string, string> {
+  const choices = uniquePlayableStoryTreeActions(section.beats).filter(
+    (beat) => beat.kind === "choice",
+  );
+  if (!choices.length || links.length !== choices.length) return new Map();
+
+  const sectionWithChoices = { ...section, beats: choices };
+  const assigned = new Set<string>();
+  const labels = new Map<string, string>();
+  const unmatched: typeof links[number][] = [];
+  for (const link of links) {
+    const action = storyTreeActionBeat(
+      sectionWithChoices,
+      link.label,
+      sectionsById.get(link.toSectionId)?.title,
+    );
+    if (!action || assigned.has(action.id)) {
+      unmatched.push(link);
+      continue;
+    }
+    assigned.add(action.id);
+    labels.set(link.id, playableStoryTreeChoiceLabel(action.text));
+  }
+
+  const remainingChoices = choices.filter(
+    (choice) => !assigned.has(choice.id),
+  );
+  if (unmatched.length !== remainingChoices.length) return labels;
+  for (const [index, link] of unmatched.entries()) {
+    labels.set(
+      link.id,
+      playableStoryTreeChoiceLabel(remainingChoices[index]!.text),
+    );
+  }
+  return labels;
 }
 
 function episodeRouteWarning(
@@ -381,6 +495,7 @@ function StoryTreeOutlineSection({
   disabled,
   missingIncoming,
   missingOutgoing,
+  onButtonRef,
 }: {
   section: PlayableStoryTreeSection;
   sectionsById: Map<string, PlayableStoryTreeSection>;
@@ -391,6 +506,10 @@ function StoryTreeOutlineSection({
   disabled: boolean;
   missingIncoming: boolean;
   missingOutgoing: boolean;
+  onButtonRef: (
+    sectionId: string,
+    element: HTMLButtonElement | null,
+  ) => void;
 }) {
   const hasDetails =
     links.length > 0 ||
@@ -401,6 +520,11 @@ function StoryTreeOutlineSection({
   const visibleLinks = links.filter((link) =>
     sectionsById.has(link.toSectionId),
   );
+  const displayLinkLabels = storyTreeDisplayRouteLabels(
+    section,
+    visibleLinks,
+    sectionsById,
+  );
   const choiceCount = section.beats.filter(
     (beat) => beat.kind === "choice",
   ).length;
@@ -410,6 +534,7 @@ function StoryTreeOutlineSection({
       <div className="story-tree-outline-scene-row">
         <button
           type="button"
+          ref={(element) => onButtonRef(section.id, element)}
           className={`story-tree-outline-scene${selected ? " is-selected" : ""}`}
           aria-pressed={selected}
           onClick={() => onSelectSection(section.id)}
@@ -446,6 +571,9 @@ function StoryTreeOutlineSection({
           {visibleLinks.map((link, index) => {
             const target = sectionsById.get(link.toSectionId);
             if (!target) return null;
+            const displayLabel = displayLinkLabels.get(link.id);
+            const routeLabel = displayLabel ?? link.label;
+            const resolvedLabel = routeLabel || t("storyTree.unconfirmedRoute");
             return (
               <div
                 className="story-tree-outline-leaf story-tree-outline-route"
@@ -457,13 +585,22 @@ function StoryTreeOutlineSection({
                   }
                 >
                   {visibleLinks.length > 1 ? optionPrefix(index) : ""}
-                  {link.label || t("storyTree.unconfirmedRoute")}
+                  {resolvedLabel}
                 </span>
+                {link.affectionConditions?.map((condition) => (
+                  <small className="story-tree-outline-affection-route" key={`${condition.characterId}-${condition.operator}-${condition.value}`}>
+                    {t("storyTree.affectionCondition", {
+                      name: condition.characterName,
+                      operator: condition.operator,
+                      value: condition.value,
+                    })}
+                  </small>
+                ))}
                 <ArrowRight size={13} aria-hidden="true" />
                 <button
                   className="story-tree-outline-target"
                   type="button"
-                  aria-label={`${link.label || t("storyTree.unconfirmedRoute")} ${target.title} ${t(`storyTree.${link.status}`)}`}
+                  aria-label={`${resolvedLabel} ${target.title} ${t(`storyTree.${link.status}`)}`}
                   onClick={() => onSelectSection(target.id)}
                 >
                   {target.title}
@@ -572,6 +709,16 @@ function StoryTreeOutlineBeat({
         {choicePrefix}
         {beat.text}
       </span>
+      {beat.affection ? (
+        <em className="story-tree-outline-affection">
+          {t("storyTree.affectionDelta", {
+            name: beat.affection.characterName,
+            delta: beat.affection.delta > 0
+              ? `+${beat.affection.delta}`
+              : String(beat.affection.delta),
+          })}
+        </em>
+      ) : null}
     </div>
   );
 }

@@ -5,6 +5,10 @@ import {
   type PlayableStoryTreeLink,
   type PlayableStoryTreeSection,
 } from "./playable-story-tree.js";
+import {
+  normalizePlayableStoryTreeActionText,
+  uniquePlayableStoryTreeActions,
+} from "./playable-story-tree-routes.js";
 
 export interface StoryTreeGenerationRoute extends PlayableStoryTreeLink {
   action?: PlayableStoryTreeSection["beats"][number];
@@ -16,46 +20,48 @@ export function storyTreeGenerationRoutes(
   section: PlayableStoryTreeSection,
 ): StoryTreeGenerationRoute[] {
   const sections = playableStoryTreeSections(tree);
-  const actions = section.beats.filter(
-    (beat) => beat.kind === "choice" || beat.kind === "operation",
-  );
-  const routes: StoryTreeGenerationRoute[] = tree.links
-    .filter((link) => link.fromSectionId === section.id)
-    .map((link) => ({ ...link }));
+  const actions = uniquePlayableStoryTreeActions(section.beats);
+  const routes: StoryTreeGenerationRoute[] = deduplicateGenerationLinks(
+    tree.links.filter((link) => link.fromSectionId === section.id),
+  ).map((link) => ({ ...link }));
   const assigned = new Set<string>();
   for (const route of routes) {
     const action = storyTreeActionBeat(
       { ...section, beats: actions.filter((beat) => !assigned.has(beat.id)) },
       route.label,
       sections.find((item) => item.id === route.toSectionId)?.title,
-      -1,
-      -1,
     );
     if (action) {
       route.action = action;
       assigned.add(action.id);
     }
   }
-  for (const route of routes) {
-    if (route.action) continue;
-    const action = actions.find((beat) => !assigned.has(beat.id));
-    if (action) {
-      route.action = action;
-      assigned.add(action.id);
+  const remainingRoutes = routes.filter((route) => !route.action);
+  const remainingActions = actions.filter((action) => !assigned.has(action.id));
+  if (remainingRoutes.length > 0 && remainingRoutes.length === remainingActions.length) {
+    for (const [index, route] of remainingRoutes.entries()) {
+      route.action = remainingActions[index];
+      assigned.add(remainingActions[index]!.id);
     }
   }
-  for (const action of actions) {
-    if (assigned.has(action.id)) continue;
-    routes.push({
+  const actionOrder = new Map(actions.map((action, index) => [action.id, index]));
+  const matchedRoutes = routes
+    .filter((route) => route.action)
+    .sort((left, right) =>
+      actionOrder.get(left.action!.id)! - actionOrder.get(right.action!.id)!,
+    );
+  const unmatchedRoutes = routes.filter((route) => !route.action);
+  const unconnectedActions = actions
+    .filter((action) => !assigned.has(action.id))
+    .map((action) => ({
       id: `action-${action.id}`,
       fromSectionId: section.id,
       toSectionId: "",
       label: action.text.slice(0, 240),
-      status: "suggested",
+      status: "suggested" as const,
       action,
-    });
-  }
-  return routes;
+    }));
+  return [...matchedRoutes, ...unmatchedRoutes, ...unconnectedActions];
 }
 
 // Shared by generation and its read-only preview so the displayed bindings agree.
@@ -63,33 +69,29 @@ export function storyTreeActionBeat(
   section: PlayableStoryTreeSection,
   linkLabel: string,
   targetTitle: string | undefined,
-  routeIndex: number,
-  routeCount: number,
 ): PlayableStoryTreeSection["beats"][number] | undefined {
-  const actions = section.beats.filter(
-    (beat) => beat.kind === "choice" || beat.kind === "operation",
-  );
+  const actions = uniquePlayableStoryTreeActions(section.beats);
   const routeLabels = [linkLabel, targetTitle]
     .filter((value): value is string => Boolean(value))
-    .map(normalizeStoryActionText)
+    .map(normalizePlayableStoryTreeActionText)
     .filter((value) => value && value !== "继续" && value !== "下一集");
-  const matched = actions.find((beat) => {
-    const text = normalizeStoryActionText(beat.text);
-    return routeLabels.some(
-      (label) => text.includes(label) || label.includes(text),
+  const scored = actions.map((beat) => {
+    const text = normalizePlayableStoryTreeActionText(beat.text);
+    const score = Math.max(
+      0,
+      ...routeLabels.map((label) =>
+        text === label
+          ? 2
+          : text.includes(label) || label.includes(text)
+            ? 1
+            : 0,
+      ),
     );
+    return { beat, score };
   });
-  if (matched) return matched;
-
-  const choices = actions.filter((beat) => beat.kind === "choice");
-  if (choices.length === routeCount) return choices[routeIndex];
-  if (choices.length === 1 && routeCount === 1) return choices[0];
-
-  const operations = actions.filter((beat) => beat.kind === "operation");
-  if (choices.length) return undefined;
-  if (operations.length === routeCount) return operations[routeIndex];
-  if (operations.length === 1 && routeCount === 1) return operations[0];
-  return undefined;
+  const bestScore = Math.max(0, ...scored.map((item) => item.score));
+  const matches = scored.filter((item) => item.score === bestScore && bestScore > 0);
+  return matches.length === 1 ? matches[0]!.beat : undefined;
 }
 
 export function storyTreeOperationMotion(
@@ -200,12 +202,14 @@ export function storyTreeOperationMotion(
   return undefined;
 }
 
-function normalizeStoryActionText(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(
-      /^(?:选项|选择|操作)\s*(?:[a-z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/u,
-      "",
-    )
-    .replace(/[\s，。；、：:!！?？"'“”‘’（）()【】\[\]<>《》]/gu, "");
+function deduplicateGenerationLinks(
+  links: readonly PlayableStoryTreeLink[],
+): PlayableStoryTreeLink[] {
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    const key = `${link.toSectionId}\0${normalizePlayableStoryTreeActionText(link.label)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

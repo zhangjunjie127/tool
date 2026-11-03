@@ -370,6 +370,22 @@ describe("Node Runtime", () => {
     });
   });
 
+  it("runs registered exit handlers before aborting the exiting Scene", async () => {
+    const { runtime, host } = createRuntime();
+    await runtime.start();
+    const menu = nodeContext(host, "menu");
+    const exitSignals: boolean[] = [];
+    menu.lifecycle.onExit?.(async () => {
+      exitSignals.push(menu.lifecycle.signal.aborted);
+      await menu.state.set("hasKey", true);
+    });
+
+    await menu.navigation.emit("start");
+
+    expect(exitSignals).toEqual([false]);
+    expect(runtime.snapshot().state).toMatchObject({ hasKey: true });
+  });
+
   it("rejects navigation while a surface is mounting", async () => {
     const host = new FakeSurfaceHost();
     let nodeNavigation: Promise<void> | undefined;

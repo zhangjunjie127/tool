@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { expect, it, vi } from "vitest";
 import {
+  PLAYABLE_BUTTON_FEEDBACKS,
+  PLAYABLE_BUTTON_PRESS_EFFECTS,
   PLAYABLE_MOTION_ATTRIBUTES,
   insertPlayableButtonPreset,
   insertPlayableMediaElement,
@@ -3389,6 +3391,170 @@ it("stores a press effect and its attachment point on the button preset", () => 
   button.setAttribute("data-putenggame-motion-effect-color", "#3478f6");
   button.setAttribute("data-putenggame-motion-effect-offset-x", "501");
   expect(parsePlayableMotionConfig(button)).toBeUndefined();
+});
+
+it.each(PLAYABLE_BUTTON_PRESS_EFFECTS)(
+  "renders the $id click effect and removes it when the node unmounts",
+  (effect) => {
+    const originalAnimate = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "animate",
+    );
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      value: vi.fn(() => ({ cancel: vi.fn() }) as unknown as Animation),
+    });
+
+    const button = document.createElement("button");
+    for (const [name, value] of Object.entries({
+      [PLAYABLE_MOTION_ATTRIBUTES.kind]: "button-feedback",
+      [PLAYABLE_MOTION_ATTRIBUTES.mode]: "visual",
+      [PLAYABLE_MOTION_ATTRIBUTES.duration]: "0.1",
+      [PLAYABLE_MOTION_ATTRIBUTES.feedback]: "hover-press",
+      [PLAYABLE_MOTION_ATTRIBUTES.pressEffect]: effect.id,
+      [PLAYABLE_MOTION_ATTRIBUTES.effectColor]: effect.defaultColor,
+    }))
+      button.setAttribute(name, value);
+    const context = {
+      root: document.createElement("div").attachShadow({ mode: "open" }),
+      assets: { url: () => "" },
+      state: {} as never,
+      session: {} as never,
+      story: {} as never,
+      lifecycle: { signal: new AbortController().signal },
+      navigation: {
+        emit: async () => {},
+        fail: async () => {},
+        back: async () => {},
+        connected: () => true,
+      },
+    };
+
+    let cleanup = () => {};
+    try {
+      cleanup = mountPlayableMotionElement(button, context);
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+        }),
+      );
+      const burst = document.body.querySelector<HTMLElement>(
+        `[data-putenggame-particle-burst="${effect.id}"]`,
+      );
+      expect(burst).not.toBeNull();
+      expect(burst!.childElementCount).toBeGreaterThan(0);
+      expect(
+        [...burst!.querySelectorAll<HTMLElement>("*")].every(
+          (part) => part.style.pointerEvents === "none",
+        ),
+      ).toBe(true);
+      cleanup();
+      expect(
+        document.body.querySelector(
+          `[data-putenggame-particle-burst="${effect.id}"]`,
+        ),
+      ).toBeNull();
+    } finally {
+      cleanup();
+      if (originalAnimate)
+        Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+      else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+    }
+  },
+);
+
+it.each(
+  PLAYABLE_BUTTON_FEEDBACKS.filter((feedback) =>
+    [
+      "idle-float",
+      "idle-glow",
+      "hover-lift",
+      "success-check",
+      "error-shake",
+      "selected-toggle",
+    ].includes(feedback),
+  ),
+)("mounts the %s button motion", (feedback) => {
+  const originalAnimate = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "animate",
+  );
+  Object.defineProperty(HTMLElement.prototype, "animate", {
+    configurable: true,
+    value: vi.fn(() => ({
+      cancel: vi.fn(),
+      pause: vi.fn(),
+      play: vi.fn(),
+    }) as unknown as Animation),
+  });
+  const button = document.createElement("button");
+  for (const [name, value] of Object.entries({
+    [PLAYABLE_MOTION_ATTRIBUTES.kind]: "button-feedback",
+    [PLAYABLE_MOTION_ATTRIBUTES.mode]: "visual",
+    [PLAYABLE_MOTION_ATTRIBUTES.duration]: "0.1",
+    [PLAYABLE_MOTION_ATTRIBUTES.feedback]: feedback,
+  }))
+    button.setAttribute(name, value);
+  const context = {
+    root: document.createElement("div").attachShadow({ mode: "open" }),
+    assets: { url: () => "" },
+    state: {} as never,
+    session: {} as never,
+    story: {} as never,
+    lifecycle: { signal: new AbortController().signal },
+    navigation: {
+      emit: async () => {},
+      fail: async () => {},
+      back: async () => {},
+      connected: () => true,
+    },
+  };
+
+  let cleanup = () => {};
+  try {
+    cleanup = mountPlayableMotionElement(button, context);
+    expect(parsePlayableMotionConfig(button)?.feedback).toBe(feedback);
+    if (feedback === "idle-float" || feedback === "idle-glow")
+      expect(HTMLElement.prototype.animate).toHaveBeenCalled();
+    if (feedback === "hover-lift") {
+      button.dispatchEvent(
+        new PointerEvent("pointerenter", {
+          bubbles: true,
+          pointerType: "mouse",
+        }),
+      );
+      expect(button.style.getPropertyValue("translate")).toBe("0 -4px");
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+      );
+      expect(button.style.getPropertyValue("scale")).toBe("0.96");
+    }
+    if (feedback === "success-check" || feedback === "error-shake") {
+      button.click();
+      expect(
+        document.body.querySelector(
+          `[data-putenggame-button-feedback="${feedback}"]`,
+        ),
+      ).not.toBeNull();
+    }
+    if (feedback === "selected-toggle") {
+      button.click();
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+      button.click();
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+    }
+    cleanup();
+    expect(
+      document.body.querySelector("[data-putenggame-button-feedback]"),
+    ).toBeNull();
+  } finally {
+    cleanup();
+    if (originalAnimate)
+      Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+    else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+  }
 });
 
 it("plays the particle burst from the button anchor, supports repeat presses, and cleans up", () => {

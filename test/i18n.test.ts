@@ -76,4 +76,9 @@ describe("t", () => {
     expect(t("sceneCard.defaultNodeTitle", { number: "1", lng: "zh-CN" })).toBe("场景1");
     expect(t("sceneCard.defaultNodeTitle", { number: "1", lng: "en" })).toBe("Scene 1");
   });
+
+  it("keeps the Next exit label distinct from the queue's run-next action", () => {
+    expect(translateText("Next", "zh-CN")).toBe("下一步");
+    expect(translateText("Run next", "zh-CN")).toBe("优先执行");
+  });
 });

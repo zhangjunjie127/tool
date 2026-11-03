@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import path from "node:path";
-import { act, useEffect } from "react";
+import { act, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStarterCodebaseWithScene } from "./playable-fixture.js";
@@ -17,6 +17,7 @@ let viewport = { x: 32, y: 64, zoom: 1.2 };
 let workbenchProps: Record<string, any> | undefined;
 let editorCanvasProps: Record<string, any> | undefined;
 let canvasNodeIdsChanged: ReturnType<typeof vi.fn>;
+let canvasNodeSelectionChanged: ReturnType<typeof vi.fn>;
 let flushCanvas: (() => Promise<void>) | undefined;
 let htmlSource = "<main>Original</main>";
 let persistedCodebase: NodeCodebaseUpdate | undefined;
@@ -25,6 +26,11 @@ vi.doMock(path.resolve("src/renderer/editor-canvas.tsx"), async original => ({
   EditorCanvas: (props: Record<string, any>) => {
     editorCanvasProps = props;
     move = props.onMoveEnd;
+    const selectedNodes = props.nodes.filter((node: { selected?: boolean }) => node.selected);
+    const selectedNodeIds = selectedNodes.map((node: { id: string }) => node.id).join(",");
+    useEffect(() => {
+      props.onSelectionChange?.({ nodes: selectedNodes, edges: [] });
+    }, [selectedNodeIds, props.onSelectionChange]);
     useEffect(() => { props.onInit({ getViewport: () => viewport } as ReactFlowInstance); }, []);
     return <button type="button" data-open-scene onClick={() => props.onNodeDoubleClick?.({}, props.nodes[0]!)}>Open scene</button>;
   },
@@ -85,6 +91,22 @@ vi.doMock(path.resolve("src/renderer/api.ts"), async original => ({
 }));
 const { PlayableEditorWorkspace } = await import("../src/renderer/playable-editor-workspace.js");
 const { getNodeCodebase } = await import("../src/renderer/api.js");
+
+function WorkspaceHarness() {
+  const [, setSelectionRevision] = useState(0);
+  const onCanvasNodeSelectionChange = useCallback((nodeId: string) => {
+    canvasNodeSelectionChanged(nodeId);
+    setSelectionRevision((revision) => revision + 1);
+  }, []);
+  return <PlayableEditorWorkspace
+    project={{ id: "p", type: "interactive-story" } as ProjectState} agentBusy={false} publishing={false}
+    onPublish={async () => false} onOpenPublish={() => {}} onClosePublish={() => {}}
+    onCanvasNodeIdsChange={canvasNodeIdsChanged}
+    onCanvasNodeSelectionChange={onCanvasNodeSelectionChange}
+    onCanvasSaveReady={(save) => { flushCanvas = save; }}
+  />;
+}
+
 let root: ReturnType<typeof createRoot>, container: HTMLDivElement;
 beforeEach(async () => {
   vi.useFakeTimers(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -98,16 +120,12 @@ beforeEach(async () => {
   workbenchProps = undefined;
   editorCanvasProps = undefined;
   canvasNodeIdsChanged = vi.fn();
+  canvasNodeSelectionChanged = vi.fn();
   flushCanvas = undefined;
   viewport = { x: 32, y: 64, zoom: 1.2 };
   desktopSave.cancel();
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
-  await act(async () => root.render(<PlayableEditorWorkspace
-    project={{ id: "p", type: "interactive-story" } as ProjectState} agentBusy={false} publishing={false}
-    onPublish={async () => false} onOpenPublish={() => {}} onClosePublish={() => {}}
-    onCanvasNodeIdsChange={canvasNodeIdsChanged}
-    onCanvasSaveReady={(save) => { flushCanvas = save; }}
-  />));
+  await act(async () => root.render(<WorkspaceHarness />));
   await act(async () => move(null, { x: 32, y: 64, zoom: 1.2 }));
   expect(update).not.toHaveBeenCalled();
 });
@@ -169,6 +187,19 @@ it("reports deleted canvas nodes and flushes them before story-tree sync", async
       graph: expect.objectContaining({ nodes: [] }),
     }),
   );
+});
+
+it("keeps the selection callback stable while selected-node state rerenders the canvas", async () => {
+  const initialSelectionChange = editorCanvasProps!.onSelectionChange;
+
+  await act(async () => {
+    editorCanvasProps!.onNodesChange([
+      { id: "start", type: "select", selected: true },
+    ]);
+  });
+
+  expect(editorCanvasProps!.onSelectionChange).toBe(initialSelectionChange);
+  expect(canvasNodeSelectionChanged).toHaveBeenCalledExactlyOnceWith("start");
 });
 
 it("flushes a pending scene edit when the page is refreshed before autosave", async () => {

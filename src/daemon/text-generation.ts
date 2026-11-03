@@ -9,8 +9,11 @@ import {
   playableStoryTreeAnalysisFingerprint,
   playableStoryTreeSections,
   type PlayableStoryTree,
+  type PlayableStoryTreeAffectionChange,
+  type PlayableStoryTreeAffectionCondition,
   type PlayableStoryTreeSection,
 } from "../shared/playable-story-tree.js";
+import { affectionCharacterId } from "../shared/playable-affection.js";
 import { isOpenRouterModel, withOpenRouterAttribution } from "./openrouter-attribution.js";
 import { normalizeAssistantText } from "./assistant-thinking.js";
 import { clampReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
@@ -165,18 +168,46 @@ export async function analyzePlayableStoryTree(
       title: section.title,
       beats: section.sourceSnapshot.beats,
     };
+    const baseBeats = section.sourcePending ? source.beats : section.beats;
+    const analyzedBeats = baseBeats.map((beat) => {
+      const change = analysis.affectionChanges.find((item) => item.beatId === beat.id);
+      return change
+        ? {
+            ...beat,
+            affection: {
+              characterId: change.characterId,
+              characterName: change.characterName,
+              delta: change.delta,
+              trigger: change.trigger,
+              sourceText: change.sourceText,
+              ...(change.threshold !== undefined ? { threshold: change.threshold } : {}),
+            },
+          }
+        : beat;
+    });
+    const sectionAffectionChanges = [
+      ...analyzedBeats.flatMap((beat) =>
+        beat.affection && beat.affection.trigger !== "choice" ? [beat.affection] : [],
+      ),
+      ...analysis.affectionChanges
+        .filter((item) => !item.beatId)
+        .map(({ beatId: _beatId, ...change }) => change),
+    ];
     sectionUpdates.set(section.id, {
       ...section,
       kind: analysis.kind,
       objective: analysis.objective,
       prerequisite: analysis.prerequisite,
-      beats: section.sourcePending ? source.beats : section.beats,
+      beats: analyzedBeats,
+      ...(sectionAffectionChanges.length
+        ? { affectionChanges: sectionAffectionChanges }
+        : { affectionChanges: undefined }),
       scriptText: source.body,
       sourceSnapshot: {
         heading: source.heading,
         body: source.body,
         title: source.title,
-        beats: structuredClone(source.beats),
+        beats: structuredClone(section.sourcePending ? analyzedBeats : source.beats),
       },
       sourceManaged: true,
       sourcePending: undefined,
@@ -218,6 +249,7 @@ interface StorySectionAnalysis {
   kind: PlayableStoryTreeSection["kind"];
   objective: string;
   prerequisite: string;
+  affectionChanges: Array<PlayableStoryTreeAffectionChange & { beatId?: string }>;
 }
 
 interface StoryLinkAnalysis {
@@ -225,6 +257,7 @@ interface StoryLinkAnalysis {
   toSectionId: string;
   label: string;
   status: "confirmed" | "suggested";
+  affectionConditions: PlayableStoryTreeAffectionCondition[];
 }
 
 function chunkStoryTreeAnalysis<T extends {
@@ -284,11 +317,22 @@ function buildStoryTreeAnalysisInput(
           kind: section.kind,
           objective: section.objective,
           prerequisite: section.prerequisite,
-          sourceBeats: source.beats.map(({ id, kind, text }) => ({ id, kind, text })),
+          sourceBeats: source.beats.map(({ id, kind, text, affection }) => ({
+            id,
+            kind,
+            text,
+            ...(affection ? { affection } : {}),
+          })),
+          affectionChanges: section.affectionChanges ?? [],
         },
         existingOutgoing: tree.links
           .filter((link) => link.fromSectionId === section.id)
-          .map(({ toSectionId, label, status }) => ({ toSectionId, label, status })),
+          .map(({ toSectionId, label, status, affectionConditions }) => ({
+            toSectionId,
+            label,
+            status,
+            affectionConditions: affectionConditions ?? [],
+          })),
       };
     }),
     targets,
@@ -328,6 +372,7 @@ function parseStoryTreeAnalysis(
       kind: value.kind as PlayableStoryTreeSection["kind"],
       objective: value.objective,
       prerequisite: value.prerequisite,
+      affectionChanges: parseAffectionChanges(value.affectionChanges),
     };
   });
   if (seenSections.size !== expectedSectionIds.size) {
@@ -355,9 +400,66 @@ function parseStoryTreeAnalysis(
       toSectionId: value.toSectionId,
       label: value.label,
       status: value.status,
+      affectionConditions: parseAffectionConditions(value.affectionConditions),
     };
   });
   return { sections, links };
+}
+
+function parseAffectionChanges(
+  value: unknown,
+): Array<PlayableStoryTreeAffectionChange & { beatId?: string }> {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error("The model returned invalid affection changes. Try again.");
+  }
+  return value.map((item) => {
+    if (!isRecord(item) ||
+      (item.beatId !== undefined && typeof item.beatId !== "string") ||
+      typeof item.characterName !== "string" ||
+      item.characterName.length > 120 ||
+      !Number.isFinite(item.delta) ||
+      !["choice", "scene-enter", "scene-end"].includes(String(item.trigger)) ||
+      typeof item.sourceText !== "string" ||
+      item.sourceText.length > 20_000 ||
+      (item.threshold !== undefined && !Number.isFinite(item.threshold))) {
+      throw new Error("The model returned invalid affection changes. Try again.");
+    }
+    return {
+      ...(item.beatId !== undefined ? { beatId: item.beatId } : {}),
+      characterId: affectionCharacterId(item.characterName),
+      characterName: item.characterName.trim(),
+      delta: Number(item.delta),
+      trigger: item.trigger as PlayableStoryTreeAffectionChange["trigger"],
+      sourceText: item.sourceText,
+      ...(item.threshold !== undefined ? { threshold: Number(item.threshold) } : {}),
+    };
+  });
+}
+
+function parseAffectionConditions(value: unknown): PlayableStoryTreeAffectionCondition[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error("The model returned invalid affection conditions. Try again.");
+  }
+  return value.map((item) => {
+    if (!isRecord(item) ||
+      typeof item.characterName !== "string" ||
+      item.characterName.length > 120 ||
+      ![">=", ">", "=", "<", "<="].includes(String(item.operator)) ||
+      !Number.isFinite(item.value) ||
+      typeof item.sourceText !== "string" ||
+      item.sourceText.length > 20_000) {
+      throw new Error("The model returned invalid affection conditions. Try again.");
+    }
+    return {
+      characterId: affectionCharacterId(item.characterName),
+      characterName: item.characterName.trim(),
+      operator: item.operator as PlayableStoryTreeAffectionCondition["operator"],
+      value: Number(item.value),
+      sourceText: item.sourceText,
+    };
+  });
 }
 
 function mergeStoryTreeAnalysisLinks(
@@ -370,7 +472,8 @@ function mergeStoryTreeAnalysisLinks(
     return !baseline || link.fromSectionId !== baseline.fromSectionId ||
       link.toSectionId !== baseline.toSectionId ||
       link.label !== baseline.label ||
-      link.status !== (baseline.status ?? "suggested");
+      link.status !== (baseline.status ?? "suggested") ||
+      JSON.stringify(link.affectionConditions ?? []) !== JSON.stringify(baseline.affectionConditions ?? []);
   };
   const result = tree.links.filter((link) =>
     !analyzedSectionIds.has(link.fromSectionId) || isManual(link),
@@ -392,11 +495,17 @@ function mergeStoryTreeAnalysisLinks(
       toSectionId: candidate.toSectionId,
       label: candidate.label,
       status,
+      ...(candidate.affectionConditions.length
+        ? { affectionConditions: candidate.affectionConditions }
+        : {}),
       sourceSnapshot: {
         fromSectionId: candidate.fromSectionId,
         toSectionId: candidate.toSectionId,
         label: candidate.label,
         status,
+        ...(candidate.affectionConditions.length
+          ? { affectionConditions: candidate.affectionConditions }
+          : {}),
       },
     });
   }
@@ -422,7 +531,9 @@ const STORY_TREE_ANALYSIS_SYSTEM_PROMPT = [
   "A non-branching linear passage may link to the immediately following scene as confirmed when the screenplay clearly continues there and indicates no competing route.",
   "Keep a route suggested when multiple targets remain plausible, the choice outcome or destination is unstated, or continuity is unclear. Do not infer a branch destination from scene adjacency or numbering alone, and do not invent routes to fill gaps.",
   "Connect separate branch outcomes to a shared scene only when the screenplay indicates that those paths converge.",
-  "Return only JSON with shape {\"sections\":[{\"id\":\"...\",\"kind\":\"scene|branch|merge|ending\",\"objective\":\"...\",\"prerequisite\":\"...\"}],\"links\":[{\"fromSectionId\":\"...\",\"toSectionId\":\"...\",\"label\":\"...\",\"status\":\"confirmed|suggested\"}]}. Do not return beat text.",
+  "Identify explicit affection or relationship changes without inventing them. Use a stable character name from the screenplay, a signed numeric delta, and trigger choice for a player action, scene-enter for an automatic scene effect, or scene-end when the source explicitly says it happens after the scene. Use beatId only when the change belongs to one supplied sourceBeat.",
+  "Identify explicit affection thresholds on routes. A condition belongs on the outgoing link it gates, and must include the character name, comparison operator, numeric value, and sourceText. If the source is unclear, return no condition rather than guessing.",
+  "Return only JSON with shape {\"sections\":[{\"id\":\"...\",\"kind\":\"scene|branch|merge|ending\",\"objective\":\"...\",\"prerequisite\":\"...\",\"affectionChanges\":[{\"beatId\":\"optional source beat id\",\"characterName\":\"...\",\"delta\":2,\"trigger\":\"choice|scene-enter|scene-end\",\"threshold\":2,\"sourceText\":\"exact source fragment\"}]}],\"links\":[{\"fromSectionId\":\"...\",\"toSectionId\":\"...\",\"label\":\"...\",\"status\":\"confirmed|suggested\",\"affectionConditions\":[{\"characterName\":\"...\",\"operator\":\">=\",\"value\":3,\"sourceText\":\"exact source fragment\"}]}]}. Omit empty arrays. Do not return beat text or rewrite screenplay text.",
 ].join(" ");
 
 type TextDraftResult = { status: "complete"; text: string } | { status: "incomplete" | "empty"; text: string; error: string };

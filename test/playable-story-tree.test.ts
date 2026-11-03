@@ -4,6 +4,7 @@ import {
   formatPlayableStoryTreeMarkdown,
   isPlayableStoryTree,
   parseScreenplayText,
+  parsePlayableStoryTreeAffectionChange,
   playableStoryTreeEpisodeHasInteraction,
   playableStoryTreeSections,
   reconcilePlayableStoryTree,
@@ -11,6 +12,26 @@ import {
 } from "../src/shared/playable-story-tree.js";
 
 describe("playable story tree", () => {
+  it("extracts structured affection changes while preserving the source wording", () => {
+    const parsed = parseScreenplayText([
+      "第1集",
+      "1-1 木屋",
+      "选项一：安慰林，林好感度+2",
+      "固定对白",
+    ], "screenplay.txt").tree;
+    const beat = playableStoryTreeSections(parsed)[0]!.beats[0]!;
+
+    expect(beat.text).toBe("选项一：安慰林，林好感度+2");
+    expect(beat.kind).toBe("choice");
+    expect(beat.affection).toMatchObject({
+      characterName: "林",
+      characterId: "affection_林",
+      delta: 2,
+      trigger: "choice",
+    });
+    expect(parsePlayableStoryTreeAffectionChange("苏尘好感度下降1", "state"))
+      .toMatchObject({ characterName: "苏尘", delta: -1, trigger: "scene-enter" });
+  });
   it("preserves scene identity, edits, beats, and routes when an insertion renumbers scenes", () => {
     const previous = parseScreenplayText([
       "第1集", "1-1 仓库", "原剧情", "1-2 出口", "离开",

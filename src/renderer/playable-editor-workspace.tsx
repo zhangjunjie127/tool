@@ -27,6 +27,7 @@ import {
   type Edge,
   type EdgeChange,
   type NodeChange,
+  type OnSelectionChangeParams,
   type ReactFlowInstance,
   useNodesInitialized,
   useReactFlow,
@@ -276,6 +277,7 @@ export function PlayableEditorWorkspace({
   storyTreeCanvasSyncProgress,
   storyTreeCanvasFitAfterRevision,
   storyTreeCanvasFocusRequest,
+  onCanvasNodeSelectionChange,
   onAskAgent,
   onSendToAgent,
   designOpen = false,
@@ -312,6 +314,7 @@ export function PlayableEditorWorkspace({
   storyTreeCanvasSyncProgress?: "generate" | "update";
   storyTreeCanvasFitAfterRevision?: number;
   storyTreeCanvasFocusRequest?: { sequence: number; nodeId: string };
+  onCanvasNodeSelectionChange?: (nodeId: string) => void;
   /** Puts a request in the chat prompt. */
   onAskAgent?: (text: string) => void;
   onDesignSaveReady?: (save: (() => Promise<void>) | undefined) => void;
@@ -1316,6 +1319,14 @@ export function PlayableEditorWorkspace({
       setNodes((current) => applyNodeChanges(changes, current));
     },
     [],
+  );
+
+  const onSelectionChange = useCallback(
+    ({ nodes: selectedNodes }: OnSelectionChangeParams<PlayableFlowNode>) => {
+      if (selectedNodes.length === 1)
+        onCanvasNodeSelectionChange?.(selectedNodes[0]!.id);
+    },
+    [onCanvasNodeSelectionChange],
   );
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -3452,6 +3463,7 @@ export function PlayableEditorWorkspace({
                       : ["Backspace", "Delete"]
                   }
                   onNodesChange={onNodesChange}
+                  onSelectionChange={onSelectionChange}
                   onNodeDragStart={() => {
                     setCanvasContextMenu(undefined);
                     beginHistoryGesture();

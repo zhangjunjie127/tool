@@ -90,6 +90,65 @@ describe("text generation", () => {
     expect(systemPrompt).toContain("multiple targets remain plausible");
   });
 
+  it("returns structured affection changes and route conditions without rewriting source text", async () => {
+    const tree = parseScreenplayText([
+      "第1集",
+      "1-1 选择",
+      "选项一：安慰林",
+      "1-2 和解",
+      "林愿意相信主角。",
+    ], "screenplay.txt").tree;
+    const sections = tree.chapters[0]!.episodes[0]!.sections;
+    tree.links = [];
+    const response = JSON.stringify({
+      sections: sections.map((section, index) => ({
+        id: section.id,
+        kind: index === 0 ? "branch" : "scene",
+        objective: "",
+        prerequisite: "",
+        ...(index === 0 ? {
+          affectionChanges: [{
+            beatId: section.beats[0]!.id,
+            characterName: "林",
+            delta: 2,
+            trigger: "choice",
+            sourceText: "选项一：安慰林",
+          }],
+        } : {}),
+      })),
+      links: [{
+        fromSectionId: sections[0]!.id,
+        toSectionId: sections[1]!.id,
+        label: "安慰林",
+        status: "confirmed",
+        affectionConditions: [{
+          characterName: "林",
+          operator: ">=",
+          value: 1,
+          sourceText: "林好感度不低于1",
+        }],
+      }],
+    });
+    const { runtime } = fixture(assistant(response));
+
+    const result = await analyzePlayableStoryTree(runtime, model, tree);
+    const updated = result.tree.chapters[0]!.episodes[0]!.sections[0]!;
+
+    expect(updated.scriptText).toBe("选项一：安慰林");
+    expect(updated.beats[0]!.affection).toMatchObject({
+      characterName: "林",
+      characterId: "affection_林",
+      delta: 2,
+      trigger: "choice",
+    });
+    expect(result.tree.links[0]!.affectionConditions).toEqual([expect.objectContaining({
+      characterName: "林",
+      characterId: "affection_林",
+      operator: ">=",
+      value: 1,
+    })]);
+  });
+
   it("analyzes only changed scenes and preserves unchanged scene and beat identities", async () => {
     const tree = parseScreenplayText([
       "第1篇章，序章",

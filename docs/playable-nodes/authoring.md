@@ -214,7 +214,9 @@ nodes** uses the same recommendations when it creates newly added Scenes, then
 synchronizes changed titles and tree-managed connections. Changes to linked
 Scenes are previewed and require confirmation before they are applied. Neither
 operation replaces existing Scene source files or assets, and existing canvas
-positions are preserved. The tree can be exported as PDF, Word, or Markdown.
+positions are preserved. Selecting a linked Scene on the canvas also selects
+and scrolls to its story-tree entry, expanding collapsed chapters, episodes,
+and branch groups as needed. The tree can be exported as PDF, Word, or Markdown.
 Removing a linked Scene or chapter from the tree detaches its canvas Node: the
 Node stays at its existing position as an ordinary Scene and remains outlined
 in red. Both confirmed and suggested tree routes are connected. Suggested routes
@@ -400,10 +402,21 @@ always returns to **Play**.
   color. The effect plays on button press in both the editor preview and the
   game. Optional X/Y pixel offsets fine-tune its position without changing the
   button's layout or hit area.
+- **Button motion library** adds gentle floating, breathing glow, hover lift,
+  success-check and error-shake click feedback, and a click-to-toggle selected
+  highlight. Success-check and error-shake are explicit visual reactions on the
+  configured button; the Runtime does not infer whether a story choice was
+  correct or incorrect. The **Click effect library** adds ripple, star,
+  electric, glow-ring, confetti, heart, and rune effects alongside the existing
+  particle burst. Click effects share the same color, attachment point, and
+  pixel-offset controls, and remain decorative: they do not change navigation
+  or the button's hit area. Reduced-motion preferences suppress animated
+  feedback.
 - Built-in button presets are grouped by behavior. Rectangle and circle
   variants share one preset and use **Button shape**; click presets share one
-  entry with selectable standard, idle-hint, or bounce feedback. Swipe presets
-  share one entry with separate background and success-disappearance options.
+  entry with selectable press, idle-hint, bounce, float, glow, hover-lift,
+  result, or selected-state feedback. Swipe presets share one entry with
+  separate background and success-disappearance options.
   Expanding hint and each navigation action remain distinct.
 - **Back button** is an optional button preset for a branch result where the
   player should be able to choose again. It stays hidden while the Scene's

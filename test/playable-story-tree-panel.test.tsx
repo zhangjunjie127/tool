@@ -99,10 +99,19 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement | undefined;
+let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   host?.remove();
+  if (scrollIntoViewDescriptor)
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "scrollIntoView",
+      scrollIntoViewDescriptor,
+    );
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  scrollIntoViewDescriptor = undefined;
   root = undefined;
   host = undefined;
   vi.restoreAllMocks();
@@ -283,6 +292,182 @@ it("confirms and saves a suggested story-tree route", async () => {
     await Promise.resolve();
   });
   expect(save).toHaveBeenCalledWith("project-1", confirmedTree, "revision-1");
+});
+
+it("locates the matching chapter scene when a route warning is clicked", async () => {
+  const suggestedTree: PlayableStoryTree = structuredClone(tree);
+  suggestedTree.links[0]!.status = "suggested";
+  const scrollIntoView = vi.fn();
+  scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
+    tree: suggestedTree,
+    revision: "revision-1",
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const routeWarning = host.querySelector<HTMLButtonElement>(
+    ".story-tree-warning",
+  );
+  expect(routeWarning?.classList.contains("is-error")).toBe(true);
+  expect(routeWarning?.closest(".story-tree-outline-pane")).not.toBeNull();
+  expect(routeWarning?.closest(".story-tree-chapters-pane")).toBeNull();
+
+  const chapter = host.querySelector<HTMLDetailsElement>(
+    ".story-tree-chapter-list > details",
+  );
+  const episode = chapter?.querySelector<HTMLDetailsElement>(
+    ".story-tree-episode",
+  );
+  await act(async () => chapter?.querySelector("summary")?.click());
+  await act(async () => episode?.querySelector("summary")?.click());
+  expect(chapter?.open).toBe(false);
+  expect(episode?.open).toBe(false);
+
+  await act(async () => {
+    host?.querySelector<HTMLButtonElement>(".story-tree-warning")?.click();
+  });
+
+  expect(chapter?.open).toBe(true);
+  expect(episode?.open).toBe(true);
+  expect(
+    host.querySelector<HTMLButtonElement>(
+      '.story-tree-section-select[aria-pressed="true"]',
+    )?.textContent,
+  ).toContain("初遇");
+  expect(scrollIntoView).toHaveBeenCalledWith({
+    behavior: "smooth",
+    block: "center",
+  });
+});
+
+it("removes the unnamed chapter warning after its name is corrected", async () => {
+  const unnamedTree: PlayableStoryTree = structuredClone(tree);
+  unnamedTree.chapters[0]!.title = "待命名篇章";
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
+    tree: unnamedTree,
+    revision: "revision-1",
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const unnamedWarning = [...host.querySelectorAll<HTMLButtonElement>(
+    ".story-tree-warning",
+  )].find((button) => button.textContent?.includes("篇章边界"));
+  expect(unnamedWarning).toBeTruthy();
+  await act(async () => unnamedWarning?.click());
+  const input = host.querySelector<HTMLInputElement>(
+    '.story-tree-chapter-summary input[aria-label="编辑篇章名称"]',
+  );
+  expect(input).toBeTruthy();
+  await act(async () => {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setValue?.call(input, "第一篇章");
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => input?.blur());
+
+  expect(
+    [...host.querySelectorAll(".story-tree-warning")].some((button) =>
+      button.textContent?.includes("篇章边界"),
+    ),
+  ).toBe(false);
+});
+
+it("shows authored choice text instead of a generic next-episode route", async () => {
+  const choiceTree: PlayableStoryTree = structuredClone(tree);
+  const source = choiceTree.chapters[0]!.episodes[0]!.sections[0]!;
+  const firstTarget = choiceTree.chapters[0]!.episodes[0]!.sections[1]!;
+  const secondTarget = choiceTree.chapters[0]!.episodes[1]!.sections[0]!;
+  const thirdTarget = structuredClone(secondTarget);
+  thirdTarget.id = "scene-4";
+  thirdTarget.sceneNumber = 2;
+  thirdTarget.title = "C分支";
+  choiceTree.chapters[0]!.episodes[1]!.sections.push(thirdTarget);
+  firstTarget.title = "当场拆穿";
+  source.beats = [
+    { id: "choice-a", kind: "choice", text: "选项一：【当场拆穿】" },
+    { id: "choice-b", kind: "choice", text: "选项二：【默默离开】" },
+    { id: "choice-c", kind: "choice", text: "选项三：【以身入局】" },
+  ];
+  choiceTree.links = [
+    {
+      id: "choice-route-a",
+      fromSectionId: source.id,
+      toSectionId: firstTarget.id,
+      label: "下一集",
+      status: "suggested",
+    },
+    {
+      id: "choice-route-b",
+      fromSectionId: source.id,
+      toSectionId: secondTarget.id,
+      label: "默默离开",
+      status: "suggested",
+    },
+    {
+      id: "choice-route-c",
+      fromSectionId: source.id,
+      toSectionId: thirdTarget.id,
+      label: "C分支",
+      status: "suggested",
+    },
+  ];
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
+    tree: choiceTree,
+    revision: "revision-1",
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const outlineText = host.querySelector(".story-tree-outline")?.textContent;
+  expect(outlineText).toContain("A_当场拆穿");
+  expect(outlineText).toContain("B_默默离开");
+  expect(outlineText).toContain("C_以身入局");
+  expect(outlineText).not.toContain("A_下一集");
 });
 
 it("aligns episode row actions and detaches linked scenes when deleting an episode", async () => {
@@ -652,6 +837,94 @@ it("focuses the linked canvas node when a story-tree scene is selected", async (
   await act(async () => scene?.click());
 
   expect(onCanvasNodeSelect).toHaveBeenCalledWith("canvas-scene-2");
+});
+
+it("focuses and expands the matching story-tree scene when its canvas node is selected", async () => {
+  const linkedTree: PlayableStoryTree = structuredClone(tree);
+  linkedTree.chapters[0]!.episodes[0]!.sections[1]!.canvasNodeId =
+    "canvas-scene-2";
+  const scrollIntoView = vi.fn();
+  scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+  vi.spyOn(api, "getPlayableStoryTree").mockResolvedValue({
+    tree: linkedTree,
+    revision: "revision-1",
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+      }),
+    );
+    await Promise.resolve();
+  });
+
+  const episodeHeading = host.querySelector<HTMLButtonElement>(
+    ".story-tree-outline-heading.is-episode",
+  );
+  const branchHeading = host.querySelector<HTMLButtonElement>(
+    ".story-tree-outline-heading.is-branch-group",
+  );
+  expect(episodeHeading?.getAttribute("aria-expanded")).toBe("true");
+  expect(branchHeading?.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => branchHeading?.click());
+  await act(async () => episodeHeading?.click());
+  expect(episodeHeading?.getAttribute("aria-expanded")).toBe("false");
+  expect(branchHeading?.isConnected).toBe(false);
+
+  const chapter = host.querySelector<HTMLDetailsElement>(
+    ".story-tree-chapter-list > details",
+  );
+  const chapterEpisode = chapter?.querySelector<HTMLDetailsElement>(
+    ".story-tree-episode",
+  );
+  await act(async () => chapterEpisode?.querySelector("summary")?.click());
+  await act(async () => chapter?.querySelector("summary")?.click());
+  expect(chapter?.open).toBe(false);
+  expect(chapterEpisode?.open).toBe(false);
+
+  await act(async () => {
+    root?.render(
+      createElement(PlayableStoryTreePanel, {
+        projectId: "project-1",
+        visible: true,
+        canvasNodeSelection: {
+          sequence: 1,
+          nodeId: "canvas-scene-2",
+        },
+      }),
+    );
+  });
+
+  const selectedScene = [...host.querySelectorAll<HTMLButtonElement>(
+    ".story-tree-outline-scene",
+  )].find((button) => button.textContent?.includes("分支后果"));
+  const expandedEpisodeHeading = host.querySelector<HTMLButtonElement>(
+    ".story-tree-outline-heading.is-episode",
+  );
+  const expandedBranchHeading = host.querySelector<HTMLButtonElement>(
+    ".story-tree-outline-heading.is-branch-group",
+  );
+  expect(selectedScene?.classList.contains("is-selected")).toBe(true);
+  expect(expandedEpisodeHeading?.getAttribute("aria-expanded")).toBe("true");
+  expect(expandedBranchHeading?.getAttribute("aria-expanded")).toBe("true");
+  expect(chapter?.open).toBe(true);
+  expect(chapterEpisode?.open).toBe(true);
+  expect(scrollIntoView).toHaveBeenCalledWith({
+    behavior: "smooth",
+    block: "center",
+  });
 });
 
 it("generates directly and automatically matches videos without a setup preview", async () => {

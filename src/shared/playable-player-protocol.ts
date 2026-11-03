@@ -11,6 +11,7 @@ import type { PlayableBackdropEffects } from "./playable-backdrop-effects.js";
 import {
   PLAYABLE_BUTTON_ASSET_SCALE_MAX,
   PLAYABLE_BUTTON_ASSET_SCALE_MIN,
+  PLAYABLE_BUTTON_FEEDBACKS,
   type PlayableButtonAction,
   type PlayableMotionConfig,
   type PlayableNoInputMode,
@@ -862,16 +863,17 @@ export function isPlayableHostMessage(
               String(command.config.ringRotation),
             )) ||
           (command.config.feedback !== undefined &&
-            command.config.feedback !== "hover-press" &&
-            command.config.feedback !== "idle-pulse-hover-press" &&
-            command.config.feedback !== "bounce-hover-press" &&
-            command.config.feedback !== "ripple-hint" &&
-            command.config.feedback !== "none") ||
+            !PLAYABLE_BUTTON_FEEDBACKS.some(
+              (feedback) =>
+                feedback ===
+                (command.config as Record<string, unknown>).feedback,
+            )) ||
           (command.config.kind === "button-feedback" &&
-            command.config.feedback !== "hover-press" &&
-            command.config.feedback !== "idle-pulse-hover-press" &&
-            command.config.feedback !== "bounce-hover-press" &&
-            command.config.feedback !== "ripple-hint"))) ||
+            !PLAYABLE_BUTTON_FEEDBACKS.some(
+              (feedback) =>
+                feedback ===
+                (command.config as Record<string, unknown>).feedback,
+            )))) ||
       (command.buttonSignal !== undefined &&
         typeof command.buttonSignal !== "string") ||
       (command.buttonText !== undefined &&
@@ -1415,15 +1417,13 @@ function isValidPlayableMotionConfig(value: unknown): value is PlayableMotionCon
         String(value.ringRotation),
       )) &&
     (value.feedback === undefined ||
-      value.feedback === "hover-press" ||
-      value.feedback === "idle-pulse-hover-press" ||
-      value.feedback === "bounce-hover-press" ||
-      value.feedback === "ripple-hint" ||
-      value.feedback === "none") &&
+      PLAYABLE_BUTTON_FEEDBACKS.includes(
+        value.feedback as (typeof PLAYABLE_BUTTON_FEEDBACKS)[number],
+      )) &&
     (value.kind !== "button-feedback" ||
-      value.feedback === "hover-press" ||
-      value.feedback === "idle-pulse-hover-press" ||
-      value.feedback === "bounce-hover-press" ||
-      value.feedback === "ripple-hint")
+      (value.feedback !== undefined &&
+        PLAYABLE_BUTTON_FEEDBACKS.includes(
+          value.feedback as (typeof PLAYABLE_BUTTON_FEEDBACKS)[number],
+        )))
   );
 }

@@ -53,6 +53,7 @@ interface PlayableStoryTreePanelProps {
   model?: AgentModelRef;
   canvasNodeIds?: readonly string[];
   canvasEdges?: readonly PlayableStoryTreeCanvasEdge[];
+  canvasNodeSelection?: { sequence: number; nodeId: string };
   onBeforeSync?: () => Promise<void>;
   onCanvasSyncComplete?: (mode: "generate" | "update") => void;
   onCanvasSyncProgressChange?: (
@@ -87,6 +88,10 @@ const confirmationChangeKeys = {
     "storyTree.confirmStoryButtonUpdated",
   "A generated story button was edited on the canvas.":
     "storyTree.confirmStoryButtonEdited",
+  "The Scene's affection settings were edited on the canvas.":
+    "storyTree.confirmAffectionSettingsEdited",
+  "Story-tree affection rules will be updated.":
+    "storyTree.confirmAffectionRulesUpdated",
   "The story entry Scene will be updated.":
     "storyTree.confirmEntrySceneUpdated",
 } as const;
@@ -97,6 +102,7 @@ export function PlayableStoryTreePanel({
   model,
   canvasNodeIds,
   canvasEdges,
+  canvasNodeSelection,
   onBeforeSync,
   onCanvasSyncComplete,
   onCanvasSyncProgressChange,
@@ -107,6 +113,10 @@ export function PlayableStoryTreePanel({
   const [revision, setRevision] = useState<string>();
   const [selectedSectionId, setSelectedSectionId] = useState<string>();
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  const [storyTreeFocusRequest, setStoryTreeFocusRequest] = useState<{
+    sequence: number;
+    sectionId: string;
+  }>();
   const [diff, setDiff] = useState<PlayableStoryTreeDiff>();
   const [pendingAnalysis, setPendingAnalysis] = useState<{
     tree: PlayableStoryTree;
@@ -127,6 +137,18 @@ export function PlayableStoryTreePanel({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const importButton = useRef<HTMLButtonElement>(null);
+  const handledCanvasSelectionSequence = useRef(0);
+  const storyTreeFocusSequence = useRef(0);
+  const warningFocusSequence = useRef(0);
+  const chapterElements = useRef(new Map<string, HTMLDetailsElement>());
+  const chapterSectionElements = useRef(
+    new Map<string, HTMLDivElement>(),
+  );
+  const [warningFocusRequest, setWarningFocusRequest] = useState<{
+    sequence: number;
+    chapterId: string;
+  }>();
   const existingCanvasNodeIds = useMemo(
     () => (canvasNodeIds ? new Set(canvasNodeIds) : undefined),
     [canvasNodeIds],
@@ -210,6 +232,54 @@ export function PlayableStoryTreePanel({
       return;
     setSelectedSectionId(sections[0]?.id);
   }, [sections, selectedSectionId, tree]);
+
+  useEffect(() => {
+    if (
+      !tree ||
+      !canvasNodeSelection ||
+      canvasNodeSelection.sequence <= handledCanvasSelectionSequence.current
+    )
+      return;
+    handledCanvasSelectionSequence.current = canvasNodeSelection.sequence;
+    const section = sections.find(
+      (item) => item.canvasNodeId === canvasNodeSelection.nodeId,
+    );
+    setSelectedSectionId(section?.id);
+    if (!section) {
+      setStoryTreeFocusRequest(undefined);
+      return;
+    }
+    const chapter = tree.chapters.find((item) =>
+      item.episodes.some((episode) =>
+        episode.sections.some((item) => item.id === section.id),
+      ),
+    );
+    const episode = chapter?.episodes.find((item) =>
+      item.sections.some((candidate) => candidate.id === section.id),
+    );
+    if (!chapter || !episode) return;
+    setOpenItems((current) =>
+      new Set([...current, chapter.id, episode.id]),
+    );
+    setStoryTreeFocusRequest({
+      sequence: ++storyTreeFocusSequence.current,
+      sectionId: section.id,
+    });
+  }, [canvasNodeSelection, sections, tree]);
+
+  useEffect(() => {
+    if (!storyTreeFocusRequest) return;
+    chapterSectionElements.current
+      .get(storyTreeFocusRequest.sectionId)
+      ?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [openItems, storyTreeFocusRequest]);
+
+  useEffect(() => {
+    if (!warningFocusRequest) return;
+    chapterElements.current
+      .get(warningFocusRequest.chapterId)
+      ?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [openItems, warningFocusRequest]);
 
   function updateTree(
     change: (current: PlayableStoryTree) => PlayableStoryTree,
@@ -728,6 +798,23 @@ export function PlayableStoryTreePanel({
   function selectStorySection(sectionId: string): void {
     setSelectedSectionId(sectionId);
     const section = sections.find((item) => item.id === sectionId);
+    const chapter = tree?.chapters.find((item) =>
+      item.episodes.some((episode) =>
+        episode.sections.some((candidate) => candidate.id === sectionId),
+      ),
+    );
+    const episode = chapter?.episodes.find((item) =>
+      item.sections.some((candidate) => candidate.id === sectionId),
+    );
+    if (chapter && episode) {
+      setOpenItems((current) =>
+        new Set([...current, chapter.id, episode.id]),
+      );
+      setStoryTreeFocusRequest({
+        sequence: ++storyTreeFocusSequence.current,
+        sectionId,
+      });
+    }
     const nodeId = section?.canvasNodeId;
     if (
       nodeId &&
@@ -755,10 +842,22 @@ export function PlayableStoryTreePanel({
   const pendingRouteCount = activeLinks.filter(
     (link) => link.status === "suggested",
   ).length;
+  const hasUnnamedChapter = Boolean(
+    tree?.chapters.some(
+      (chapter) => !chapter.title.trim() || chapter.title === "待命名篇章",
+    ),
+  );
+  const hasRoutesNeedingReview = Boolean(
+    tree && playableStoryTreeNeedsRouteReview(tree),
+  );
   const visibleWarnings: PlayableStoryTreeWarning[] = [
-    ...warnings.filter((warning) => warning !== "routes-need-review"),
-    ...(tree && playableStoryTreeNeedsRouteReview(tree)
-      ? (["routes-need-review"] as const)
+    ...warnings.filter(
+      (warning) =>
+        warning !== "routes-need-review" &&
+        (warning !== "unnamed-chapter" || hasUnnamedChapter),
+    ),
+    ...(hasUnnamedChapter && !warnings.includes("unnamed-chapter")
+      ? (["unnamed-chapter"] as const)
       : []),
   ];
   const incompleteRouteSectionCount = sections.filter(
@@ -767,6 +866,61 @@ export function PlayableStoryTreePanel({
       (section.kind !== "ending" &&
         !outgoingRouteSectionIds.has(section.id)),
   ).length;
+
+  function focusWarning(warning: PlayableStoryTreeWarning): void {
+    const sequence = warningFocusSequence.current + 1;
+    warningFocusSequence.current = sequence;
+
+    if (warning === "no-scenes") {
+      importButton.current?.focus();
+      importButton.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "nearest",
+      });
+      return;
+    }
+    if (!tree) return;
+
+    if (warning === "unnamed-chapter") {
+      const chapter = tree.chapters.find(
+        (item) => !item.title.trim() || item.title === "待命名篇章",
+      );
+      if (!chapter) return;
+      setOpenItems((current) => new Set([...current, chapter.id]));
+      setWarningFocusRequest({ sequence, chapterId: chapter.id });
+      return;
+    }
+
+    const suggestedSectionId = tree.links.find(
+      (link) =>
+        link.status === "suggested" &&
+        sections.some((section) => section.id === link.fromSectionId),
+    )?.fromSectionId;
+    const missingOutgoingSectionId = sections.find(
+      (section) =>
+        section.kind !== "ending" &&
+        !outgoingRouteSectionIds.has(section.id),
+    )?.id;
+    const sectionId = suggestedSectionId ?? missingOutgoingSectionId;
+    if (!sectionId) return;
+    const chapter = tree.chapters.find((item) =>
+      item.episodes.some((episode) =>
+        episode.sections.some((section) => section.id === sectionId),
+      ),
+    );
+    const episode = chapter?.episodes.find((item) =>
+      item.sections.some((section) => section.id === sectionId),
+    );
+    if (!chapter || !episode) return;
+    setSelectedSectionId(sectionId);
+    setOpenItems((current) =>
+      new Set([...current, chapter.id, episode.id]),
+    );
+    setStoryTreeFocusRequest({
+      sequence: ++storyTreeFocusSequence.current,
+      sectionId,
+    });
+  }
 
   const pendingSectionChanges = useMemo(
     () =>
@@ -821,6 +975,7 @@ export function PlayableStoryTreePanel({
                   {tree?.chapters.length ?? 0}
                 </span>
                 <button
+                  ref={importButton}
                   type="button"
                   title={t("storyTree.importScript")}
                   aria-label={t("storyTree.importScript")}
@@ -878,6 +1033,11 @@ export function PlayableStoryTreePanel({
                   .map((chapter) => (
                     <details
                       key={chapter.id}
+                      ref={(element) => {
+                        if (element)
+                          chapterElements.current.set(chapter.id, element);
+                        else chapterElements.current.delete(chapter.id);
+                      }}
                       open={openItems.has(chapter.id)}
                       onToggle={(event) =>
                         toggleOpen(chapter.id, event.currentTarget.open)
@@ -902,6 +1062,11 @@ export function PlayableStoryTreePanel({
                           label={t("storyTree.renameChapter")}
                           disabled={busy}
                           onSave={(title) => patchChapter(chapter.id, title)}
+                          editRequest={
+                            warningFocusRequest?.chapterId === chapter.id
+                              ? warningFocusRequest.sequence
+                              : undefined
+                          }
                         />
                         <button
                           type="button"
@@ -987,6 +1152,17 @@ export function PlayableStoryTreePanel({
                                   <div
                                     key={section.id}
                                     className="story-tree-section-entry"
+                                    ref={(element) => {
+                                      if (element)
+                                        chapterSectionElements.current.set(
+                                          section.id,
+                                          element,
+                                        );
+                                      else
+                                        chapterSectionElements.current.delete(
+                                          section.id,
+                                        );
+                                    }}
                                   >
                                     <StoryTreeInlineNameEditor
                                       value={section.title}
@@ -1020,14 +1196,6 @@ export function PlayableStoryTreePanel({
                                       }
                                       onDisplayClick={() => {
                                         selectStorySection(section.id);
-                                        setOpenItems(
-                                          (current) =>
-                                            new Set([
-                                              ...current,
-                                              chapter.id,
-                                              episode.id,
-                                            ]),
-                                        );
                                       }}
                                     />
                                     <button
@@ -1120,7 +1288,20 @@ export function PlayableStoryTreePanel({
                 </div>
               ) : null}
               {visibleWarnings.map((warning) => (
-                <p className="story-tree-warning" key={warning}>
+                <button
+                  className="story-tree-warning"
+                  key={warning}
+                  type="button"
+                  title={t("storyTree.warningLocate")}
+                  aria-label={`${t(
+                    warning === "no-scenes"
+                      ? "storyTree.warningNoScenes"
+                      : warning === "unnamed-chapter"
+                        ? "storyTree.warningUnnamedChapter"
+                        : "storyTree.warningRoutesNeedReview",
+                  )} ${t("storyTree.warningLocate")}`}
+                  onClick={() => focusWarning(warning)}
+                >
                   {t(
                     warning === "no-scenes"
                       ? "storyTree.warningNoScenes"
@@ -1128,7 +1309,10 @@ export function PlayableStoryTreePanel({
                         ? "storyTree.warningUnnamedChapter"
                         : "storyTree.warningRoutesNeedReview",
                   )}
-                </p>
+                  <span className="story-tree-warning-action">
+                    {t("storyTree.warningLocate")}
+                  </span>
+                </button>
               ))}
             </div>
 
@@ -1278,6 +1462,22 @@ export function PlayableStoryTreePanel({
                 <span>{t("storyTree.canvasUpToDate")}</span>
               ) : null}
             </div>
+            {hasRoutesNeedingReview ? (
+              <button
+                className="story-tree-warning is-error"
+                type="button"
+                title={t("storyTree.warningLocate")}
+                aria-label={`${t(
+                  "storyTree.warningRoutesNeedReview",
+                )} ${t("storyTree.warningLocate")}`}
+                onClick={() => focusWarning("routes-need-review")}
+              >
+                {t("storyTree.warningRoutesNeedReview")}
+                <span className="story-tree-warning-action">
+                  {t("storyTree.warningLocate")}
+                </span>
+              </button>
+            ) : null}
             {!sections.length ? (
               <div
                 className="story-tree-navigation"
@@ -1291,6 +1491,7 @@ export function PlayableStoryTreePanel({
               <PlayableStoryTreeOutline
                 tree={tree ?? emptyTree()}
                 selectedSectionId={selectedSectionId}
+                focusRequest={storyTreeFocusRequest}
                 canvasNodeIds={canvasNodeIds}
                 canvasEdges={canvasEdges}
                 onSelectSection={selectStorySection}
@@ -1537,12 +1738,27 @@ function findAnalysisChanges(
       after.beats.map((beat) => beat.text).join(" / "),
     );
     addChange(
+      t("storyTree.analysisFieldAffection"),
+      formatAffectionRules(before),
+      formatAffectionRules(after),
+    );
+    addChange(
       t("storyTree.analysisFieldScreenplay"),
       before.scriptText,
       after.scriptText,
     );
     return changes.length ? [{ before, after, changes }] : [];
   });
+}
+
+function formatAffectionRules(section: PlayableStoryTreeSection): string {
+  const changes = [
+    ...(section.affectionChanges ?? []),
+    ...section.beats.flatMap((beat) => beat.affection ? [beat.affection] : []),
+  ];
+  return changes.length
+    ? changes.map((change) => `${change.characterName}:${change.delta > 0 ? "+" : ""}${change.delta}(${change.trigger})`).join(" / ")
+    : "";
 }
 
 function findAnalysisLinkChanges(

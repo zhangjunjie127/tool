@@ -5186,6 +5186,24 @@ function MotionLibraryPopover({
                 <option value="bounce-hover-press">
                   {t("playableWorkbench.bounceClickFeedback")}
                 </option>
+                <option value="idle-float">
+                  {t("playableWorkbench.idleFloatFeedback")}
+                </option>
+                <option value="idle-glow">
+                  {t("playableWorkbench.idleGlowFeedback")}
+                </option>
+                <option value="hover-lift">
+                  {t("playableWorkbench.hoverLiftFeedback")}
+                </option>
+                <option value="success-check">
+                  {t("playableWorkbench.successCheckFeedback")}
+                </option>
+                <option value="error-shake">
+                  {t("playableWorkbench.errorShakeFeedback")}
+                </option>
+                <option value="selected-toggle">
+                  {t("playableWorkbench.selectedToggleFeedback")}
+                </option>
               </select>
             </label>
           ) : null}
@@ -5232,11 +5250,20 @@ function MotionLibraryPopover({
             <select
               aria-label={t("playableWorkbench.pressEffectLibrary")}
               value={pressEffect}
-              onChange={(event) =>
-                setPressEffect(
-                  event.target.value as PlayableButtonPressEffect | "none",
-                )
-              }
+              onChange={(event) => {
+                const value = event.target.value as
+                  | PlayableButtonPressEffect
+                  | "none";
+                setPressEffect(value);
+                if (value !== "none") {
+                  setEffectColor(
+                    PLAYABLE_BUTTON_PRESS_EFFECTS.find(
+                      (effect) => effect.id === value,
+                    )?.defaultColor ??
+                      PLAYABLE_BUTTON_PRESS_EFFECT_DEFAULT_COLOR,
+                  );
+                }
+              }}
             >
               <option value="none">{t("playableWorkbench.noPressEffect")}</option>
               {PLAYABLE_BUTTON_PRESS_EFFECTS.map((effect) => (

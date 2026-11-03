@@ -139,7 +139,11 @@ export interface NodeRuntimeContext {
   transcription?: PlayableTranscriptionService;
   /** The story the player has seen so far, across every game they started. */
   story: { map(): PlayableStoryMap };
-  lifecycle: { signal: AbortSignal };
+  lifecycle: {
+    signal: AbortSignal;
+    /** Registers async work that must finish before this Scene is left. */
+    onExit?: (listener: () => void | Promise<void>) => () => void;
+  };
 }
 
 export interface PlayableNodeContext extends NodeRuntimeContext {

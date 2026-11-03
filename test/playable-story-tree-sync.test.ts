@@ -26,6 +26,7 @@ import {
 } from "../src/shared/playable-story-tree.js";
 import { addPlayableNodeAsset } from "../src/shared/playable-editor.js";
 import { setPlayableBackdrop } from "../src/shared/playable-backdrop.js";
+import { readPlayableAffectionConfig } from "../src/shared/playable-affection.js";
 
 const workspaces: string[] = [];
 
@@ -369,7 +370,9 @@ describe("playable story tree canvas sync", () => {
     const source = codebase.graph.nodes.find((node) => node.id === generated[0]!.canvasNodeId)!;
     const edges = codebase.graph.edges.filter((edge) => edge.source.nodeId === source.id);
     expect(source.signals.map((signal) => signal.label)).toEqual(
-      sections.slice(1).map((section) => section.title),
+      sections[0]!.beats
+        .filter((beat) => beat.kind === "choice")
+        .map((beat) => beat.text),
     );
     expect(source.signals.some((signal) => signal.label === "下一集")).toBe(false);
     expect(edges).toHaveLength(3);
@@ -381,10 +384,220 @@ describe("playable story tree canvas sync", () => {
     expect(new Set(edges.map((edge) => edge.targetNodeId)).size).toBe(3);
     expect(result.pendingLinks).toBe(3);
     expect(result.tree!.links.every((link) => link.status === "suggested")).toBe(true);
+    expect(result.tree!.links.map((link) => link.label)).toEqual([
+      "当场拆穿",
+      "B分支",
+      "C分支",
+    ]);
     const repeated = await syncPlayableStoryTree(workspace, result.tree, result.tree!);
     expect(repeated).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
     expect(await readFile(path.join(workspace, source.source.html), "utf8")).toBe(html);
     expect((await readNodeCodebase(workspace)).graph).toEqual(codebase.graph);
+  });
+
+  it("deduplicates repeated screenplay choices and fans one generic continuation out to each choice", async () => {
+    const workspace = await createWorkspace();
+    const tree = parseScreenplayText([
+      "第45集",
+      "45-1 出租屋",
+      "选项一：【利诱他】",
+      "选项二：【尊重他】",
+      "选项一：【利诱他】",
+      "选项二：【尊重他】",
+      "45-2 茶楼",
+      "进入茶楼。",
+    ], "duplicate-choices.txt").tree;
+    const [sourceSection] = playableStoryTreeSections(tree);
+
+    expect(sourceSection!.beats.filter((beat) => beat.kind === "choice")).toHaveLength(4);
+    expect(tree.links.filter((link) => link.fromSectionId === sourceSection!.id))
+      .toHaveLength(1);
+
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const generated = playableStoryTreeSections(result.tree!);
+    const codebase = await readNodeCodebase(workspace);
+    const source = codebase.graph.nodes.find((node) =>
+      node.id === generated[0]!.canvasNodeId,
+    )!;
+    const edges = codebase.graph.edges.filter((edge) => edge.source.nodeId === source.id);
+    const html = await readFile(path.join(workspace, source.source.html), "utf8");
+    const sourceLinks = result.tree!.links.filter(
+      (link) => link.fromSectionId === sourceSection!.id,
+    );
+
+    expect(sourceLinks).toHaveLength(2);
+    expect(sourceLinks.map((link) => link.label)).toEqual([
+      "选项一：【利诱他】",
+      "选项二：【尊重他】",
+    ]);
+    expect(source.signals.map((signal) => signal.label)).toEqual([
+      "选项一：【利诱他】",
+      "选项二：【尊重他】",
+    ]);
+    expect(edges).toHaveLength(2);
+    expect(edges.every((edge) => edge.targetNodeId === generated[1]!.canvasNodeId))
+      .toBe(true);
+    expect(html.match(/data-putenggame-story-tree-generated="true"/gu)).toHaveLength(2);
+    expect(html).toContain(
+      `data-putenggame-story-tree-beat-id="${sourceSection!.beats[0]!.id}"`,
+    );
+    expect(html).toContain(
+      `data-putenggame-story-tree-beat-id="${sourceSection!.beats[1]!.id}"`,
+    );
+    const repeated = await syncPlayableStoryTree(workspace, result.tree, result.tree!);
+    expect(repeated).toMatchObject({ applied: true, addedNodes: 0, updatedNodes: 0 });
+    expect((await readNodeCodebase(workspace)).graph).toEqual(codebase.graph);
+  });
+
+  it("orders connected choices by screenplay order even when tree links are reversed", async () => {
+    const workspace = await createWorkspace();
+    const tree = choiceTree(3);
+    const [source, ...targets] = playableStoryTreeSections(tree);
+    source!.beats = [
+      { id: "choice-a", kind: "choice", text: "选项一：左侧" },
+      { id: "choice-b", kind: "choice", text: "选项二：中间" },
+      { id: "choice-c", kind: "choice", text: "选项三：右侧" },
+    ];
+    targets.forEach((target, index) => {
+      target!.title = ["左侧", "中间", "右侧"][index]!;
+    });
+    tree.links.reverse();
+    tree.links.forEach((link) => { link.label = "下一集"; });
+
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const generated = playableStoryTreeSections(result.tree!);
+    const codebase = await readNodeCodebase(workspace);
+    const generatedSource = codebase.graph.nodes.find((node) =>
+      node.id === generated[0]!.canvasNodeId,
+    )!;
+    const outgoing = codebase.graph.edges.filter(
+      (edge) => edge.source.nodeId === generatedSource.id,
+    );
+
+    expect(generatedSource.signals.map((signal) => signal.label)).toEqual([
+      "选项一：左侧",
+      "选项二：中间",
+      "选项三：右侧",
+    ]);
+    expect(generated[0]!.canvasSnapshot!.storyButtons!.map((button) => button.beatId))
+      .toEqual(["choice-a", "choice-b", "choice-c"]);
+    expect(outgoing.map((edge) => {
+      const label = generatedSource.signals.find(
+        (signal) => signal.id === edge.source.signal,
+      )!.label;
+      const targetId = generated.find((section) =>
+        section.canvasNodeId === edge.targetNodeId,
+      )!.id;
+      return [label, targetId];
+    })).toEqual([
+      ["选项一：左侧", targets[0]!.id],
+      ["选项二：中间", targets[1]!.id],
+      ["选项三：右侧", targets[2]!.id],
+    ]);
+  });
+
+  it("does not leave the blank preset's unconnected next exit on multi-route scenes", async () => {
+    const workspace = await createWorkspace();
+    const tree = simpleTree();
+    const [source] = playableStoryTreeSections(tree);
+    source!.beats = [
+      { id: "open-left", kind: "operation", text: "操作一：打开左门" },
+      { id: "open-right", kind: "operation", text: "操作二：打开右门" },
+    ];
+    const third = {
+      ...structuredClone(playableStoryTreeSections(tree)[1]!),
+      id: "third-scene",
+      title: "第三场景",
+      sceneNumber: 3,
+    };
+    tree.chapters[0]!.episodes[0]!.sections.push(third);
+    tree.links = [
+      {
+        id: "left-route",
+        fromSectionId: source!.id,
+        toSectionId: playableStoryTreeSections(tree)[1]!.id,
+        label: "打开左门",
+        status: "suggested",
+      },
+      {
+        id: "right-route",
+        fromSectionId: source!.id,
+        toSectionId: third.id,
+        label: "打开右门",
+        status: "suggested",
+      },
+    ];
+
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const generated = playableStoryTreeSections(result.tree!);
+    const sourceNode = (await readNodeCodebase(workspace)).graph.nodes.find(
+      (node) => node.id === generated[0]!.canvasNodeId,
+    )!;
+
+    expect(sourceNode.signals.map((signal) => signal.label)).toEqual([
+      "操作一：打开左门",
+      "操作二：打开右门",
+    ]);
+    expect(sourceNode.signals.some((signal) => signal.id === "next")).toBe(false);
+  });
+
+  it("asks before removing a legacy unconnected Next exit from a multi-route scene", async () => {
+    const workspace = await createWorkspace();
+    const tree = simpleTree();
+    const [source] = playableStoryTreeSections(tree);
+    source!.beats = [
+      { id: "open-left", kind: "operation", text: "操作一：打开左门" },
+      { id: "open-right", kind: "operation", text: "操作二：打开右门" },
+    ];
+    const third = {
+      ...structuredClone(playableStoryTreeSections(tree)[1]!),
+      id: "third-scene",
+      title: "第三场景",
+      sceneNumber: 3,
+    };
+    tree.chapters[0]!.episodes[0]!.sections.push(third);
+    tree.links = [
+      {
+        id: "left-route",
+        fromSectionId: source!.id,
+        toSectionId: playableStoryTreeSections(tree)[1]!.id,
+        label: "打开左门",
+        status: "suggested",
+      },
+      {
+        id: "right-route",
+        fromSectionId: source!.id,
+        toSectionId: third.id,
+        label: "打开右门",
+        status: "suggested",
+      },
+    ];
+    const first = await syncPlayableStoryTree(workspace, undefined, tree);
+    const generated = playableStoryTreeSections(first.tree!);
+    const codebase = await readNodeCodebase(workspace);
+    const sourceNode = codebase.graph.nodes.find(
+      (node) => node.id === generated[0]!.canvasNodeId,
+    )!;
+    sourceNode.signals.unshift({ id: "next", label: "Next" });
+    await writeNodeCodebase(workspace, {
+      graph: codebase.graph,
+      editorLayout: codebase.editorLayout,
+    });
+
+    const preview = await syncPlayableStoryTree(workspace, first.tree, first.tree!);
+    expect(preview.applied).toBe(false);
+    expect(preview.confirmations).toContainEqual(expect.objectContaining({
+      nodeId: sourceNode.id,
+      changes: expect.arrayContaining(["An unused default Next exit will be removed."]),
+    }));
+    expect((await readNodeCodebase(workspace)).graph.nodes
+      .find((node) => node.id === sourceNode.id)!.signals)
+      .toContainEqual({ id: "next", label: "Next" });
+
+    await syncPlayableStoryTree(workspace, first.tree, first.tree!, true);
+    expect((await readNodeCodebase(workspace)).graph.nodes
+      .find((node) => node.id === sourceNode.id)!.signals
+      .some((signal) => signal.id === "next")).toBe(false);
   });
 
   it("imports renumbered scenes without rewriting existing buttons, assets, or canvas positions", async () => {
@@ -1315,6 +1528,61 @@ describe("playable story tree canvas sync", () => {
     expect(signalsFor(0)).toHaveLength(1);
     expect(signalsFor(1)).toEqual(expect.arrayContaining(["success", "fail"]));
     expect(signalsFor(2)).toEqual([]);
+  });
+
+  it("generates an affection scene with global character state and story routes", async () => {
+    const workspace = await createWorkspace();
+    const tree = parseScreenplayText([
+      "第1集",
+      "1-1 分岔点",
+      "选项一：安慰林，林好感度+2",
+      "选项二：离开",
+      "1-2 后续",
+      "结束剧情",
+      "1-3 离开后",
+      "结束剧情",
+    ], "screenplay.txt").tree;
+    const [source, target, alternate] = playableStoryTreeSections(tree);
+    tree.links = [
+      {
+        id: "comfort",
+        fromSectionId: source!.id,
+        toSectionId: target!.id,
+        label: "安慰林",
+        status: "confirmed",
+      },
+      {
+        id: "leave",
+        fromSectionId: source!.id,
+        toSectionId: alternate!.id,
+        label: "离开",
+        status: "confirmed",
+      },
+    ];
+
+    const result = await syncPlayableStoryTree(workspace, undefined, tree);
+    const codebase = await readNodeCodebase(workspace);
+    const generatedSections = playableStoryTreeSections(result.tree!);
+    const generatedSource = generatedSections.find((item) => item.id === source!.id)!;
+    const generatedTarget = generatedSections.find((item) => item.id === target!.id)!;
+    const generatedAlternate = generatedSections.find((item) => item.id === alternate!.id)!;
+    const node = codebase.graph.nodes.find((item) => item.id === generatedSource.canvasNodeId)!;
+    const html = await readFile(path.join(workspace, node.source.html), "utf8");
+    const config = readPlayableAffectionConfig(html)!;
+
+    expect(codebase.graph.initialState.affection_林).toBe(0);
+    expect(codebase.graph.variables?.affection_林).toContain("好感度");
+    expect(config.choices).toHaveLength(2);
+    expect(config.choices).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "安慰林", characterId: "affection_林", delta: 2 }),
+      expect.objectContaining({ label: "离开", characterId: "affection_林", delta: 0 }),
+    ]));
+    expect(node.signals).toHaveLength(2);
+    expect(codebase.graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: { nodeId: node.id, signal: node.signals[0]!.id }, targetNodeId: generatedTarget.canvasNodeId }),
+      expect.objectContaining({ source: { nodeId: node.id, signal: node.signals[1]!.id }, targetNodeId: generatedAlternate.canvasNodeId }),
+    ]));
+    expect(result.addedNodes).toBe(3);
   });
 });
 

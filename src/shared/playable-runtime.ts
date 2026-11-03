@@ -203,6 +203,7 @@ export class NodeRuntimeError extends Error {
 interface ActiveSurface {
   token: SurfaceToken;
   abortController: AbortController;
+  exitHandlers: Set<() => void | Promise<void>>;
   mounted: PlayableMountedSurface;
 }
 
@@ -610,7 +611,7 @@ export class NodeRuntime {
         this.#assertNotDisposed();
         this.#navigation = next;
         this.#activeNode = mounted;
-        await this.#disposeActiveSurface(previous);
+        await this.#disposeActiveSurface(previous, true);
         this.#assertNotDisposed();
         mounted.token.navigationReady = true;
         mounted.token.onNavigationReady?.();
@@ -650,6 +651,7 @@ export class NodeRuntime {
       navigationReady: false,
     };
     const abortController = new AbortController();
+    const exitHandlers = new Set<() => void | Promise<void>>();
     const outgoingEdges = this.#graph.edges.filter(
       (edge) => edge.source.nodeId === nodeId,
     );
@@ -674,7 +676,7 @@ export class NodeRuntime {
     };
     if (soleStoryExit) token.onNavigationReady = advanceAfterReadiness;
     const context: Omit<PlayableNodeContext, "root"> = {
-      ...this.#baseContext(token, abortController, node.assets),
+      ...this.#baseContext(token, abortController, node.assets, exitHandlers),
       navigation: {
         emit: this.#guardAsync(token, (signal: string) => {
           if (
@@ -710,7 +712,7 @@ export class NodeRuntime {
           : undefined,
       );
       await this.#validateMountedSurface(mounted);
-      return { token, abortController, mounted };
+      return { token, abortController, exitHandlers, mounted };
     } catch (cause) {
       token.active = false;
       abortController.abort();
@@ -741,6 +743,7 @@ export class NodeRuntime {
     token: SurfaceToken,
     abortController: AbortController,
     declaredAssets: readonly string[],
+    exitHandlers: Set<() => void | Promise<void>>,
   ): Omit<NodeRuntimeContext, "root"> {
     return {
       ...(this.#graph.globalFontFamily
@@ -803,7 +806,13 @@ export class NodeRuntime {
           return playableStoryMap(this.#storyLayout, this.#policy === "report" ? "all" : this.#seen);
         }),
       },
-      lifecycle: { signal: abortController.signal },
+      lifecycle: {
+        signal: abortController.signal,
+        onExit: (listener) => {
+          exitHandlers.add(listener);
+          return () => exitHandlers.delete(listener);
+        },
+      },
     };
   }
 
@@ -1107,8 +1116,19 @@ export class NodeRuntime {
 
   async #disposeActiveSurface(
     surface: ActiveSurface | undefined,
+    runExitHandlers = false,
   ): Promise<void> {
     if (!surface) return;
+    if (runExitHandlers) {
+      for (const handler of [...surface.exitHandlers]) {
+        try {
+          await handler();
+        } catch (cause) {
+          this.#reportError(cause, surface.token.surfaceId);
+        }
+      }
+    }
+    surface.exitHandlers.clear();
     surface.token.active = false;
     surface.abortController.abort();
     try {

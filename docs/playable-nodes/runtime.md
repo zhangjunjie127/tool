@@ -201,7 +201,10 @@ interface RuntimeContext {
   settings?: PlayableSettingsService;
   transcription?: PlayableTranscriptionService;
   story: { map(): StoryMap };
-  lifecycle: { signal: AbortSignal };
+  lifecycle: {
+    signal: AbortSignal;
+    onExit?: (listener: () => void | Promise<void>) => () => void;
+  };
 }
 
 interface NodeContext extends RuntimeContext {
@@ -373,12 +376,17 @@ Player host (editor, Playtest, or Published Player)
 On a node transition the Runtime:
 
 1. rejects further navigation from the exiting node;
-2. aborts its lifecycle signal and awaits its cleanup;
-3. removes its ShadowRoot host;
-4. updates the back stack and checkpoints the save;
-5. imports the target's compiled module;
-6. creates a new ShadowRoot, injects compiled CSS and HTML;
-7. calls `mount(context)` and reveals the node when it settles.
+2. awaits handlers registered with `context.lifecycle.onExit`;
+3. aborts its lifecycle signal and awaits its cleanup;
+4. removes its ShadowRoot host;
+5. updates the back stack and checkpoints the save;
+6. imports the target's compiled module;
+7. creates a new ShadowRoot, injects compiled CSS and HTML;
+8. calls `mount(context)` and reveals the node when it settles.
+
+`onExit` is for state changes that must happen exactly once when the player
+leaves a Scene, such as a scene-end relationship adjustment. Handlers run before
+the lifecycle signal is aborted, so they may still use `context.state`.
 
 A startup or mount failure unmounts the node and puts the
 Runtime in an explicit failed state.

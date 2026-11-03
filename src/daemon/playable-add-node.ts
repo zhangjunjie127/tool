@@ -26,7 +26,15 @@ import type {
   PlayableSignal,
 } from "../shared/playable-nodes.js";
 import {
+  affectionCharacterId,
+  affectionSignalIds,
+  readPlayableAffectionConfig,
+  writePlayableAffectionConfig,
+  type PlayableAffectionConfig,
+} from "../shared/playable-affection.js";
+import {
   PLAYABLE_MOTION_ATTRIBUTES,
+  playableNoInputMode,
   setPlayableNoInputMode,
   motionAttributes,
   type PlayableMotionConfig,
@@ -37,6 +45,7 @@ import {
   isPlayableStoryTree,
   playableStoryTreeSections,
   recommendedPlayableStoryTreeNodePreset,
+  type PlayableStoryTreeAffectionChange,
   type PlayableStoryTree,
   type PlayableStoryTreeCanvasSnapshot,
   type PlayableStoryTreeSection,
@@ -372,6 +381,7 @@ export async function syncPlayableStoryTree(
         .map((section) => [section.id, section]),
     );
     const sections = playableStoryTreeSections(incomingTree);
+    ensureStoryTreeAffectionState(graph, incomingTree);
     const previousEntrySection = playableStoryTreeSections(
       previousTree ?? { version: 1, chapters: [], links: [] },
     ).find((section) => !section.sourceRemoved && section.canvasNodeId);
@@ -425,6 +435,7 @@ export async function syncPlayableStoryTree(
       return content;
     };
     const confirmations: SyncPlayableStoryTreeResult["confirmations"] = [];
+    const removeUnusedNextSignalNodeIds = new Set<string>();
     if (
       mode === "update" &&
       previousEntrySection?.canvasNodeId &&
@@ -473,12 +484,49 @@ export async function syncPlayableStoryTree(
         changes.push("A story-tree beat was edited on the canvas and will be replaced.");
       }
       const outgoingLinks = storyTreeGenerationRoutes(incomingTree, section);
+      const affectionConfig = buildStoryTreeAffectionConfig(
+        section,
+        outgoingLinks,
+        sections,
+      );
+      const liveAffectionConfig = readPlayableAffectionConfig(await sourceHtml(node));
+      if (
+        affectionConfig &&
+        liveAffectionConfig &&
+        baseline?.affectionConfigSignature &&
+        fingerprint(JSON.stringify(liveAffectionConfig)) !== baseline.affectionConfigSignature
+      ) {
+        changes.push("The Scene's affection settings were edited on the canvas.");
+      }
+      if (
+        affectionConfig &&
+        liveAffectionConfig &&
+        fingerprint(JSON.stringify(liveAffectionConfig)) !== fingerprint(JSON.stringify(affectionConfig))
+      ) {
+        changes.push("Story-tree affection rules will be updated.");
+      }
       const desired = outgoingLinks
         .map((link) => ({
-          label: playableStoryTreeExitLabel(link.label, sections.find((item) => item.id === link.toSectionId)?.title),
+          label: storyTreeRouteExitLabel(
+            link,
+            sections.find((item) => item.id === link.toSectionId)?.title,
+          ),
           targetSectionId: link.toSectionId,
         }))
         .sort(compareExitTarget);
+      const unusedDefaultNext =
+        baseline &&
+        outgoingLinks.length > 1 &&
+        !baseline.exits.some((exit) => exit.id === "next") &&
+        node.signals.some((signal) => signal.id === "next" && signal.label === "Next") &&
+        !graph.edges.some(
+          (edge) => edge.source.nodeId === node.id && edge.source.signal === "next",
+        ) &&
+        playableNoInputMode(await sourceHtml(node)) === "wait";
+      if (unusedDefaultNext) {
+        removeUnusedNextSignalNodeIds.add(node.id);
+        changes.push("An unused default Next exit will be removed.");
+      }
       const routesChanged = baseline && (
         !sameExitTargets(baseline.exits, desired) ||
         !storyActionTargetsMatch(baseline, outgoingLinks)
@@ -500,7 +548,10 @@ export async function syncPlayableStoryTree(
             (exit) => exit.id === previousActionButton?.signal,
           ) ?? baseline.exits.find(
             (exit) => exit.targetSectionId === link.toSectionId &&
-              exit.label === playableStoryTreeExitLabel(link.label, sections.find((item) => item.id === link.toSectionId)?.title),
+              exit.label === storyTreeRouteExitLabel(
+                link,
+                sections.find((item) => item.id === link.toSectionId)?.title,
+              ),
           ) ?? baseline.exits[routeIndex];
           const managedButton = buttons.find(
             (button) => button.signal === oldExit?.id,
@@ -620,14 +671,15 @@ export async function syncPlayableStoryTree(
     };
     for (const [index, section] of sections.entries()) {
       if (section.sourceRemoved) continue;
+      const desiredLinks = storyTreeGenerationRoutes(incomingTree, section);
+      const recommendedPreset = recommendedPlayableStoryTreeNodePreset(section);
+      const selectedPreset = nodePresetOverrides[section.id] ?? recommendedPreset;
       const nodeId = nodeIds.get(section.id)!;
       const targetSection = treeSections.get(section.id)!;
       const oldSection = previousSections.get(section.id);
       let node = graph.nodes.find((candidate) => candidate.id === nodeId);
       if (!node) {
-        const presetId =
-          nodePresetOverrides[section.id] ??
-          recommendedPlayableStoryTreeNodePreset(section);
+        const presetId = selectedPreset;
         const preset = playablePreset(presetId);
         if (!preset) throw new NodeCodebaseError(`Unknown node preset "${presetId}".`);
         const source = {
@@ -639,6 +691,7 @@ export async function syncPlayableStoryTree(
         // Choice demo's two buttons beneath the generated story-text panel.
         const composeChoices = presetId === "choice" &&
           section.beats.some((beat) => beat.kind === "choice");
+        const omitDefaultNext = presetId === "blank" && desiredLinks.length > 1;
         const starter = (composeChoices ? playablePreset("blank")! : preset).source(section.title);
         createdSources[source.html] =
           setPlayableNoInputMode(
@@ -658,12 +711,42 @@ export async function syncPlayableStoryTree(
           title: section.title.slice(0, MAX_TITLE_LENGTH),
           source,
           assets: [],
-          signals: composeChoices ? [] : preset.signals.map((signal) => ({ ...signal })),
+          signals: composeChoices
+            ? []
+            : preset.signals
+              .filter((signal) => !omitDefaultNext || signal.id !== "next")
+              .map((signal) => ({ ...signal })),
           ...(preset.story ? { story: { ...preset.story } } : {}),
         };
         graph.nodes.push(node);
         createdNodeIds.add(nodeId);
         result.addedNodes += 1;
+      }
+
+      const currentHtml = await sourceHtml(node);
+      const affectionConfig = buildStoryTreeAffectionConfig(
+        section,
+        desiredLinks,
+        sections,
+      );
+      const shouldConfigureAffection = selectedPreset === "affection" ||
+        readPlayableAffectionConfig(currentHtml) !== undefined;
+      if (shouldConfigureAffection && affectionConfig) {
+        const configured = writePlayableAffectionConfig(currentHtml, affectionConfig);
+        if (configured && configured !== currentHtml) {
+          createdSources[node.source.html] = configured;
+          sourceHtmlCache.set(node.source.html, configured);
+          if (!createdNodeIds.has(node.id)) markUpdated(node.id);
+        }
+        const configuredSignals = new Set(affectionSignalIds(affectionConfig));
+        for (const signalId of configuredSignals) {
+          const existing = node.signals.find((signal) => signal.id === signalId);
+          if (!existing) node.signals.push({ id: signalId, label: signalId });
+        }
+        node.signals = node.signals.filter((signal) =>
+          !readPlayableAffectionConfig(currentHtml) ||
+          configuredSignals.has(signal.id) || signal.role === "navigation",
+        );
       }
       if (mode === "generate" && oldSection?.canvasNodeId && !newlyCreated.has(section.id)) {
         targetSection.canvasNodeId = nodeId;
@@ -675,13 +758,16 @@ export async function syncPlayableStoryTree(
         const managedTargets = new Set(
           exits.map((exit) => exit.targetSectionId),
         );
-        const linksToNewScenes = storyTreeGenerationRoutes(incomingTree, section).filter(
+        const linksToNewScenes = desiredLinks.filter(
           (link) =>
             link.fromSectionId === section.id &&
             newlyCreated.has(link.toSectionId) &&
             !managedTargets.has(link.toSectionId),
         );
         const html = await sourceHtml(node);
+        const affectionNode = Boolean(
+          affectionConfig && readPlayableAffectionConfig(html) !== undefined,
+        );
         const canReuseNext =
           linksToNewScenes.length === 1 &&
           node.signals.some((signal) => signal.id === "next") &&
@@ -695,7 +781,7 @@ export async function syncPlayableStoryTree(
         for (const [routeIndex, link] of linksToNewScenes.entries()) {
           const targetNodeId = nodeIds.get(link.toSectionId);
           if (!targetNodeId) continue;
-          const label = playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
+          const label = storyTreeRouteExitLabel(link, treeSections.get(link.toSectionId)?.title);
           const actionBeat = link.action;
           const buttonText = actionBeat
             ? storyTreeActionLabel(actionBeat)
@@ -712,7 +798,9 @@ export async function syncPlayableStoryTree(
             routeIndex,
             linksToNewScenes.length,
           );
-          const signalId = nextIsAvailable
+          const signalId = affectionNode
+            ? affectionSignalForRoute(affectionConfig, link) ?? storySignalId(link.id)
+            : nextIsAvailable
             ? "next"
             : reusableButtonSignal ??
               uniqueStorySignalId(
@@ -726,17 +814,19 @@ export async function syncPlayableStoryTree(
           );
           if (signal) signal.label = label;
           else node.signals.push({ id: signalId, label });
-          await ensureExitButton(
-            node,
-            signalId,
-            buttonText,
-            routeIndex,
-            linksToNewScenes.length,
-            actionBeat?.kind === "operation"
-              ? storyTreeOperationMotion(actionBeat, signalId)
-              : undefined,
-            actionBeat?.id,
-          );
+          if (!affectionNode) {
+            await ensureExitButton(
+              node,
+              signalId,
+              buttonText,
+              routeIndex,
+              linksToNewScenes.length,
+              actionBeat?.kind === "operation"
+                ? storyTreeOperationMotion(actionBeat, signalId)
+                : undefined,
+              actionBeat?.id,
+            );
+          }
           graph.edges.push({
             id: playableEdgeId(graph.edges, nodeId, signalId),
             source: { nodeId, signal: signalId },
@@ -751,6 +841,9 @@ export async function syncPlayableStoryTree(
         }
         targetSection.canvasSnapshot = {
           ...snapshot,
+          ...(affectionConfig
+            ? { affectionConfigSignature: fingerprint(JSON.stringify(affectionConfig)) }
+            : {}),
           exits,
           storyButtons: storyButtonSnapshots(
             await sourceHtml(node),
@@ -761,18 +854,25 @@ export async function syncPlayableStoryTree(
       }
       delete node.storyTreeDetached;
 
+      if (removeUnusedNextSignalNodeIds.has(nodeId)) {
+        node.signals = node.signals.filter((signal) => signal.id !== "next");
+        markUpdated(nodeId);
+      }
+
       if (oldSection?.canvasNodeId && node.title !== section.title.slice(0, MAX_TITLE_LENGTH)) {
         node.title = section.title.slice(0, MAX_TITLE_LENGTH);
         markUpdated(nodeId);
       }
 
-      const desiredLinks = storyTreeGenerationRoutes(incomingTree, section);
       const oldManagedExits = oldSection?.canvasSnapshot?.exits ?? [];
       const canUpdateExits = createdNodeIds.has(nodeId) ||
         !oldSection?.canvasSnapshot ||
         !storyActionTargetsMatch(oldSection.canvasSnapshot, desiredLinks) ||
         !sameExitTargets(oldManagedExits, desiredLinks.map((link) => ({
-          label: playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title),
+          label: storyTreeRouteExitLabel(
+            link,
+            treeSections.get(link.toSectionId)?.title,
+          ),
           targetSectionId: link.toSectionId,
         })));
       let exits = oldManagedExits;
@@ -794,6 +894,9 @@ export async function syncPlayableStoryTree(
             .map((button) => button.signal),
         );
         const html = await sourceHtml(node);
+        const affectionNode = Boolean(
+          affectionConfig && readPlayableAffectionConfig(html) !== undefined,
+        );
         exits = [];
         for (const [routeIndex, link] of desiredLinks.entries()) {
           const targetNodeId = nodeIds.get(link.toSectionId)!;
@@ -808,7 +911,10 @@ export async function syncPlayableStoryTree(
             (exit) =>
               !assignedSignals.has(exit.id) &&
               !reservedActionSignals.has(exit.id) &&
-              exit.label === (link.label || "继续").slice(0, MAX_TITLE_LENGTH) &&
+              exit.label === storyTreeRouteExitLabel(
+                link,
+                treeSections.get(link.toSectionId)?.title,
+              ) &&
               exit.targetSectionId === link.toSectionId,
           );
           const positionalExit = oldManagedExits[routeIndex];
@@ -829,17 +935,18 @@ export async function syncPlayableStoryTree(
             routeIndex,
             desiredLinks.length,
           );
-          let signalId =
-            reusableExit?.id ??
-            fallbackExit?.id ??
-            reusableButtonSignal ??
-            (reuseStarterSignal ? "next" : stableId);
+          let signalId = affectionNode
+            ? affectionSignalForRoute(affectionConfig, link) ?? stableId
+            : reusableExit?.id ??
+              fallbackExit?.id ??
+              reusableButtonSignal ??
+              (reuseStarterSignal ? "next" : stableId);
           if (assignedSignals.has(signalId)) {
             signalId = uniqueStorySignalId(stableId, usedSignals);
           }
           assignedSignals.add(signalId);
           usedSignals.add(signalId);
-          const label = playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title);
+          const label = storyTreeRouteExitLabel(link, treeSections.get(link.toSectionId)?.title);
           const actionBeat = link.action;
           const buttonText = actionBeat
             ? storyTreeActionLabel(actionBeat)
@@ -854,7 +961,7 @@ export async function syncPlayableStoryTree(
             !oldSection?.canvasSnapshot?.storyButtons?.some(
               (button) => button.signal === signalId,
             );
-          if (!reusableExit || missingActionBinding) {
+          if (!affectionNode && (!reusableExit || missingActionBinding)) {
             await ensureExitButton(
               node,
               signalId,
@@ -918,7 +1025,10 @@ export async function syncPlayableStoryTree(
             ? exits[routeIndex]?.id
             : oldActionButton?.signal ?? exits.find((exit) =>
               exit.targetSectionId === link.toSectionId &&
-              exit.label === playableStoryTreeExitLabel(link.label, treeSections.get(link.toSectionId)?.title),
+              exit.label === storyTreeRouteExitLabel(
+                link,
+                treeSections.get(link.toSectionId)?.title,
+              ),
             )?.id;
           if (!signalId) continue;
           const previousButton = oldSection?.canvasSnapshot?.storyButtons?.find(
@@ -1013,6 +1123,9 @@ export async function syncPlayableStoryTree(
       targetSection.canvasNodeId = nodeId;
       targetSection.canvasSnapshot = {
         title: node.title,
+        ...(affectionConfig
+          ? { affectionConfigSignature: fingerprint(JSON.stringify(affectionConfig)) }
+          : {}),
         exits,
         beats: contentSync.beats,
         storyButtons: storyButtonSnapshots(
@@ -1088,6 +1201,150 @@ function storyNodeId(sectionId: string, index: number): string {
   return (`story-${slug || `scene-${index + 1}`}`).slice(0, 120);
 }
 
+function ensureStoryTreeAffectionState(
+  graph: NodeGraph,
+  tree: PlayableStoryTree,
+): void {
+  const characters = new Map<string, string>();
+  for (const section of playableStoryTreeSections(tree)) {
+    for (const change of [
+      ...(section.affectionChanges ?? []),
+      ...section.beats.flatMap((beat) => beat.affection ? [beat.affection] : []),
+    ]) {
+      characters.set(change.characterId, change.characterName);
+    }
+    for (const effect of section.affectionChanges ?? []) {
+      if (effect.trigger === "choice") continue;
+      const onceKey = storyTreeAffectionEffectKey(section.id, effect);
+      if (!Object.hasOwn(graph.initialState, onceKey)) graph.initialState[onceKey] = false;
+    }
+  }
+  for (const [id, name] of characters) {
+    if (!Object.hasOwn(graph.initialState, id)) graph.initialState[id] = 0;
+    graph.variables ??= {};
+    graph.variables[id] ??= `${name}的全局好感度`;
+  }
+}
+
+function buildStoryTreeAffectionConfig(
+  section: PlayableStoryTreeSection,
+  routes: readonly StoryTreeGenerationRoute[],
+  sections: readonly PlayableStoryTreeSection[],
+): PlayableAffectionConfig | undefined {
+  const changes = [
+    ...(section.affectionChanges ?? []),
+    ...section.beats.flatMap((beat) => beat.affection ? [beat.affection] : []),
+  ];
+  if (!changes.length) return undefined;
+
+  const characters = new Map<string, { id: string; name: string; initial: number }>();
+  for (const change of changes) {
+    characters.set(change.characterId, {
+      id: change.characterId || affectionCharacterId(change.characterName),
+      name: change.characterName,
+      initial: 0,
+    });
+  }
+  for (const condition of routes.flatMap((route) => route.affectionConditions ?? [])) {
+    if (!characters.has(condition.characterId)) {
+      characters.set(condition.characterId, {
+        id: condition.characterId,
+        name: condition.characterName,
+        initial: 0,
+      });
+    }
+  }
+  const fallbackCharacter = changes[0];
+  const choices = routes.flatMap((route) => {
+    const actionChange = route.action?.affection;
+    const characterId = actionChange?.characterId ?? fallbackCharacter?.characterId;
+    if (!characterId) return [];
+    const signal = storySignalId(route.id);
+    const fallbackRoute = routes.find((candidate) =>
+      candidate.id !== route.id &&
+      !candidate.action &&
+      /失败|未达成|不满足|低于|不足|拒绝|离开|失败/u.test(candidate.label),
+    );
+    const condition = route.affectionConditions?.[0];
+    return [{
+      id: storyTreeAffectionChoiceId(route.id),
+      label: route.action ? storyTreeActionLabel(route.action) : storyExitButtonText(
+        route.label,
+        sections.find((item) => item.id === route.toSectionId)?.title,
+      ),
+      characterId,
+      delta: actionChange?.delta ?? 0,
+      threshold: actionChange?.threshold ?? condition?.value ?? 0,
+      successSignal: signal,
+      fallbackSignal: actionChange && fallbackRoute ? storySignalId(fallbackRoute.id) : signal,
+      ...(condition
+        ? {
+            condition: {
+              characterId: condition.characterId,
+              operator: condition.operator,
+              value: condition.value,
+            },
+          }
+        : {}),
+    }];
+  });
+
+  const effectChanges = (section.affectionChanges ?? []).filter(
+    (change) => change.trigger === "scene-enter" || change.trigger === "scene-end",
+  );
+  return {
+    characters: [...characters.values()],
+    choices,
+    ...(effectChanges.length
+      ? {
+          effects: effectChanges.map((change) => ({
+            id: `effect-${fingerprint(JSON.stringify([
+              section.id,
+              change.characterId,
+              change.delta,
+              change.trigger,
+              change.sourceText,
+            ]))}`,
+            characterId: change.characterId,
+            delta: change.delta,
+            trigger: change.trigger === "scene-end" ? "scene-end" : "scene-enter",
+            onceKey: storyTreeAffectionEffectKey(section.id, change),
+          })),
+        }
+      : {}),
+  };
+}
+
+function affectionSignalForRoute(
+  config: PlayableAffectionConfig | undefined,
+  route: StoryTreeGenerationRoute,
+): string | undefined {
+  if (!config) return undefined;
+  return config.choices.find((choice) =>
+    choice.id === storyTreeAffectionChoiceId(route.id),
+  )?.successSignal ?? config.choices.find((choice) =>
+    choice.fallbackSignal === storySignalId(route.id),
+  )?.fallbackSignal;
+}
+
+function storyTreeAffectionChoiceId(routeId: string): string {
+  return `story-choice-${routeId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 90)}`;
+}
+
+function storyTreeAffectionEffectKey(
+  sectionId: string,
+  change: PlayableStoryTreeAffectionChange,
+): string {
+  const sectionKey = sectionId.replace(/[^A-Za-z0-9_]+/g, "_").slice(0, 60);
+  const effectKey = fingerprint(JSON.stringify([
+    change.characterId,
+    change.delta,
+    change.trigger,
+    change.sourceText,
+  ]));
+  return `affection_applied_${sectionKey}_${effectKey}`.slice(0, 120);
+}
+
 function uniqueStoryNodeId(base: string, taken: ReadonlySet<string>): string {
   let id = base;
   for (let suffix = 2; taken.has(id); suffix += 1) {
@@ -1120,6 +1377,16 @@ function storyExitButtonText(label: string, targetTitle?: string): string {
     : normalized).slice(0, MAX_TITLE_LENGTH);
 }
 
+function storyTreeRouteExitLabel(
+  route: StoryTreeGenerationRoute,
+  targetTitle?: string,
+): string {
+  const actionText = route.action?.text.trim();
+  return actionText
+    ? actionText.slice(0, MAX_TITLE_LENGTH)
+    : playableStoryTreeExitLabel(route.label, targetTitle);
+}
+
 function isGenericStoryExitLabel(label: string): boolean {
   return !label || ["继续", "下一集", "主线汇合"].includes(label);
 }
@@ -1129,6 +1396,7 @@ function storyTreeActionLabel(
 ): string {
   return beat.text
     .replace(/^(?:选项|选择|操作)\s*(?:[A-Z]\s*\d*|[一二三四五六七八九十\d]+)?\s*[:：、.．-]?\s*/u, "")
+    .replace(/[，,；;]\s*(?:[\p{L}\p{N}·]{1,24}\s*)?好感(?:度)?\s*(?:增加|减少|提升|下降|上升|降低|[+\-])\s*\d+(?:\.\d+)?\s*$/u, "")
     .trim()
     .slice(0, MAX_TITLE_LENGTH) || beat.text.slice(0, MAX_TITLE_LENGTH);
 }

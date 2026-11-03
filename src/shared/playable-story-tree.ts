@@ -1,4 +1,5 @@
 import { playableStoryTreeExitLabel } from "./playable-story-tree-routes.js";
+import { affectionCharacterId } from "./playable-affection.js";
 
 export type PlayableStoryTreeBeatKind =
   | "plot"
@@ -6,10 +7,33 @@ export type PlayableStoryTreeBeatKind =
   | "state"
   | "choice";
 
+export type PlayableStoryTreeAffectionTrigger =
+  | "choice"
+  | "scene-enter"
+  | "scene-end";
+
+export interface PlayableStoryTreeAffectionChange {
+  characterId: string;
+  characterName: string;
+  delta: number;
+  trigger: PlayableStoryTreeAffectionTrigger;
+  sourceText: string;
+  threshold?: number;
+}
+
+export interface PlayableStoryTreeAffectionCondition {
+  characterId: string;
+  characterName: string;
+  operator: ">=" | ">" | "=" | "<" | "<=";
+  value: number;
+  sourceText: string;
+}
+
 export interface PlayableStoryTreeBeat {
   id: string;
   kind: PlayableStoryTreeBeatKind;
   text: string;
+  affection?: PlayableStoryTreeAffectionChange;
 }
 
 export interface PlayableStoryTreeBeatGroup {
@@ -33,6 +57,7 @@ export interface PlayableStoryTreePendingSource {
 
 export interface PlayableStoryTreeCanvasSnapshot {
   title: string;
+  affectionConfigSignature?: string;
   exits: Array<{
     id: string;
     label: string;
@@ -59,6 +84,7 @@ export interface PlayableStoryTreeSection {
   objective: string;
   prerequisite: string;
   beats: PlayableStoryTreeBeat[];
+  affectionChanges?: PlayableStoryTreeAffectionChange[];
   scriptText: string;
   sourceManaged?: boolean;
   sourceSnapshot: PlayableStoryTreeSourceSnapshot;
@@ -92,11 +118,13 @@ export interface PlayableStoryTreeLink {
   toSectionId: string;
   label: string;
   status: "confirmed" | "suggested";
+  affectionConditions?: PlayableStoryTreeAffectionCondition[];
   sourceSnapshot?: {
     fromSectionId: string;
     toSectionId: string;
     label: string;
     status?: "confirmed" | "suggested";
+    affectionConditions?: PlayableStoryTreeAffectionCondition[];
   };
 }
 
@@ -189,8 +217,9 @@ export function playableStoryTreeEpisodeHasInteraction(
     sections.some(
       (section) =>
         section.kind === "branch" ||
+        Boolean(section.affectionChanges?.length) ||
         section.beats.some(
-          (beat) => beat.kind === "operation" || beat.kind === "choice",
+          (beat) => beat.kind === "operation" || beat.kind === "choice" || Boolean(beat.affection),
         ),
     )
   )
@@ -209,7 +238,8 @@ export function playableStoryTreeEpisodeHasInteraction(
 
 export function recommendedPlayableStoryTreeNodePreset(
   section: PlayableStoryTreeSection,
-): "blank" | "choice" | "ending" {
+): "blank" | "choice" | "ending" | "affection" {
+  if (section.affectionChanges?.length || section.beats.some((beat) => beat.affection)) return "affection";
   if (section.kind === "ending") return "ending";
   if (section.beats.some((beat) => beat.kind === "choice")) return "choice";
   return "blank";
@@ -238,6 +268,7 @@ export function playableStoryTreeAnalysisFingerprint(
       body: source.body,
       previous: episode.sections[index - 1]?.id,
       next: episode.sections[index + 1]?.id,
+      sourceBeats: source.beats,
     },
   }));
 }
@@ -251,10 +282,12 @@ export function playableStoryTreeCanvasStatus(
     if (link.status !== "suggested") return [];
     const source = sections.find((section) => section.id === link.fromSectionId && !section.sourceRemoved);
     const target = sections.find((section) => section.id === link.toSectionId && !section.sourceRemoved);
-    const exit = source?.canvasSnapshot?.exits.find((item) =>
-      item.targetSectionId === link.toSectionId &&
-      item.label === playableStoryTreeExitLabel(link.label, target?.title),
-    );
+    const matchingTargetExits = source?.canvasSnapshot?.exits.filter(
+      (item) => item.targetSectionId === link.toSectionId,
+    ) ?? [];
+    const expectedLabel = playableStoryTreeExitLabel(link.label, target?.title);
+    const exit = matchingTargetExits.find((item) => item.label === expectedLabel) ??
+      (matchingTargetExits.length === 1 ? matchingTargetExits[0] : undefined);
     return source?.canvasNodeId && target?.canvasNodeId && exit
       ? [{ sourceNodeId: source.canvasNodeId, sourceSignalId: exit.id, targetNodeId: target.canvasNodeId }]
       : [];
@@ -493,7 +526,10 @@ export function isPlayableStoryTree(value: unknown): value is PlayableStoryTree 
           !validText(link.sourceSnapshot.label, 240) ||
           (link.sourceSnapshot.status !== undefined &&
             link.sourceSnapshot.status !== "confirmed" &&
-            link.sourceSnapshot.status !== "suggested")))
+            link.sourceSnapshot.status !== "suggested") ||
+          (link.sourceSnapshot.affectionConditions !== undefined &&
+            !isAffectionConditionList(link.sourceSnapshot.affectionConditions))))
+      || (link.affectionConditions !== undefined && !isAffectionConditionList(link.affectionConditions))
     ) return false;
     linkIds.add(link.id);
     if (!sectionIds.has(link.fromSectionId) || !sectionIds.has(link.toSectionId)) return false;
@@ -519,6 +555,7 @@ function isStorySection(value: unknown): value is PlayableStoryTreeSection {
   if (value.canvasNodeId !== undefined && !validText(value.canvasNodeId, 120)) return false;
   if (value.analysisFingerprint !== undefined && !validText(value.analysisFingerprint, 128)) return false;
   if (value.sourceManaged !== undefined && typeof value.sourceManaged !== "boolean") return false;
+  if (value.affectionChanges !== undefined && !isAffectionChangeList(value.affectionChanges)) return false;
   if (value.canvasSnapshot !== undefined && !isCanvasSnapshot(value.canvasSnapshot)) return false;
   if (value.sourcePending !== undefined && !isPendingSource(value.sourcePending)) return false;
   if (value.sourceRemoved !== undefined && typeof value.sourceRemoved !== "boolean") return false;
@@ -544,6 +581,7 @@ function isPendingSource(value: unknown): value is PlayableStoryTreePendingSourc
 function isCanvasSnapshot(value: unknown): value is PlayableStoryTreeCanvasSnapshot {
   return isRecord(value) &&
     validText(value.title, 240) &&
+    (value.affectionConfigSignature === undefined || validText(value.affectionConfigSignature, 128)) &&
     Array.isArray(value.exits) &&
     value.exits.length <= MAX_LINKS &&
     value.exits.every((exit) => isRecord(exit) &&
@@ -571,7 +609,34 @@ function isBeatList(value: unknown): value is PlayableStoryTreeBeat[] {
     value.every((beat) => isRecord(beat) &&
       validText(beat.id, 160) &&
       ["plot", "operation", "state", "choice"].includes(String(beat.kind)) &&
-      validText(beat.text, 20_000));
+      validText(beat.text, 20_000) &&
+      (beat.affection === undefined || isAffectionChange(beat.affection))
+  );
+}
+
+function isAffectionChange(value: unknown): value is PlayableStoryTreeAffectionChange {
+  return isRecord(value) &&
+    validText(value.characterId, 120) &&
+    validText(value.characterName, 120) &&
+    Number.isFinite(value.delta) &&
+    ["choice", "scene-enter", "scene-end"].includes(String(value.trigger)) &&
+    validText(value.sourceText, 20_000) &&
+    (value.threshold === undefined || Number.isFinite(value.threshold));
+}
+
+function isAffectionChangeList(value: unknown): value is PlayableStoryTreeAffectionChange[] {
+  return Array.isArray(value) && value.length <= 10_000 && value.every(isAffectionChange);
+}
+
+function isAffectionConditionList(value: unknown): value is PlayableStoryTreeAffectionCondition[] {
+  return Array.isArray(value) && value.length <= 100 && value.every((condition) =>
+    isRecord(condition) &&
+    validText(condition.characterId, 120) &&
+    validText(condition.characterName, 120) &&
+    [">=", ">", "=", "<", "<="].includes(String(condition.operator)) &&
+    Number.isFinite(condition.value) &&
+    validText(condition.sourceText, 20_000),
+  );
 }
 
 function validText(value: unknown, maxLength: number): value is string {
@@ -629,7 +694,8 @@ function sameSectionContent(
     left.objective === right.objective &&
     left.prerequisite === right.prerequisite &&
     left.scriptText === right.scriptText &&
-    JSON.stringify(left.beats) === JSON.stringify(right.beats);
+    JSON.stringify(left.beats) === JSON.stringify(right.beats) &&
+    JSON.stringify(left.affectionChanges ?? []) === JSON.stringify(right.affectionChanges ?? []);
 }
 
 function sameLink(
@@ -640,7 +706,8 @@ function sameLink(
     left!.fromSectionId === right.fromSectionId &&
     left!.toSectionId === right.toSectionId &&
     left!.label === right.label &&
-    left!.status === right.status;
+    left!.status === right.status &&
+    JSON.stringify(left!.affectionConditions ?? []) === JSON.stringify(right.affectionConditions ?? []);
 }
 
 export function reconcilePlayableStoryTree(
@@ -668,6 +735,9 @@ export function reconcilePlayableStoryTree(
         sceneNumber: section.sceneNumber,
         sceneSuffix: section.sceneSuffix,
         sourceSnapshot: { ...old.sourceSnapshot, heading: section.sourceSnapshot.heading },
+        ...(section.affectionChanges?.length
+          ? { affectionChanges: section.affectionChanges }
+          : {}),
         sourceRemoved: undefined,
         sourcePending: undefined,
       });
@@ -929,6 +999,9 @@ export function acceptPlayableStoryTreeSource(
     title: pending.title,
     scriptText: pending.body,
     beats: pending.beats,
+    ...(affectionChangesFromBeats(pending.beats).length
+      ? { affectionChanges: affectionChangesFromBeats(pending.beats) }
+      : { affectionChanges: undefined }),
     sourceSnapshot: {
       heading: pending.heading,
       body: pending.body,
@@ -938,6 +1011,16 @@ export function acceptPlayableStoryTreeSource(
     sourceManaged: true,
     sourcePending: undefined,
   };
+}
+
+function affectionChangesFromBeats(
+  beats: readonly PlayableStoryTreeBeat[],
+): PlayableStoryTreeAffectionChange[] {
+  return beats.flatMap((beat) =>
+    beat.affection && beat.affection.trigger !== "choice"
+      ? [beat.affection]
+      : [],
+  );
 }
 
 export function formatPlayableStoryTreeText(tree: PlayableStoryTree): string {
@@ -956,14 +1039,17 @@ export function formatPlayableStoryTreeText(tree: PlayableStoryTree): string {
           >((group): (PlayableStoryTreeTextNode | string)[] => {
             const label = `【${storyTreeBeatLabel(group.kind)}】`;
             return group.kind === "plot" && group.beats.length > 1
-              ? [{ label, children: group.beats.map((beat) => beat.text) }]
-              : group.beats.map((beat) => `${label}${beat.text}`);
+              ? [{ label, children: group.beats.map(formatPlayableStoryTreeBeatText) }]
+              : group.beats.map((beat) => `${label}${formatPlayableStoryTreeBeatText(beat)}`);
           }),
           ...tree.links
             .filter((link) => link.fromSectionId === section.id)
             .map((link) => {
               const target = sectionById.get(link.toSectionId);
-              return `${link.label || "继续"} →【${target?.title ?? "目标待校对"}】${link.status === "suggested" ? "【待确认】" : ""}`;
+              const conditions = link.affectionConditions?.map((condition) =>
+                `${condition.characterName}好感度${condition.operator}${condition.value}`,
+              ).join("、");
+              return `${link.label || "继续"}${conditions ? `【${conditions}】` : ""} →【${target?.title ?? "目标待校对"}】${link.status === "suggested" ? "【待确认】" : ""}`;
             }),
         ];
         if (section.sourcePending) children.push("【剧本有更新待确认】");
@@ -1074,6 +1160,16 @@ function storyTreeBeatLabel(
         : "固定剧情";
 }
 
+function formatPlayableStoryTreeBeatText(
+  beat: PlayableStoryTreeBeat,
+): string {
+  if (!beat.affection) return beat.text;
+  const delta = beat.affection.delta > 0
+    ? `+${beat.affection.delta}`
+    : String(beat.affection.delta);
+  return `${beat.text}【${beat.affection.characterName}好感度 ${delta}】`;
+}
+
 export function parseScreenplayText(
   paragraphs: readonly string[],
   fileName: string,
@@ -1113,6 +1209,11 @@ export function parseScreenplayText(
     );
     const scriptText = currentSection.lines.join("\n");
     const beats = classifyStoryTreeBeats(id, currentSection.lines);
+    const affectionChanges = beats.flatMap((beat) =>
+      beat.affection && beat.affection.trigger !== "choice"
+        ? [beat.affection]
+        : [],
+    );
     const section: PlayableStoryTreeSection = {
       id,
       episodeNumber: currentSection.episodeNumber,
@@ -1123,6 +1224,7 @@ export function parseScreenplayText(
       objective: "",
       prerequisite: "",
       beats,
+      ...(affectionChanges.length ? { affectionChanges } : {}),
       scriptText,
       sourceManaged: true,
       sourceSnapshot: {
@@ -1306,17 +1408,53 @@ function classifyStoryTreeBeats(
   sectionId: string,
   lines: readonly string[],
 ): PlayableStoryTreeBeat[] {
-  return lines.filter((line) => line.trim().length > 0).map((text, index) => ({
-    id: `${sectionId}-beat-${index + 1}`,
-    kind: /选项\s*[一二三四五六七八九十\d]|选择\s*[A-Z]?\d+/u.test(text)
+  return lines.filter((line) => line.trim().length > 0).map((text, index) => {
+    const kind: PlayableStoryTreeBeatKind = /选项\s*[一二三四五六七八九十\d]|选择\s*[A-Z]?\d+/u.test(text)
       ? "choice"
       : /按钮\s*[:：]|【操作|操作\s*[A-Z]?\d+\s*[:：]|点击|点按|长按|按住|按下|滑动|拖动|触摸|输入|敲击|完成(?:限时)?(?:操作|挑战|QTE)|进行(?:操作|互动)/u.test(text)
         ? "operation"
         : /好感度|好感\s*[+\-＋－]\s*\d/u.test(text)
           ? "state"
-          : "plot",
-    text,
-  }));
+          : "plot";
+    const affection = parsePlayableStoryTreeAffectionChange(text, kind);
+    return {
+      id: `${sectionId}-beat-${index + 1}`,
+      kind,
+      text,
+      ...(affection ? { affection } : {}),
+    };
+  });
+}
+
+/** Extracts the common screenplay forms without rewriting the source text. */
+export function parsePlayableStoryTreeAffectionChange(
+  text: string,
+  beatKind: PlayableStoryTreeBeatKind = "state",
+): PlayableStoryTreeAffectionChange | undefined {
+  const normalized = text.normalize("NFKC");
+  const named = normalized.match(
+    /(?<name>[\p{L}\p{N}·]{1,24})\s*(?:的)?\s*好感(?:度)?\s*(?<op>增加|减少|提升|下降|上升|降低|[+\-])\s*(?<value>\d+(?:\.\d+)?)/u,
+  );
+  const generic = normalized.match(
+    /好感(?:度)?\s*(?<op>增加|减少|提升|下降|上升|降低|[+\-])\s*(?<value>\d+(?:\.\d+)?)\s*(?:[（(]\s*(?<name>[\p{L}\p{N}·]{1,24})\s*[）)])?/u,
+  );
+  const match = named ?? generic;
+  if (!match?.groups) return undefined;
+  const value = Number(match.groups.value);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  const negative = /减少|下降|降低|^-/u.test(match.groups.op ?? "");
+  const characterName = (match.groups.name ?? "未指定角色").trim();
+  const threshold = Number(
+    /(?:达到|不低于|至少|阈值|门槛)\s*(\d+(?:\.\d+)?)/u.exec(normalized)?.[1],
+  );
+  return {
+    characterId: affectionCharacterId(characterName),
+    characterName,
+    delta: negative ? -value : value,
+    trigger: beatKind === "choice" || beatKind === "operation" ? "choice" : "scene-enter",
+    sourceText: text,
+    ...(Number.isFinite(threshold) ? { threshold } : {}),
+  };
 }
 
 function cleanSceneTitle(value: string): string {
